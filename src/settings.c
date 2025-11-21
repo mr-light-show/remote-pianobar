@@ -138,6 +138,15 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 		free (settings->msgFormat[i].prefix);
 		free (settings->msgFormat[i].postfix);
 	}
+	
+	/* WebSocket cleanup */
+	#ifdef WEBSOCKET_ENABLED
+	free (settings->websocketHost);
+	free (settings->webuiPath);
+	free (settings->pidFile);
+	free (settings->logFile);
+	#endif
+	
 	memset (settings, 0, sizeof (*settings));
 }
 
@@ -434,6 +443,26 @@ void BarSettingsRead (BarSettings_t *settings) {
 						break;
 					}
 				}
+			#ifdef WEBSOCKET_ENABLED
+			} else if (streq ("websocket_enabled", key)) {
+				settings->websocketEnabled = (atoi (val) != 0);
+			} else if (streq ("websocket_port", key)) {
+				settings->websocketPort = atoi (val);
+			} else if (streq ("websocket_host", key)) {
+				free (settings->websocketHost);
+				settings->websocketHost = strdup (val);
+			} else if (streq ("webui_enabled", key)) {
+				settings->webuiEnabled = (atoi (val) != 0);
+			} else if (streq ("webui_path", key)) {
+				free (settings->webuiPath);
+				settings->webuiPath = strdup (val);
+			} else if (streq ("pid_file", key)) {
+				free (settings->pidFile);
+				settings->pidFile = BarSettingsExpandTilde (val, userhome);
+			} else if (streq ("log_file", key)) {
+				free (settings->logFile);
+				settings->logFile = BarSettingsExpandTilde (val, userhome);
+			#endif
 			} else {
 				BarUiMsg (settings, MSG_INFO,
 						"Unrecognized key %s at %s:%zu\n", key, path, lineNum);

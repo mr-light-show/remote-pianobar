@@ -1,6 +1,6 @@
 /*
-Copyright (c) 2008-2011
-	Lars-Dominik Braun <lars@6xq.net>
+Copyright (c) 2025
+    Kyle Hawes <khawes@netflix.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,37 +21,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#pragma once
+#ifndef _DAEMON_H
+#define _DAEMON_H
 
-#include <curl/curl.h>
+#include <stdbool.h>
 
-#include <piano.h>
+/* Note: main.h must be included before this header to get BarApp_t definition */
 
-#include "player.h"
-#include "settings.h"
-#include "ui_readline.h"
+/* Daemonize the process */
+bool BarDaemonize(BarApp_t *app);
 
-typedef struct {
-	PianoHandle_t ph;
-	CURL *http;
-	player_t player;
-	BarSettings_t settings;
-	/* first item is current song */
-	PianoSong_t *playlist;
-	PianoSong_t *songHistory;
-	/* station of current song and station used to fetch songs from if playlist
-	 * is empty */
-	PianoStation_t *curStation, *nextStation;
-	sig_atomic_t doQuit;
-	BarReadlineFds_t input;
-	unsigned int playerErrors;
-	
-	/* WebSocket support (conditional compilation) */
-	#ifdef WEBSOCKET_ENABLED
-	void *wsContext;  /* BarWsContext_t */
-	#endif
-} BarApp_t;
+/* Write PID file */
+bool BarDaemonWritePidFile(BarApp_t *app);
 
-#include <signal.h>
-extern sig_atomic_t *interrupted;
+/* Remove PID file */
+void BarDaemonRemovePidFile(BarApp_t *app);
+
+/* Check if already running */
+bool BarDaemonIsRunning(const char *pidFile);
+
+#endif /* _DAEMON_H */
 

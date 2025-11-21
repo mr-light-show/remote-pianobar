@@ -1,6 +1,6 @@
 /*
-Copyright (c) 2008-2011
-	Lars-Dominik Braun <lars@6xq.net>
+Copyright (c) 2025
+    Kyle Hawes <khawes@netflix.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,37 +21,28 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#pragma once
+#ifndef _HTTP_SERVER_H
+#define _HTTP_SERVER_H
 
-#include <curl/curl.h>
+#include <stddef.h>
+#include <stdbool.h>
 
-#include <piano.h>
+/* Forward declarations */
+struct lws;
+typedef struct lws lws_t;
 
-#include "player.h"
-#include "settings.h"
-#include "ui_readline.h"
+/* MIME type detection */
+const char *BarHttpGetMimeType(const char *path);
 
-typedef struct {
-	PianoHandle_t ph;
-	CURL *http;
-	player_t player;
-	BarSettings_t settings;
-	/* first item is current song */
-	PianoSong_t *playlist;
-	PianoSong_t *songHistory;
-	/* station of current song and station used to fetch songs from if playlist
-	 * is empty */
-	PianoStation_t *curStation, *nextStation;
-	sig_atomic_t doQuit;
-	BarReadlineFds_t input;
-	unsigned int playerErrors;
-	
-	/* WebSocket support (conditional compilation) */
-	#ifdef WEBSOCKET_ENABLED
-	void *wsContext;  /* BarWsContext_t */
-	#endif
-} BarApp_t;
+/* Serve static file */
+int BarHttpServeFile(struct lws *wsi, const char *filepath);
 
-#include <signal.h>
-extern sig_atomic_t *interrupted;
+/* Serve directory index */
+int BarHttpServeIndex(struct lws *wsi, const char *webui_path);
+
+/* HTTP callback handler */
+int BarHttpCallback(struct lws *wsi, int reason,
+                    void *user, void *in, size_t len);
+
+#endif /* _HTTP_SERVER_H */
 

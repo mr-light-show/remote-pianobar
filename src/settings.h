@@ -107,6 +107,17 @@ typedef struct {
 	char keys[BAR_KS_COUNT];
 	int sampleRate;
 	BarMsgFormatStr_t msgFormat[MSG_COUNT];
+	
+	/* WebSocket support (conditional compilation) */
+	#ifdef WEBSOCKET_ENABLED
+	bool websocketEnabled;
+	int websocketPort;
+	char *websocketHost;
+	bool webuiEnabled;
+	char *webuiPath;
+	char *pidFile;
+	char *logFile;
+	#endif
 } BarSettings_t;
 
 #include <piano.h>

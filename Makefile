@@ -33,6 +33,17 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/ui.c \
 		${PIANOBAR_DIR}/ui_readline.c \
 		${PIANOBAR_DIR}/ui_dispatch.c
+
+# WebSocket support (conditional compilation)
+WEBSOCKET?=0
+ifeq ($(WEBSOCKET),1)
+	PIANOBAR_SRC+=\
+		${PIANOBAR_DIR}/websocket.c \
+		${PIANOBAR_DIR}/http_server.c \
+		${PIANOBAR_DIR}/socketio.c \
+		${PIANOBAR_DIR}/daemon.c
+endif
+
 PIANOBAR_OBJ:=${PIANOBAR_SRC:.c=.o}
 
 LIBPIANO_DIR:=src/libpiano
@@ -61,6 +72,13 @@ LIBJSONC_LDFLAGS:=$(shell $(PKG_CONFIG) --libs json-c 2>/dev/null || $(PKG_CONFI
 LIBAO_CFLAGS:=$(shell $(PKG_CONFIG) --cflags ao)
 LIBAO_LDFLAGS:=$(shell $(PKG_CONFIG) --libs ao)
 
+# WebSocket library flags (if enabled)
+ifeq ($(WEBSOCKET),1)
+	CFLAGS+=-DWEBSOCKET_ENABLED
+	LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
+	LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
+endif
+
 # combine all flags
 ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
 			${LIBAV_CFLAGS} ${LIBCURL_CFLAGS} \
@@ -70,6 +88,12 @@ ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 			${LIBAV_LDFLAGS} ${LIBCURL_LDFLAGS} \
 			${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
 			${LIBAO_LDFLAGS}
+
+# Add WebSocket flags if enabled
+ifeq ($(WEBSOCKET),1)
+	ALL_CFLAGS+=${LIBWEBSOCKETS_CFLAGS}
+	ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
+endif
 
 # Be verbose if V=1 (gnu autotools’ --disable-silent-rules)
 SILENTCMD:=@
