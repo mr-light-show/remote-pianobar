@@ -55,6 +55,10 @@ THE SOFTWARE.
 #include "terminal.h"
 #include "ui.h"
 #include "ui_dispatch.h"
+
+#ifdef WEBSOCKET_ENABLED
+#include "websocket/core/websocket.h"
+#endif
 #include "ui_readline.h"
 
 /*	authenticate user
@@ -398,6 +402,13 @@ static void BarMainLoop (BarApp_t *app) {
 
 		BarMainHandleUserInput (app);
 
+		#ifdef WEBSOCKET_ENABLED
+		/* Service WebSocket connections */
+		if (app->settings.websocketEnabled) {
+			BarWebsocketService(app, 10); /* 10ms timeout */
+		}
+		#endif
+
 		/* show time */
 		if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
 			BarMainPrintTime (app);
@@ -501,6 +512,15 @@ int main (int argc, char **argv) {
 			app.input.fds[1];
 	++app.input.maxfd;
 
+	#ifdef WEBSOCKET_ENABLED
+	/* Initialize WebSocket server if enabled */
+	if (app.settings.websocketEnabled) {
+		if (!BarWebsocketInit(&app)) {
+			BarUiMsg (&app.settings, MSG_ERR, "Failed to start WebSocket server\n");
+		}
+	}
+	#endif
+
 	BarMainLoop (&app);
 
 	if (app.input.fds[1] != -1) {
@@ -516,6 +536,14 @@ int main (int argc, char **argv) {
 	curl_easy_cleanup (app.http);
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);
+	
+	#ifdef WEBSOCKET_ENABLED
+	/* Cleanup WebSocket server */
+	if (app.settings.websocketEnabled) {
+		BarWebsocketDestroy(&app);
+	}
+	#endif
+	
 	BarSettingsDestroy (&app.settings);
 
 	/* restore terminal attributes, zsh doesn't need this, bash does... */
