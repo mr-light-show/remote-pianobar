@@ -29,50 +29,102 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <json-c/json.h>
 
+/* Parse Socket.IO protocol message format */
+static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName, 
+                                          json_object **data) {
+	const char *ptr = message;
+	BarSocketIoType_t type;
+	json_object *arr, *event, *payload;
+	
+	if (!message || !eventName || !data) {
+		return SOCKETIO_ERROR;
+	}
+	
+	*eventName = NULL;
+	*data = NULL;
+	
+	/* Parse packet type (first character) */
+	if (*ptr < '0' || *ptr > '6') {
+		return SOCKETIO_ERROR;
+	}
+	type = (BarSocketIoType_t)(*ptr - '0');
+	ptr++;
+	
+	/* For EVENT type (2), parse JSON array: ["eventName", {...}] */
+	if (type == SOCKETIO_EVENT) {
+		arr = json_tokener_parse(ptr);
+		if (!arr || !json_object_is_type(arr, json_type_array)) {
+			if (arr) json_object_put(arr);
+			return SOCKETIO_ERROR;
+		}
+		
+		/* Get event name (first array element) */
+		event = json_object_array_get_idx(arr, 0);
+		if (event && json_object_is_type(event, json_type_string)) {
+			*eventName = strdup(json_object_get_string(event));
+		}
+		
+		/* Get data payload (second array element, optional) */
+		payload = json_object_array_get_idx(arr, 1);
+		if (payload) {
+			*data = json_object_get(payload); /* Increment reference count */
+		}
+		
+		json_object_put(arr);
+	}
+	
+	return type;
+}
+
 /* Handle incoming Socket.IO message */
 void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
-	json_object *msg, *event, *data;
-	const char *eventName;
+	BarSocketIoType_t type;
+	char *eventName = NULL;
+	json_object *data = NULL;
 	
 	if (!app || !message) {
 		return;
 	}
 	
-	/* Parse JSON message */
-	msg = json_tokener_parse(message);
-	if (!msg) {
-		fprintf(stderr, "Socket.IO: Failed to parse message\n");
-		return;
+	/* Parse Socket.IO message */
+	type = BarSocketIoParse(message, &eventName, &data);
+	
+	if (type == SOCKETIO_CONNECT) {
+		fprintf(stderr, "Socket.IO: Client connected\n");
+		/* Send initial state on connect */
+		BarSocketIoHandleQuery(app);
+		goto cleanup;
 	}
 	
-	/* Get event name */
-	if (!json_object_object_get_ex(msg, "event", &event)) {
-		json_object_put(msg);
-		return;
+	if (type != SOCKETIO_EVENT || !eventName) {
+		goto cleanup;
 	}
-	
-	eventName = json_object_get_string(event);
-	if (!eventName) {
-		json_object_put(msg);
-		return;
-	}
-	
-	/* Get event data (optional) */
-	json_object_object_get_ex(msg, "data", &data);
 	
 	/* Route to appropriate handler */
 	if (strcmp(eventName, "action") == 0) {
-		if (data) {
+		if (data && json_object_is_type(data, json_type_string)) {
 			const char *action = json_object_get_string(data);
-			if (action) {
-				BarSocketIoHandleAction(app, action);
+			BarSocketIoHandleAction(app, action);
+		} else if (data && json_object_is_type(data, json_type_object)) {
+			json_object *actionObj;
+			if (json_object_object_get_ex(data, "action", &actionObj)) {
+				const char *action = json_object_get_string(actionObj);
+				if (action) {
+					BarSocketIoHandleAction(app, action);
+				}
 			}
 		}
 	} else if (strcmp(eventName, "changeStation") == 0) {
-		if (data) {
+		if (data && json_object_is_type(data, json_type_string)) {
 			const char *station = json_object_get_string(data);
-			if (station) {
-				BarSocketIoHandleChangeStation(app, station);
+			BarSocketIoHandleChangeStation(app, station);
+		} else if (data && json_object_is_type(data, json_type_object)) {
+			json_object *stationObj;
+			if (json_object_object_get_ex(data, "station", &stationObj)) {
+				const char *station = json_object_get_string(stationObj);
+				if (station) {
+					BarSocketIoHandleChangeStation(app, station);
+				}
 			}
 		}
 	} else if (strcmp(eventName, "query") == 0) {
@@ -81,14 +133,75 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 		fprintf(stderr, "Socket.IO: Unknown event: %s\n", eventName);
 	}
 	
-	json_object_put(msg);
+cleanup:
+	free(eventName);
+	if (data) {
+		json_object_put(data);
+	}
+}
+
+/* Global broadcast callback (set by WebSocket core) */
+static void (*g_broadcastCallback)(const char *message, size_t len) = NULL;
+
+/* Set broadcast callback */
+void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t)) {
+	g_broadcastCallback = callback;
+}
+
+/* Format Socket.IO event message */
+static char *BarSocketIoFormat(const char *event, json_object *data) {
+	json_object *arr;
+	const char *jsonStr;
+	char *formatted;
+	size_t len;
+	
+	if (!event) {
+		return NULL;
+	}
+	
+	/* Create JSON array: ["event", data] */
+	arr = json_object_new_array();
+	json_object_array_add(arr, json_object_new_string(event));
+	
+	if (data) {
+		json_object_array_add(arr, json_object_get(data)); /* Increment ref */
+	}
+	
+	jsonStr = json_object_to_json_string(arr);
+	
+	/* Format as Socket.IO message: 2["event",data] */
+	len = strlen(jsonStr) + 2; /* "2" + JSON + null */
+	formatted = malloc(len);
+	if (formatted) {
+		snprintf(formatted, len, "2%s", jsonStr);
+	}
+	
+	json_object_put(arr);
+	return formatted;
 }
 
 /* Emit event to all connected clients */
 void BarSocketIoEmit(const char *event, json_object *data) {
-	/* TODO: Implement broadcasting to all WebSocket clients */
-	/* This will be implemented when integrating with websocket.c */
-	fprintf(stderr, "Socket.IO: Emit %s (not yet implemented)\n", event);
+	char *message;
+	
+	if (!event) {
+		return;
+	}
+	
+	message = BarSocketIoFormat(event, data);
+	if (!message) {
+		fprintf(stderr, "Socket.IO: Failed to format message\n");
+		return;
+	}
+	
+	/* Broadcast to all clients if callback is set */
+	if (g_broadcastCallback) {
+		g_broadcastCallback(message, strlen(message));
+	} else {
+		fprintf(stderr, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
+	}
+	
+	free(message);
 }
 
 /* Emit 'start' event (song started) */
@@ -223,6 +336,26 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	json_object_put(data);
 }
 
+/* Helper: Find station by name or ID */
+static PianoStation_t *BarSocketIoFindStation(BarApp_t *app, const char *nameOrId) {
+	PianoStation_t *station;
+	
+	if (!app || !nameOrId) {
+		return NULL;
+	}
+	
+	station = app->ph.stations;
+	while (station != NULL) {
+		if (strcmp(station->name, nameOrId) == 0 ||
+		    strcmp(station->id, nameOrId) == 0) {
+			return station;
+		}
+		station = (PianoStation_t *)station->head.next;
+	}
+	
+	return NULL;
+}
+
 /* Handle 'action' event from client */
 void BarSocketIoHandleAction(BarApp_t *app, const char *action) {
 	if (!app || !action) {
@@ -231,25 +364,64 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action) {
 	
 	fprintf(stderr, "Socket.IO: Action received: %s\n", action);
 	
-	/* TODO: Map actions to pianobar commands */
-	/* Examples:
+	/* Map common actions to pianobar commands
+	 * For Phase 2.1, we log the action. Full integration with
+	 * pianobar's command system will be in Phase 4.
+	 * 
+	 * Common actions:
 	 * 'n' -> next song
 	 * 'p' -> play/pause
-	 * 'v75' -> set volume to 75%
+	 * 'P' -> pause
+	 * 'S' -> play
 	 * '+' -> love song
 	 * '-' -> ban song
+	 * 't' -> tired of song
+	 * 'v75' -> set volume to 75%
+	 * 's' -> select station
+	 * 'q' -> quit
 	 */
+	
+	/* For now, handle volume changes as a demonstration */
+	if (action[0] == 'v' && strlen(action) > 1) {
+		int volume = atoi(action + 1);
+		if (volume >= 0 && volume <= 100) {
+			fprintf(stderr, "Socket.IO: Volume change to %d%% (would set player volume)\n", volume);
+			/* In Phase 4, we'll actually set: app->player.volume = volume */
+		}
+	}
+	
+	/* Queue action for main loop processing
+	 * In Phase 4, actions will be queued for processing by the main event loop */
 }
 
 /* Handle 'changeStation' event from client */
 void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationName) {
+	PianoStation_t *station;
+	
 	if (!app || !stationName) {
 		return;
 	}
 	
-	fprintf(stderr, "Socket.IO: Change station: %s\n", stationName);
+	fprintf(stderr, "Socket.IO: Change station request: %s\n", stationName);
 	
-	/* TODO: Find station by name and switch to it */
+	/* Find station by name or ID */
+	station = BarSocketIoFindStation(app, stationName);
+	
+	if (station) {
+		fprintf(stderr, "Socket.IO: Switching to station: %s\n", station->name);
+		/* Set as next station to play */
+		app->nextStation = station;
+		
+		/* In Phase 4, we'll trigger station change in main loop:
+		 * - Clear current playlist
+		 * - Fetch new songs from nextStation
+		 * - Start playback
+		 * For now, we just set nextStation which will be picked up
+		 * when current playlist runs out or user skips
+		 */
+	} else {
+		fprintf(stderr, "Socket.IO: Station not found: %s\n", stationName);
+	}
 }
 
 /* Handle 'query' event from client */

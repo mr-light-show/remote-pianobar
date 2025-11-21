@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Socket.IO Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        #status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        #status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        #output {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #4CAF50;
+        }
+        .message.received {
+            border-left-color: #2196F3;
+        }
+        .message.sent {
+            border-left-color: #FF9800;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Socket.IO Test Client - Pianobar</h1>
+        
+        <div id="status" class="disconnected">Disconnected</div>
+        
+        <div class="controls">
+            <h3>Connection:</h3>
+            <input type="text" id="serverUrl" value="ws://localhost:8080" style="width: 300px;" />
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+        
+        <div class="controls">
+            <h3>Commands:</h3>
+            <button onclick="sendQuery()">Query State</button>
+            <button onclick="sendAction('p')">Play/Pause</button>
+            <button onclick="sendAction('n')">Next Song</button>
+            <button onclick="sendAction('+')">Love Song</button>
+            <button onclick="sendAction('v75')">Volume 75%</button>
+        </div>
+        
+        <h3>Output:</h3>
+        <div id="output"></div>
+        <button onclick="clearOutput()">Clear Output</button>
+    </div>
+    
+    <script>
+        let ws = null;
+        
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = 'message ' + type;
+            div.textContent = new Date().toLocaleTimeString() + ' - ' + message;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+        
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            if (connected) {
+                status.textContent = 'Connected';
+                status.className = 'connected';
+            } else {
+                status.textContent = 'Disconnected';
+                status.className = 'disconnected';
+            }
+        }
+        
+        function connect() {
+            const url = document.getElementById('serverUrl').value;
+            log('Connecting to ' + url + '...');
+            
+            try {
+                ws = new WebSocket(url, 'socketio');
+                
+                ws.onopen = function() {
+                    log('✓ Connected!');
+                    updateStatus(true);
+                    // Send Socket.IO connect message
+                    ws.send('0');
+                    log('Sent: 0 (CONNECT)', 'sent');
+                };
+                
+                ws.onmessage = function(event) {
+                    log('Received: ' + event.data, 'received');
+                };
+                
+                ws.onerror = function(error) {
+                    log('✗ Error: ' + error.message);
+                };
+                
+                ws.onclose = function() {
+                    log('✗ Disconnected');
+                    updateStatus(false);
+                    ws = null;
+                };
+            } catch (e) {
+                log('✗ Connection error: ' + e.message);
+                updateStatus(false);
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                log('Disconnected by user');
+                updateStatus(false);
+            }
+        }
+        
+        function sendMessage(message) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('✗ Not connected!');
+                return false;
+            }
+            ws.send(message);
+            log('Sent: ' + message, 'sent');
+            return true;
+        }
+        
+        function sendQuery() {
+            sendMessage('2["query"]');
+        }
+        
+        function sendAction(action) {
+            sendMessage('2["action","' + action + '"]');
+        }
+        
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+        
+        // Log initial state
+        log('Socket.IO Test Client ready');
+        log('Instructions: 1) Click Connect 2) Try sending commands');
+    </script>
+</body>
+</html>
+

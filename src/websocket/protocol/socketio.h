@@ -43,6 +43,9 @@ typedef enum {
 	SOCKETIO_BINARY_ACK = 6,
 } BarSocketIoType_t;
 
+/* Set broadcast callback (called by WebSocket core) */
+void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t));
+
 /* Handle incoming Socket.IO message */
 void BarSocketIoHandleMessage(BarApp_t *app, const char *message);
 

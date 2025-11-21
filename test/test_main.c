@@ -28,6 +28,7 @@ THE SOFTWARE.
 Suite *websocket_suite(void);
 Suite *http_server_suite(void);
 Suite *daemon_suite(void);
+Suite *socketio_suite(void);
 
 int main(void) {
 	int number_failed;
@@ -37,6 +38,7 @@ int main(void) {
 	sr = srunner_create(websocket_suite());
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
+	srunner_add_suite(sr, socketio_suite());
 	
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);

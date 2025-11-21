@@ -195,14 +195,15 @@ TEST_SRC:=\
 		${TEST_DIR}/test_main.c \
 		${TEST_DIR}/unit/test_websocket.c \
 		${TEST_DIR}/unit/test_http_server.c \
-		${TEST_DIR}/unit/test_daemon.c
+		${TEST_DIR}/unit/test_daemon.c \
+		${TEST_DIR}/unit/test_socketio.c
 TEST_OBJ:=${TEST_SRC:.c=.o}
 TEST_BIN:=pianobar_test
 
 # Build test suite (only link the modules being tested)
-${TEST_BIN}: ${TEST_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o
+${TEST_BIN}: ${TEST_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}

@@ -23,12 +23,17 @@ THE SOFTWARE.
 
 #include "../../main.h"
 #include "websocket.h"
+#include "../protocol/socketio.h"
+#include "../http/http_server.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <libwebsockets.h>
 #include <json-c/json.h>
+
+/* Forward declarations */
+static void BarWebsocketBroadcast(const char *message, size_t len);
 
 /* WebSocket protocol callback */
 static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
@@ -126,6 +131,9 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->initialized = true;
 	ctx->maxConnections = 32;
 	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
+	
+	/* Set up Socket.IO broadcast callback */
+	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);
 	
 	fprintf(stderr, "WebSocket: Server started on port %d\n",
 	        app->settings.websocketPort);
@@ -274,17 +282,19 @@ void BarWebsocketBroadcastProgress(BarApp_t *app) {
 	BarWebsocketBroadcastState(app);
 }
 
+/* Broadcast message to all connected WebSocket clients */
+static void BarWebsocketBroadcast(const char *message, size_t len) {
+	/* TODO: Implement actual broadcasting to all connected clients
+	 * For Phase 2.1, we log the message. Full implementation in Phase 4
+	 * will iterate through all connected clients and queue messages.
+	 */
+	fprintf(stderr, "WebSocket: Broadcast (%zu bytes): %s\n", len, message);
+}
+
 /* Handle incoming WebSocket message */
 void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
                                size_t len, const char *protocol) {
 	if (!app || !message || len == 0) {
-		return;
-	}
-	
-	/* Parse JSON message */
-	json_object *msg = json_tokener_parse(message);
-	if (!msg) {
-		fprintf(stderr, "WebSocket: Failed to parse message\n");
 		return;
 	}
 	
@@ -294,10 +304,7 @@ void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
 		fprintf(stderr, "WebSocket: HA message received (not yet implemented)\n");
 	} else {
 		/* Default to Socket.IO */
-		/* TODO: Call BarSocketIoHandleMessage(app, message); */
-		fprintf(stderr, "WebSocket: Socket.IO message received (not yet implemented)\n");
+		BarSocketIoHandleMessage(app, message);
 	}
-	
-	json_object_put(msg);
 }
 
