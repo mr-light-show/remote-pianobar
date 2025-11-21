@@ -147,6 +147,8 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		return;
 	}
 	
+	fprintf(stderr, "WebSocket: Stopping server...\n");
+	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
 	if (ctx->context) {
