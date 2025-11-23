@@ -7,3 +7,9 @@ pianobar
 libpiano.a
 libpiano.so*
 waitress-test
+
+# WebUI dependencies and test artifacts
+node_modules/
+playwright-report/
+test-results/
+.vite/
