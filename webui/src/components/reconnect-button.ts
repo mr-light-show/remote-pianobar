@@ -1,15 +1,12 @@
 import { LitElement, html, css } from 'lit';
-import { customElement, property } from 'lit/decorators.js';
+import { customElement } from 'lit/decorators.js';
 
-@customElement('playback-controls')
-export class PlaybackControls extends LitElement {
-  @property({ type: Boolean }) playing = false;
-  
+@customElement('reconnect-button')
+export class ReconnectButton extends LitElement {
   static styles = css`
     :host {
       display: flex;
       justify-content: center;
-      gap: 1rem;
       margin: 2rem 0;
     }
     
@@ -18,27 +15,28 @@ export class PlaybackControls extends LitElement {
       height: 56px;
       border-radius: 50%;
       border: none;
-      background: var(--surface-variant);
-      color: var(--on-surface);
+      background: var(--error);
+      color: var(--on-error);
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       transition: all 0.2s;
+      animation: pulse 2s infinite;
     }
     
     button:hover {
-      background: var(--primary-container);
-      color: var(--on-primary-container);
+      background: var(--error-dark);
+      animation: none;
     }
     
-    button.primary {
-      background: var(--primary-color);
-      color: var(--on-primary);
-    }
-    
-    button.primary:hover {
-      background: var(--primary-dark);
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.6;
+      }
     }
     
     .material-icons {
@@ -60,21 +58,14 @@ export class PlaybackControls extends LitElement {
     }
   `;
   
-  handlePlay() {
-    this.dispatchEvent(new CustomEvent('play'));
-  }
-  
-  handleNext() {
-    this.dispatchEvent(new CustomEvent('next'));
+  handleReconnect() {
+    this.dispatchEvent(new CustomEvent('reconnect'));
   }
   
   render() {
     return html`
-      <button @click=${this.handlePlay} class="primary" title="${this.playing ? 'Pause' : 'Play'}">
-        <span class="material-icons">${this.playing ? 'pause' : 'play_arrow'}</span>
-      </button>
-      <button @click=${this.handleNext} title="Next Song">
-        <span class="material-icons">skip_next</span>
+      <button @click=${this.handleReconnect} title="Reconnect">
+        <span class="material-icons">sync</span>
       </button>
     `;
   }

@@ -1,6 +1,5 @@
 /*
 Copyright (c) 2025
-    Kyle Hawes <khawes@netflix.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,8 +26,27 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdbool.h>
 #include <time.h>
+#include <pthread.h>
+
+#include "queue.h"
 
 /* Note: main.h must be included before this header to get BarApp_t definition */
+
+/* Bucket categories for broadcast messages 
+ * Enum order defines processing priority (highest to lowest) */
+typedef enum {
+	BUCKET_STATE,      /* START/STOP events - highest priority */
+	BUCKET_VOLUME,     /* Volume changes */
+	BUCKET_PROGRESS,   /* Progress updates */
+	BUCKET_STATIONS,   /* Station list - lowest priority */
+	BUCKET_COUNT       /* Total number of buckets */
+} BarWsBucketType_t;
+
+/* Message bucket - holds one message of a specific category */
+typedef struct {
+	BarWsMessage_t *message;       /* Current message (NULL if empty) */
+	pthread_mutex_t mutex;         /* Protects this bucket */
+} BarWsBucket_t;
 
 /* WebSocket connection state */
 typedef struct {
@@ -42,6 +60,9 @@ typedef struct {
 	time_t songStartTime;         /* When song started playing */
 	unsigned int songDuration;    /* Total duration in seconds */
 	bool isPlaying;               /* Is currently playing */
+	bool isPaused;                /* Is currently paused */
+	time_t pausedAt;              /* When song was paused */
+	unsigned int pausedElapsed;   /* Elapsed time when paused */
 	unsigned int lastBroadcast;   /* Last progress broadcast time */
 } BarWsProgress_t;
 
@@ -49,10 +70,25 @@ typedef struct {
 typedef struct {
 	void *context;                /* libwebsockets context */
 	bool initialized;             /* Initialization status */
-	BarWsProgress_t progress;     /* Progress tracking */
-	BarWsConnection_t *connections; /* Array of connections */
-	size_t numConnections;        /* Number of active connections */
-	size_t maxConnections;        /* Maximum connections allowed */
+	
+	/* Threading */
+	pthread_t thread;             /* WebSocket service thread */
+	bool threadRunning;           /* Thread lifecycle flag */
+	pthread_mutex_t stateMutex;   /* Protects shared state */
+	
+	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
+	BarWsBucket_t buckets[BUCKET_COUNT];
+	
+	/* Command queue (WS thread → Main) - UNCHANGED */
+	BarWsQueue_t commandQueue;
+	
+	/* Progress tracking (WS thread only) */
+	BarWsProgress_t progress;
+	
+	/* Connections (WS thread only) */
+	BarWsConnection_t *connections;
+	size_t numConnections;
+	size_t maxConnections;
 } BarWsContext_t;
 
 /* Initialize WebSocket server */

@@ -443,10 +443,19 @@ void BarSettingsRead (BarSettings_t *settings) {
 						break;
 					}
 				}
-			#ifdef WEBSOCKET_ENABLED
-			} else if (streq ("websocket_enabled", key)) {
-				settings->websocketEnabled = (atoi (val) != 0);
-			} else if (streq ("websocket_port", key)) {
+		#ifdef WEBSOCKET_ENABLED
+		} else if (streq ("ui_mode", key)) {
+			if (streq (val, "cli")) {
+				settings->uiMode = BAR_UI_MODE_CLI;
+			} else if (streq (val, "web")) {
+				settings->uiMode = BAR_UI_MODE_WEB;
+			} else if (streq (val, "both")) {
+				settings->uiMode = BAR_UI_MODE_BOTH;
+			} else {
+				/* Invalid value defaults to 'both' */
+				settings->uiMode = BAR_UI_MODE_BOTH;
+			}
+		} else if (streq ("websocket_port", key)) {
 				settings->websocketPort = atoi (val);
 			} else if (streq ("websocket_host", key)) {
 				free (settings->websocketHost);

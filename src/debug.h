@@ -30,12 +30,21 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <unistd.h>
+
+/* ANSI color codes */
+#define COLOR_RESET   "\033[0m"
+#define COLOR_CYAN    "\033[0;36m"  /* Network */
+#define COLOR_YELLOW  "\033[0;33m"  /* Audio */
+#define COLOR_GREEN   "\033[0;32m"  /* UI */
+#define COLOR_MAGENTA "\033[0;35m"  /* WebSocket */
 
 /* bitfield */
 typedef enum {
 	DEBUG_NETWORK = 1,
 	DEBUG_AUDIO = 2,
 	DEBUG_UI = 4,
+	DEBUG_WEBSOCKET = 8,
 } debugKind;
 
 extern unsigned int debug;
@@ -51,10 +60,29 @@ inline static bool debugEnable () {
 __attribute__((format(printf, 2, 3)))
 inline static void debugPrint(debugKind kind, const char * const format, ...) {
 	if (debug & kind) {
+		/* Only use colors if stderr is a terminal */
+		const bool useColor = isatty(fileno(stderr));
+		const char *color = "";
+		
+		if (useColor) {
+			switch (kind) {
+				case DEBUG_NETWORK:   color = COLOR_CYAN; break;
+				case DEBUG_AUDIO:     color = COLOR_YELLOW; break;
+				case DEBUG_UI:        color = COLOR_GREEN; break;
+				case DEBUG_WEBSOCKET: color = COLOR_MAGENTA; break;
+				default:              color = ""; break;
+			}
+			fprintf(stderr, "%s", color);
+		}
+		
 		va_list fmtargs;
 		va_start (fmtargs, format);
 		vfprintf (stderr, format, fmtargs);
 		va_end (fmtargs);
+		
+		if (useColor) {
+			fprintf(stderr, "%s", COLOR_RESET);
+		}
 	}
 }
 #else

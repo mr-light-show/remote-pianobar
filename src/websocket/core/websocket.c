@@ -32,10 +32,120 @@ THE SOFTWARE.
 #include <libwebsockets.h>
 #include <json-c/json.h>
 
+/* Global context for broadcast callback */
+static BarWsContext_t *g_wsContext = NULL;
+
 /* Forward declarations */
 static void BarWebsocketBroadcast(const char *message, size_t len);
 static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *msg);
 static void* BarWebsocketThread(void *arg);
+
+/* Bucket helper functions */
+
+/* Map message type to bucket */
+static BarWsBucketType_t BarWsGetBucket(BarWsMsgType_t type) {
+	switch (type) {
+		case MSG_TYPE_BROADCAST_START:
+		case MSG_TYPE_BROADCAST_STOP:
+			return BUCKET_STATE;
+		case MSG_TYPE_BROADCAST_PROGRESS:
+			return BUCKET_PROGRESS;
+		case MSG_TYPE_BROADCAST_VOLUME:
+			return BUCKET_VOLUME;
+		case MSG_TYPE_BROADCAST_STATIONS:
+			return BUCKET_STATIONS;
+		default:
+			debugPrint(DEBUG_WEBSOCKET, "Unknown message type: %d\n", type);
+			return BUCKET_STATE; // Fallback
+	}
+}
+
+/* Initialize buckets */
+static void BarWsBucketsInit(BarWsContext_t *ctx) {
+	if (!ctx) return;
+	
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		ctx->buckets[i].message = NULL;
+		pthread_mutex_init(&ctx->buckets[i].mutex, NULL);
+	}
+}
+
+/* Destroy buckets */
+static void BarWsBucketsDestroy(BarWsContext_t *ctx) {
+	if (!ctx) return;
+	
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		pthread_mutex_lock(&ctx->buckets[i].mutex);
+		if (ctx->buckets[i].message) {
+			BarWsMessageFree(ctx->buckets[i].message);
+			ctx->buckets[i].message = NULL;
+		}
+		pthread_mutex_unlock(&ctx->buckets[i].mutex);
+		pthread_mutex_destroy(&ctx->buckets[i].mutex);
+	}
+}
+
+/* Put message in bucket (replaces BarWsQueuePush for broadcasts) */
+static void BarWsBucketPut(BarWsContext_t *ctx, BarWsMsgType_t type,
+                           const void *data, size_t dataLen) {
+	if (!ctx) return;
+	
+	BarWsBucketType_t bucket = BarWsGetBucket(type);
+	
+	/* STATE bucket clears PROGRESS bucket */
+	if (bucket == BUCKET_STATE) {
+		pthread_mutex_lock(&ctx->buckets[BUCKET_PROGRESS].mutex);
+		if (ctx->buckets[BUCKET_PROGRESS].message) {
+			BarWsMessageFree(ctx->buckets[BUCKET_PROGRESS].message);
+			ctx->buckets[BUCKET_PROGRESS].message = NULL;
+		}
+		pthread_mutex_unlock(&ctx->buckets[BUCKET_PROGRESS].mutex);
+	}
+	
+	/* Create new message */
+	BarWsMessage_t *msg = calloc(1, sizeof(BarWsMessage_t));
+	if (!msg) return;
+	
+	msg->type = type;
+	msg->next = NULL;
+	
+	/* Copy data if provided */
+	if (data && dataLen > 0) {
+		msg->data = malloc(dataLen);
+		if (msg->data) {
+			memcpy(msg->data, data, dataLen);
+			msg->dataLen = dataLen;
+		} else {
+			free(msg);
+			return;
+		}
+	}
+	
+	/* Replace bucket contents */
+	pthread_mutex_lock(&ctx->buckets[bucket].mutex);
+	if (ctx->buckets[bucket].message) {
+		BarWsMessageFree(ctx->buckets[bucket].message);
+	}
+	ctx->buckets[bucket].message = msg;
+	pthread_mutex_unlock(&ctx->buckets[bucket].mutex);
+	
+	/* Wake WebSocket thread immediately */
+	if (ctx->context) {
+		lws_cancel_service((struct lws_context *)ctx->context);
+	}
+}
+
+/* Get and remove message from bucket (returns NULL if empty) */
+static BarWsMessage_t* BarWsBucketTake(BarWsContext_t *ctx, BarWsBucketType_t bucket) {
+	if (!ctx || bucket >= BUCKET_COUNT) return NULL;
+	
+	pthread_mutex_lock(&ctx->buckets[bucket].mutex);
+	BarWsMessage_t *msg = ctx->buckets[bucket].message;
+	ctx->buckets[bucket].message = NULL;
+	pthread_mutex_unlock(&ctx->buckets[bucket].mutex);
+	
+	return msg;
+}
 
 /* WebSocket protocol callback */
 static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
@@ -67,15 +177,55 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 			snprintf(filepath, sizeof(filepath), "%s%s", webui_path, url);
 			return BarHttpServeFile(wsi, filepath);
 			
-		case LWS_CALLBACK_ESTABLISHED:
-			/* New client connected */
-			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client connected\n");
-			break;
+	case LWS_CALLBACK_ESTABLISHED: {
+		/* New client connected - track it */
+		debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client connected\n");
+		
+		if (app && app->wsContext) {
+			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 			
-		case LWS_CALLBACK_CLOSED:
-			/* Client disconnected */
-			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client disconnected\n");
-			break;
+			/* Find empty slot in connections array */
+			for (size_t i = 0; i < ctx->maxConnections; i++) {
+				if (ctx->connections[i].wsi == NULL) {
+					ctx->connections[i].wsi = wsi;
+					strncpy(ctx->connections[i].protocol, 
+					        lws_get_protocol(wsi)->name, 
+					        sizeof(ctx->connections[i].protocol) - 1);
+					ctx->numConnections++;
+					
+					debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client tracked (slot %zu, total %zu)\n", 
+					           i, ctx->numConnections);
+					
+					/* Send current state to new client */
+					BarSocketIoEmitProcess(app);
+					break;
+				}
+			}
+		}
+		break;
+	}
+		
+	case LWS_CALLBACK_CLOSED: {
+		/* Client disconnected - remove from tracking */
+		debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client disconnected\n");
+		
+		if (app && app->wsContext) {
+			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+			
+			for (size_t i = 0; i < ctx->maxConnections; i++) {
+				if (ctx->connections[i].wsi == wsi) {
+					ctx->connections[i].wsi = NULL;
+					ctx->connections[i].protocol[0] = '\0';
+					ctx->numConnections--;
+					
+					debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client removed (slot %zu, total %zu)\n", 
+					           i, ctx->numConnections);
+					break;
+				}
+			}
+		}
+		break;
+	}
 			
 		case LWS_CALLBACK_RECEIVE:
 			/* Received message from client */
@@ -142,16 +292,30 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 			/* TODO: Emit stop event */
 			break;
 			
-		case MSG_TYPE_BROADCAST_PROGRESS: {
-			/* Progress update - data contains elapsed time (unsigned int) */
-			if (msg->data && msg->dataLen >= sizeof(unsigned int) * 2) {
-				unsigned int *times = (unsigned int *)msg->data;
-				unsigned int elapsed = times[0];
-				unsigned int duration = times[1];
-				/* TODO: Emit progress event with elapsed and duration */
+	case MSG_TYPE_BROADCAST_PROGRESS: {
+		/* Progress update - data contains elapsed time (unsigned int) */
+		if (msg->data && msg->dataLen >= sizeof(unsigned int) * 2) {
+			unsigned int *times = (unsigned int *)msg->data;
+			unsigned int elapsed = times[0];
+			unsigned int duration = times[1];
+			
+			/* We can't access BarApp_t here, but we can call SocketIO directly
+			 * since it uses the global broadcast callback */
+			json_object *data = json_object_new_object();
+			json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
+			json_object_object_add(data, "duration", json_object_new_int(duration));
+			
+			float percentage = 0.0;
+			if (duration > 0) {
+				percentage = (elapsed * 100.0) / duration;
 			}
-			break;
+			json_object_object_add(data, "percentage", json_object_new_double(percentage));
+			
+			BarSocketIoEmit("progress", data);
+			json_object_put(data);
 		}
+		break;
+	}
 			
 		case MSG_TYPE_BROADCAST_VOLUME: {
 			/* Volume changed - data contains volume (int) */
@@ -184,17 +348,21 @@ static void* BarWebsocketThread(void *arg) {
 	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Thread started\n");
 	
 	while (ctx->threadRunning) {
-		/* Service WebSocket (can block - we're in our own thread) */
+		/* Service WebSocket */
 		if (ctx->context) {
-			lws_service(ctx->context, 50); /* 50ms is fine here */
+			lws_service(ctx->context, 50);
 		}
 		
-		/* Process broadcast queue from main thread */
-		BarWsMessage_t *msg;
-		while ((msg = BarWsQueuePop(&ctx->broadcastQueue, 0)) != NULL) {
-			BarWebsocketProcessBroadcast(ctx, msg);
-			BarWsMessageFree(msg);
+		/* Process all buckets in priority order */
+		for (int i = 0; i < BUCKET_COUNT; i++) {
+			BarWsMessage_t *msg = BarWsBucketTake(ctx, i);
+			if (msg) {
+				BarWebsocketProcessBroadcast(ctx, msg);
+				BarWsMessageFree(msg);
+			}
 		}
+		
+		/* NOTE: Command queue processing removed - main thread handles this */
 	}
 	
 	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Thread stopped\n");
@@ -218,6 +386,9 @@ bool BarWebsocketInit(BarApp_t *app) {
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
+	/* Set global context for broadcast callback */
+	g_wsContext = ctx;
+	
 	/* Initialize libwebsockets */
 	memset(&info, 0, sizeof(info));
 	info.port = app->settings.websocketPort;
@@ -240,9 +411,11 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->maxConnections = 32;
 	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	
-	/* Initialize queues */
-	BarWsQueueInit(&ctx->broadcastQueue, 100);
-	BarWsQueueInit(&ctx->commandQueue, 50);
+	/* Initialize buckets (REPLACES BarWsQueueInit for broadcast) */
+	BarWsBucketsInit(ctx);
+	
+	/* Initialize command queue (UNCHANGED) */
+	BarWsQueueInit(&ctx->commandQueue, 50, ctx->context);
 	
 	/* Initialize mutex */
 	pthread_mutex_init(&ctx->stateMutex, NULL);
@@ -259,7 +432,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 		fprintf(stderr, "WebSocket: Failed to create thread\n");
 		
 		/* Cleanup on failure */
-		BarWsQueueDestroy(&ctx->broadcastQueue);
+		BarWsBucketsDestroy(ctx);
 		BarWsQueueDestroy(&ctx->commandQueue);
 		pthread_mutex_destroy(&ctx->stateMutex);
 		lws_context_destroy(ctx->context);
@@ -287,8 +460,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	/* Signal thread to stop */
 	ctx->threadRunning = false;
 	
-	/* Close queues to wake up any waiting operations */
-	BarWsQueueClose(&ctx->broadcastQueue);
+	/* Close command queue to wake up any waiting operations */
 	BarWsQueueClose(&ctx->commandQueue);
 	
 	/* Cancel any ongoing lws_service() calls - safe in multi-threaded mode */
@@ -307,8 +479,10 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		ctx->context = NULL;
 	}
 	
-	/* Cleanup queues and mutexes */
-	BarWsQueueDestroy(&ctx->broadcastQueue);
+	/* Cleanup buckets (REPLACES BarWsQueueDestroy for broadcast) */
+	BarWsBucketsDestroy(ctx);
+	
+	/* Cleanup command queue (UNCHANGED) */
 	BarWsQueueDestroy(&ctx->commandQueue);
 	pthread_mutex_destroy(&ctx->stateMutex);
 	
@@ -316,6 +490,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		free(ctx->connections);
 		ctx->connections = NULL;
 	}
+	
+	/* Clear global context */
+	g_wsContext = NULL;
 	
 	free(ctx);
 	app->wsContext = NULL;
@@ -381,6 +558,9 @@ void BarWebsocketBroadcastSongStart(BarApp_t *app) {
 	pthread_mutex_lock(&ctx->stateMutex);
 	ctx->progress.songStartTime = time(NULL);
 	ctx->progress.isPlaying = true;
+	ctx->progress.isPaused = false;
+	ctx->progress.pausedAt = 0;
+	ctx->progress.pausedElapsed = 0;
 	ctx->progress.lastBroadcast = 0;
 	
 	/* Get song duration from player */
@@ -389,9 +569,8 @@ void BarWebsocketBroadcastSongStart(BarApp_t *app) {
 	}
 	pthread_mutex_unlock(&ctx->stateMutex);
 	
-	/* Queue start event for WebSocket thread */
-	/* For now, send without song data (will add song serialization later) */
-	BarWsQueuePush(&ctx->broadcastQueue, MSG_TYPE_BROADCAST_START, NULL, 0);
+	/* Queue start event to bucket for WebSocket thread */
+	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_START, NULL, 0);
 	
 	/* TEMPORARY: Also call Socket.IO directly until thread processing is complete */
 	BarSocketIoEmitStart(app);
@@ -409,8 +588,8 @@ void BarWebsocketBroadcastSongStop(BarApp_t *app) {
 	ctx->progress.isPlaying = false;
 	pthread_mutex_unlock(&ctx->stateMutex);
 	
-	/* Queue stop event for WebSocket thread */
-	BarWsQueuePush(&ctx->broadcastQueue, MSG_TYPE_BROADCAST_STOP, NULL, 0);
+	/* Queue stop event to bucket for WebSocket thread */
+	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_STOP, NULL, 0);
 	
 	/* TEMPORARY: Also call Socket.IO directly until thread processing is complete */
 	BarSocketIoEmitStop(app);
@@ -424,8 +603,8 @@ void BarWebsocketBroadcastVolume(BarApp_t *app, int volume) {
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
-	/* Queue volume event for WebSocket thread */
-	BarWsQueuePush(&ctx->broadcastQueue, MSG_TYPE_BROADCAST_VOLUME, &volume, sizeof(volume));
+	/* Queue volume event to bucket for WebSocket thread */
+	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_VOLUME, &volume, sizeof(volume));
 	
 	/* TEMPORARY: Also call Socket.IO directly until thread processing is complete */
 	BarSocketIoEmitVolume(app, volume);
@@ -438,6 +617,7 @@ void BarWebsocketBroadcastProgress(BarApp_t *app) {
 	}
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+	player_t *player = &app->player;
 	
 	/* Lock to safely access progress state */
 	pthread_mutex_lock(&ctx->stateMutex);
@@ -447,11 +627,44 @@ void BarWebsocketBroadcastProgress(BarApp_t *app) {
 		return;
 	}
 	
-	/* Calculate elapsed time */
-	time_t now = time(NULL);
-	time_t elapsed = now - ctx->progress.songStartTime;
+	unsigned int elapsed;
 	
-	/* Only broadcast every second to avoid spam */
+	/* Check if player is paused */
+	pthread_mutex_lock(&player->lock);
+	bool paused = player->doPause;
+	pthread_mutex_unlock(&player->lock);
+	
+	if (paused) {
+		/* Paused - use frozen elapsed time */
+		if (!ctx->progress.isPaused) {
+			/* Just paused - save current elapsed */
+			ctx->progress.isPaused = true;
+			ctx->progress.pausedAt = time(NULL);
+			elapsed = (unsigned int)(ctx->progress.pausedAt - ctx->progress.songStartTime);
+			ctx->progress.pausedElapsed = elapsed;
+		} else {
+			/* Still paused - use saved elapsed */
+			elapsed = ctx->progress.pausedElapsed;
+		}
+	} else {
+		/* Playing - calculate elapsed */
+		if (ctx->progress.isPaused) {
+			/* Just resumed - adjust start time to account for pause duration */
+			ctx->progress.isPaused = false;
+			time_t pauseDuration = time(NULL) - ctx->progress.pausedAt;
+			ctx->progress.songStartTime += pauseDuration;
+		}
+		
+		time_t now = time(NULL);
+		elapsed = (unsigned int)(now - ctx->progress.songStartTime);
+	}
+	
+	/* Cap at duration */
+	if (elapsed > ctx->progress.songDuration) {
+		elapsed = ctx->progress.songDuration;
+	}
+	
+	/* Only broadcast if changed */
 	if (elapsed == ctx->progress.lastBroadcast) {
 		pthread_mutex_unlock(&ctx->stateMutex);
 		return;
@@ -462,18 +675,48 @@ void BarWebsocketBroadcastProgress(BarApp_t *app) {
 	
 	pthread_mutex_unlock(&ctx->stateMutex);
 	
-	/* Queue progress update for WebSocket thread */
-	unsigned int times[2] = {(unsigned int)elapsed, duration};
-	BarWsQueuePush(&ctx->broadcastQueue, MSG_TYPE_BROADCAST_PROGRESS, times, sizeof(times));
+	/* Queue progress update to bucket for WebSocket thread */
+	unsigned int times[2] = {elapsed, duration};
+	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_PROGRESS, times, sizeof(times));
 }
 
 /* Broadcast message to all connected WebSocket clients */
 static void BarWebsocketBroadcast(const char *message, size_t len) {
-	/* TODO: Implement actual broadcasting to all connected clients
-	 * For Phase 2.1, we log the message. Full implementation in Phase 4
-	 * will iterate through all connected clients and queue messages.
-	 */
-	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Broadcast (%zu bytes): %s\n", len, message);
+	if (!g_wsContext || !message || len == 0) {
+		return;
+	}
+	
+	BarWsContext_t *ctx = g_wsContext;
+	
+	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Broadcasting to %zu clients (%zu bytes): %s\n", 
+	           ctx->numConnections, len, message);
+	
+	/* Iterate through all connected clients */
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		if (ctx->connections[i].wsi != NULL) {
+			struct lws *wsi = (struct lws *)ctx->connections[i].wsi;
+			
+			/* Allocate buffer with LWS_PRE padding */
+			unsigned char *buf = malloc(LWS_PRE + len);
+			if (!buf) {
+				continue;
+			}
+			
+			/* Copy message after LWS_PRE padding */
+			memcpy(&buf[LWS_PRE], message, len);
+			
+			/* Send to this client */
+			int written = lws_write(wsi, &buf[LWS_PRE], len, LWS_WRITE_TEXT);
+			
+			if (written < 0) {
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Failed to send to client %zu\n", i);
+			} else {
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Sent %d bytes to client %zu\n", written, i);
+			}
+			
+			free(buf);
+		}
+	}
 }
 
 /* Handle incoming WebSocket message */

@@ -1,6 +1,5 @@
 /*
 Copyright (c) 2025
-    Kyle Hawes <khawes@netflix.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,147 +21,317 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <stdlib.h>
 #include <string.h>
+#include <json-c/json.h>
 #include "../../src/main.h"
+#include "../../src/websocket/core/websocket.h"
+#include "../../src/websocket/core/queue.h"
 #include "../../src/websocket/protocol/socketio.h"
 
-/* Test: Handle message with NULL app should not crash */
-START_TEST(test_socketio_handle_null_app) {
-	BarSocketIoHandleMessage(NULL, "2[\"query\"]");
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
+/* Mock broadcast callback for testing emissions */
+static char *lastBroadcastMessage = NULL;
+static size_t lastBroadcastLen = 0;
+
+static void mockBroadcastCallback(const char *message, size_t len) {
+	free(lastBroadcastMessage);
+	lastBroadcastMessage = malloc(len + 1);
+	memcpy(lastBroadcastMessage, message, len);
+	lastBroadcastMessage[len] = '\0';
+	lastBroadcastLen = len;
+}
+
+static void clearBroadcastMock() {
+	free(lastBroadcastMessage);
+	lastBroadcastMessage = NULL;
+	lastBroadcastLen = 0;
+}
+
+/* Test: Socket.IO emit with event name only */
+START_TEST(test_socketio_emit_event_only) {
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	
+	BarSocketIoEmit("test_event", NULL);
+	
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	/* json-c adds spaces: "2[ "test_event" ]" */
+	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "test_event") != NULL);
+	
+	clearBroadcastMock();
 }
 END_TEST
 
-/* Test: Handle NULL message should not crash */
-START_TEST(test_socketio_handle_null_message) {
+/* Test: Socket.IO emit with event and data */
+START_TEST(test_socketio_emit_with_data) {
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	
+	json_object *data = json_object_new_object();
+	json_object_object_add(data, "key", json_object_new_string("value"));
+	
+	BarSocketIoEmit("test_event", data);
+	json_object_put(data);
+	
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "test_event") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "key") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "value") != NULL);
+	
+	clearBroadcastMock();
+}
+END_TEST
+
+/* Test: Socket.IO stop event (no data) */
+START_TEST(test_socketio_emit_stop) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
-	BarSocketIoHandleMessage(&app, NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
+	
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	
+	BarSocketIoEmitStop(&app);
+	
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "stop") != NULL);
+	
+	clearBroadcastMock();
 }
 END_TEST
 
-/* Test: Emit with NULL event name should not crash */
-START_TEST(test_socketio_emit_null_event) {
-	BarSocketIoEmit(NULL, NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Emit stop with NULL app should not crash */
-START_TEST(test_socketio_emit_stop_null) {
-	BarSocketIoEmitStop(NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Emit volume with NULL app should not crash */
-START_TEST(test_socketio_emit_volume_null) {
-	BarSocketIoEmitVolume(NULL, 50);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Emit progress with NULL app should not crash */
-START_TEST(test_socketio_emit_progress_null) {
-	BarSocketIoEmitProgress(NULL, 30, 180);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Emit stations with NULL app should not crash */
-START_TEST(test_socketio_emit_stations_null) {
-	BarSocketIoEmitStations(NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Emit process with NULL app should not crash */
-START_TEST(test_socketio_emit_process_null) {
-	BarSocketIoEmitProcess(NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Handle action with NULL app should not crash */
-START_TEST(test_socketio_handle_action_null_app) {
-	BarSocketIoHandleAction(NULL, "p");
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Handle action with NULL action should not crash */
-START_TEST(test_socketio_handle_action_null) {
+/* Test: Socket.IO progress event format */
+START_TEST(test_socketio_emit_progress) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
-	BarSocketIoHandleAction(&app, NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
+	
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	
+	BarSocketIoEmitProgress(&app, 60, 180);
+	
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "progress") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "elapsed") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "60") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "duration") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "180") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "percentage") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "33.") != NULL);
+	
+	clearBroadcastMock();
 }
 END_TEST
 
-/* Test: Handle changeStation with NULL app should not crash */
-START_TEST(test_socketio_handle_changestation_null_app) {
-	BarSocketIoHandleChangeStation(NULL, "Jazz");
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
-/* Test: Handle changeStation with NULL station should not crash */
-START_TEST(test_socketio_handle_changestation_null) {
+/* Test: Socket.IO volume event */
+START_TEST(test_socketio_emit_volume) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
-	BarSocketIoHandleChangeStation(&app, NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
+	
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	
+	BarSocketIoEmitVolume(&app, 75);
+	
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "volume") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "75") != NULL);
+	
+	clearBroadcastMock();
 }
 END_TEST
 
-/* Test: Handle query with NULL app should not crash */
-START_TEST(test_socketio_handle_query_null) {
-	BarSocketIoHandleQuery(NULL);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
+/* Test: Command translation - playback commands */
+START_TEST(test_socketio_translate_playback_commands) {
+	BarApp_t app;
+	BarSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	app.settings = settings;
+	
+	/* Create mock WebSocket context with command queue */
+	BarWsContext_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	BarWsQueueInit(&ctx.commandQueue, 10, NULL);
+	app.wsContext = &ctx;
+	
+	/* Test playback.next */
+	BarSocketIoHandleAction(&app, "playback.next");
+	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, "n");
+	BarWsMessageFree(msg);
+	
+	/* Test playback.toggle */
+	BarSocketIoHandleAction(&app, "playback.toggle");
+	msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, "p");
+	BarWsMessageFree(msg);
+	
+	BarWsQueueDestroy(&ctx.commandQueue);
 }
 END_TEST
 
-/* Create test suite */
+/* Test: Command translation - song commands */
+START_TEST(test_socketio_translate_song_commands) {
+	BarApp_t app;
+	BarSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	app.settings = settings;
+	
+	BarWsContext_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	BarWsQueueInit(&ctx.commandQueue, 10, NULL);
+	app.wsContext = &ctx;
+	
+	/* Test song.love */
+	BarSocketIoHandleAction(&app, "song.love");
+	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, "+");
+	BarWsMessageFree(msg);
+	
+	/* Test song.ban */
+	BarSocketIoHandleAction(&app, "song.ban");
+	msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, "-");
+	BarWsMessageFree(msg);
+	
+	/* Test song.tired */
+	BarSocketIoHandleAction(&app, "song.tired");
+	msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, "t");
+	BarWsMessageFree(msg);
+	
+	BarWsQueueDestroy(&ctx.commandQueue);
+}
+END_TEST
+
+/* Test: Command translation - volume commands */
+START_TEST(test_socketio_translate_volume_commands) {
+	BarApp_t app;
+	BarSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	app.settings = settings;
+	
+	BarWsContext_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	BarWsQueueInit(&ctx.commandQueue, 10, NULL);
+	app.wsContext = &ctx;
+	
+	/* Test volume.up */
+	BarSocketIoHandleAction(&app, "volume.up");
+	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, ")");
+	BarWsMessageFree(msg);
+	
+	/* Test volume.down */
+	BarSocketIoHandleAction(&app, "volume.down");
+	msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_nonnull(msg);
+	ck_assert_str_eq((char *)msg->data, "(");
+	BarWsMessageFree(msg);
+	
+	BarWsQueueDestroy(&ctx.commandQueue);
+}
+END_TEST
+
+/* Test: Command translation - reject invalid commands */
+START_TEST(test_socketio_reject_invalid_command) {
+	BarApp_t app;
+	BarSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	app.settings = settings;
+	
+	BarWsContext_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	BarWsQueueInit(&ctx.commandQueue, 10, NULL);
+	app.wsContext = &ctx;
+	
+	/* Test invalid command - should not queue anything */
+	BarSocketIoHandleAction(&app, "invalid.command");
+	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_null(msg);
+	
+	BarWsQueueDestroy(&ctx.commandQueue);
+}
+END_TEST
+
+/* Test: Command translation - reject single-letter commands */
+START_TEST(test_socketio_reject_single_letter) {
+	BarApp_t app;
+	BarSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	app.settings = settings;
+	
+	BarWsContext_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	BarWsQueueInit(&ctx.commandQueue, 10, NULL);
+	app.wsContext = &ctx;
+	
+	/* Test single-letter command - should not be accepted */
+	BarSocketIoHandleAction(&app, "n");
+	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
+	ck_assert_ptr_null(msg);
+	
+	BarWsQueueDestroy(&ctx.commandQueue);
+}
+END_TEST
+
+/* Test: Handle query event */
+START_TEST(test_socketio_handle_query) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	
+	/* Query should emit 'process' and 'stations' events */
+	BarSocketIoHandleQuery(&app);
+	
+	/* At least one message should be broadcast */
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	
+	clearBroadcastMock();
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
-	TCase *tc_emitters;
-	TCase *tc_handlers;
+	TCase *tc_emit;
+	TCase *tc_translate;
+	TCase *tc_handle;
 	
-	s = suite_create("Socket.IO");
+	s = suite_create("Socket.IO Protocol");
 	
-	tc_emitters = tcase_create("Emitters");
-	tcase_add_test(tc_emitters, test_socketio_emit_null_event);
-	tcase_add_test(tc_emitters, test_socketio_emit_stop_null);
-	tcase_add_test(tc_emitters, test_socketio_emit_volume_null);
-	tcase_add_test(tc_emitters, test_socketio_emit_progress_null);
-	tcase_add_test(tc_emitters, test_socketio_emit_stations_null);
-	tcase_add_test(tc_emitters, test_socketio_emit_process_null);
-	suite_add_tcase(s, tc_emitters);
+	/* Event emission tests */
+	tc_emit = tcase_create("Event Emission");
+	tcase_add_test(tc_emit, test_socketio_emit_event_only);
+	tcase_add_test(tc_emit, test_socketio_emit_with_data);
+	tcase_add_test(tc_emit, test_socketio_emit_stop);
+	tcase_add_test(tc_emit, test_socketio_emit_progress);
+	tcase_add_test(tc_emit, test_socketio_emit_volume);
+	suite_add_tcase(s, tc_emit);
 	
-	tc_handlers = tcase_create("Handlers");
-	tcase_add_test(tc_handlers, test_socketio_handle_null_app);
-	tcase_add_test(tc_handlers, test_socketio_handle_null_message);
-	tcase_add_test(tc_handlers, test_socketio_handle_action_null_app);
-	tcase_add_test(tc_handlers, test_socketio_handle_action_null);
-	tcase_add_test(tc_handlers, test_socketio_handle_changestation_null_app);
-	tcase_add_test(tc_handlers, test_socketio_handle_changestation_null);
-	tcase_add_test(tc_handlers, test_socketio_handle_query_null);
-	suite_add_tcase(s, tc_handlers);
+	/* Command translation tests */
+	tc_translate = tcase_create("Command Translation");
+	tcase_add_test(tc_translate, test_socketio_translate_playback_commands);
+	tcase_add_test(tc_translate, test_socketio_translate_song_commands);
+	tcase_add_test(tc_translate, test_socketio_translate_volume_commands);
+	tcase_add_test(tc_translate, test_socketio_reject_invalid_command);
+	tcase_add_test(tc_translate, test_socketio_reject_single_letter);
+	suite_add_tcase(s, tc_translate);
+	
+	/* Event handler tests */
+	tc_handle = tcase_create("Event Handlers");
+	tcase_add_test(tc_handle, test_socketio_handle_query);
+	suite_add_tcase(s, tc_handle);
 	
 	return s;
 }
-

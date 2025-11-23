@@ -35,6 +35,10 @@ THE SOFTWARE.
 #include "ui_readline.h"
 #include "ui_dispatch.h"
 
+#ifdef WEBSOCKET_ENABLED
+#include "websocket/protocol/socketio.h"
+#endif
+
 /*	standard eventcmd call
  */
 #define BarUiActDefaultEventcmd(name) BarUiStartEventCmd (&app->settings, \
@@ -652,6 +656,9 @@ BarUiActCallback(BarUiActBookmark) {
 BarUiActCallback(BarUiActVolDown) {
 	--app->settings.volume;
 	BarPlayerSetVolume (&app->player);
+	#ifdef WEBSOCKET_ENABLED
+	BarSocketIoEmitVolume(app, app->settings.volume);
+	#endif
 }
 
 /*	increase volume
@@ -659,6 +666,9 @@ BarUiActCallback(BarUiActVolDown) {
 BarUiActCallback(BarUiActVolUp) {
 	++app->settings.volume;
 	BarPlayerSetVolume (&app->player);
+	#ifdef WEBSOCKET_ENABLED
+	BarSocketIoEmitVolume(app, app->settings.volume);
+	#endif
 }
 
 /*	reset volume
@@ -666,6 +676,9 @@ BarUiActCallback(BarUiActVolUp) {
 BarUiActCallback(BarUiActVolReset) {
 	app->settings.volume = 0;
 	BarPlayerSetVolume (&app->player);
+	#ifdef WEBSOCKET_ENABLED
+	BarSocketIoEmitVolume(app, app->settings.volume);
+	#endif
 }
 
 static const char *boolToYesNo (const bool value) {

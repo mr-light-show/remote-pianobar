@@ -111,6 +111,13 @@
             <button onclick="sendAction('volume.reset')">↩️ Reset Volume</button>
         </div>
         
+        <div id="serverMessages" style="background: #fff3cd; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #ffc107;">
+            <h3 style="margin: 0 0 10px 0;">📡 Server Messages</h3>
+            <div id="serverMessageList" style="font-size: 14px; max-height: 150px; overflow-y: auto;">
+                <em style="color: #666;">Waiting for messages from server...</em>
+            </div>
+        </div>
+        
         <div id="nowPlaying" style="display: none; background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 5px;">
             <h3 style="margin: 0 0 10px 0;">Now Playing</h3>
             <div id="songInfo" style="font-size: 16px; margin-bottom: 10px;">
@@ -233,7 +240,37 @@
             document.getElementById('output').innerHTML = '';
         }
         
+        function logServerMessage(eventName, data) {
+            const list = document.getElementById('serverMessageList');
+            const div = document.createElement('div');
+            div.style.padding = '5px 0';
+            div.style.borderBottom = '1px solid #eee';
+            
+            const time = new Date().toLocaleTimeString();
+            const emoji = {
+                'start': '▶️',
+                'stop': '⏹️',
+                'progress': '⏱️',
+                'process': '📊',
+                'stations': '📻',
+                'volume': '🔊'
+            }[eventName] || '📨';
+            
+            // Handle undefined data (e.g., stop event has no payload)
+            const dataStr = data ? JSON.stringify(data).substring(0, 100) : '(no data)';
+            div.innerHTML = '<strong>' + time + '</strong> ' + emoji + ' <code>' + eventName + '</code>: ' + dataStr;
+            
+            list.insertBefore(div, list.firstChild);
+            
+            // Keep only last 10 messages
+            while (list.children.length > 10) {
+                list.removeChild(list.lastChild);
+            }
+        }
+        
         function handleSocketEvent(eventName, data) {
+            logServerMessage(eventName, data);
+            
             const nowPlaying = document.getElementById('nowPlaying');
             
             if (eventName === 'start') {

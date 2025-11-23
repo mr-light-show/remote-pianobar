@@ -82,6 +82,15 @@ typedef struct {
 
 #include "ui_types.h"
 
+#ifdef WEBSOCKET_ENABLED
+/* UI mode selection */
+typedef enum {
+	BAR_UI_MODE_BOTH = 0,  /* CLI + Web (default) */
+	BAR_UI_MODE_CLI = 1,   /* CLI only, no WebSocket */
+	BAR_UI_MODE_WEB = 2,   /* Web only (daemon), no CLI */
+} BarUiMode_t;
+#endif
+
 typedef struct {
 	bool autoselect;
 	unsigned int history, maxRetry, timeout, bufferSecs;
@@ -110,7 +119,7 @@ typedef struct {
 	
 	/* WebSocket support (conditional compilation) */
 	#ifdef WEBSOCKET_ENABLED
-	bool websocketEnabled;
+	BarUiMode_t uiMode;
 	int websocketPort;
 	char *websocketHost;
 	bool webuiEnabled;

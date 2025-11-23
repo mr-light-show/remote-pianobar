@@ -58,6 +58,7 @@ THE SOFTWARE.
 
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
+#include "websocket/protocol/socketio.h"
 #endif
 #include "ui_readline.h"
 
@@ -272,12 +273,12 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 				app->curStation, curSong, &app->player, app->ph.stations,
 				PIANO_RET_OK, CURLE_OK);
 
-		#ifdef WEBSOCKET_ENABLED
-		/* Broadcast to WebSocket clients */
-		if (app->settings.websocketEnabled) {
-			BarWebsocketBroadcastSongStart(app);
-		}
-		#endif
+	#ifdef WEBSOCKET_ENABLED
+	/* Broadcast to WebSocket clients */
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
+		BarWebsocketBroadcastSongStart(app);
+	}
+	#endif
 
 		/* prevent race condition, mode must _not_ be DEAD if
 		 * thread has been started */
@@ -299,7 +300,7 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 
 	#ifdef WEBSOCKET_ENABLED
 	/* Broadcast to WebSocket clients */
-	if (app->settings.websocketEnabled) {
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
 		BarWebsocketBroadcastSongStop(app);
 	}
 	#endif
@@ -417,9 +418,42 @@ static void BarMainLoop (BarApp_t *app) {
 		BarMainHandleUserInput (app);
 
 		#ifdef WEBSOCKET_ENABLED
-		/* Service WebSocket connections */
-		if (app->settings.websocketEnabled) {
-			BarWebsocketService(app, 0); /* Non-blocking - returns immediately */
+		/* Process WebSocket commands from web clients (queued by WS thread) */
+		if (app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
+			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+			BarWsMessage_t *msg;
+			
+			/* Process all queued commands from WebSocket clients */
+			while ((msg = BarWsQueuePop(&ctx->commandQueue, 0)) != NULL) {
+				if (msg->type == MSG_TYPE_COMMAND_ACTION && msg->data) {
+				/* msg->data contains single-letter command (e.g., "n", "+", "q") 
+				 * or multi-character command with parameter (e.g., "%75" for volume.set) */
+				const char *command = (const char *)msg->data;
+				
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Processing command '%s'\n", command);
+				
+				/* Handle multi-character commands with parameters */
+				if (command[0] == '%' && strlen(command) > 1) {
+					/* Volume set command: "%75" */
+					int volume = atoi(&command[1]);
+					/* Clamp to valid range */
+					if (volume < 0) volume = 0;
+					if (volume > 100) volume = 100;
+					
+					app->settings.volume = volume;
+					BarPlayerSetVolume(&app->player);
+					
+					/* Broadcast to all clients */
+					BarSocketIoEmitVolume(app, volume);
+					debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %d%%\n", volume);
+				} else {
+					/* Dispatch single-letter command through pianobar's UI system */
+					BarUiDispatch(app, command[0], app->curStation, app->playlist,
+					             false, BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
+				}
+				}
+				BarWsMessageFree(msg);
+			}
 			
 			/* Broadcast progress updates while playing */
 			if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
@@ -533,7 +567,7 @@ int main (int argc, char **argv) {
 
 	#ifdef WEBSOCKET_ENABLED
 	/* Initialize WebSocket server if enabled */
-	if (app.settings.websocketEnabled) {
+	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
 		if (!BarWebsocketInit(&app)) {
 			BarUiMsg (&app.settings, MSG_ERR, "Failed to start WebSocket server\n");
 		}
@@ -558,7 +592,7 @@ int main (int argc, char **argv) {
 	
 	#ifdef WEBSOCKET_ENABLED
 	/* Cleanup WebSocket server */
-	if (app.settings.websocketEnabled) {
+	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
 		BarWebsocketDestroy(&app);
 	}
 	#endif

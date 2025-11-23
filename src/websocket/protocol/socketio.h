@@ -1,6 +1,5 @@
 /*
 Copyright (c) 2025
-    Kyle Hawes <khawes@netflix.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -72,7 +71,7 @@ void BarSocketIoEmitStations(BarApp_t *app);
 void BarSocketIoEmitProcess(BarApp_t *app);
 
 /* Handle 'action' event from client */
-void BarSocketIoHandleAction(BarApp_t *app, const char *action);
+void BarSocketIoHandleAction(BarApp_t *app, const char *action, struct json_object *data);
 
 /* Handle 'changeStation' event from client */
 void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationName);

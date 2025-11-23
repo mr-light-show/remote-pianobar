@@ -19,6 +19,18 @@ export default defineConfig({
         ws: true
       }
     }
+  },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './test/setup.ts',
+    include: ['test/unit/**/*.test.ts'],
+    exclude: ['test/e2e/**/*'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      exclude: ['node_modules/', 'test/', 'dist/']
+    }
   }
 });
 
