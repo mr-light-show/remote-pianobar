@@ -22,6 +22,10 @@ THE SOFTWARE.
 
 #include <stdlib.h>
 #include <check.h>
+#include <signal.h>
+
+/* Global interrupted variable stub for tests */
+sig_atomic_t *interrupted = NULL;
 
 /* Test suite declarations */
 Suite *websocket_suite(void);

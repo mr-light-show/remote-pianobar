@@ -155,14 +155,14 @@ START_TEST(test_socketio_translate_playback_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test playback.next */
-	BarSocketIoHandleAction(&app, "playback.next");
+	BarSocketIoHandleAction(&app, "playback.next", NULL);
 	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, "n");
 	BarWsMessageFree(msg);
 	
 	/* Test playback.toggle */
-	BarSocketIoHandleAction(&app, "playback.toggle");
+	BarSocketIoHandleAction(&app, "playback.toggle", NULL);
 	msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, "p");
@@ -186,21 +186,21 @@ START_TEST(test_socketio_translate_song_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test song.love */
-	BarSocketIoHandleAction(&app, "song.love");
+	BarSocketIoHandleAction(&app, "song.love", NULL);
 	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, "+");
 	BarWsMessageFree(msg);
 	
 	/* Test song.ban */
-	BarSocketIoHandleAction(&app, "song.ban");
+	BarSocketIoHandleAction(&app, "song.ban", NULL);
 	msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, "-");
 	BarWsMessageFree(msg);
 	
 	/* Test song.tired */
-	BarSocketIoHandleAction(&app, "song.tired");
+	BarSocketIoHandleAction(&app, "song.tired", NULL);
 	msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, "t");
@@ -224,14 +224,14 @@ START_TEST(test_socketio_translate_volume_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test volume.up */
-	BarSocketIoHandleAction(&app, "volume.up");
+	BarSocketIoHandleAction(&app, "volume.up", NULL);
 	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, ")");
 	BarWsMessageFree(msg);
 	
 	/* Test volume.down */
-	BarSocketIoHandleAction(&app, "volume.down");
+	BarSocketIoHandleAction(&app, "volume.down", NULL);
 	msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_nonnull(msg);
 	ck_assert_str_eq((char *)msg->data, "(");
@@ -255,7 +255,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 	app.wsContext = &ctx;
 	
 	/* Test invalid command - should not queue anything */
-	BarSocketIoHandleAction(&app, "invalid.command");
+	BarSocketIoHandleAction(&app, "invalid.command", NULL);
 	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_null(msg);
 	
@@ -277,7 +277,7 @@ START_TEST(test_socketio_reject_single_letter) {
 	app.wsContext = &ctx;
 	
 	/* Test single-letter command - should not be accepted */
-	BarSocketIoHandleAction(&app, "n");
+	BarSocketIoHandleAction(&app, "n", NULL);
 	BarWsMessage_t *msg = BarWsQueuePop(&ctx.commandQueue, 0);
 	ck_assert_ptr_null(msg);
 	
@@ -288,15 +288,78 @@ END_TEST
 /* Test: Handle query event */
 START_TEST(test_socketio_handle_query) {
 	BarApp_t app;
+	BarSettings_t settings;
+	PianoStation_t station;
+	
 	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	memset(&station, 0, sizeof(station));
+	
+	/* Setup minimal station */
+	station.name = "Test Station";
+	station.id = "S123456";
+	station.head.next = NULL;
+	
+	/* Setup app with station and settings */
+	app.ph.stations = &station;
+	app.settings = settings;
+	app.settings.sortOrder = 0;  /* BAR_SORT_NAME_AZ */
 	
 	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
 	
 	/* Query should emit 'process' and 'stations' events */
 	BarSocketIoHandleQuery(&app);
 	
 	/* At least one message should be broadcast */
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "process") != NULL ||
+	          strstr(lastBroadcastMessage, "stations") != NULL);
+	
+	clearBroadcastMock();
+}
+END_TEST
+
+/* Test: Rating commands emit state update */
+START_TEST(test_socketio_rating_emits_state) {
+	BarApp_t app;
+	BarSettings_t settings;
+	PianoSong_t song;
+	PianoStation_t station;
+	
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	memset(&song, 0, sizeof(song));
+	memset(&station, 0, sizeof(station));
+	
+	/* Setup minimal song and station */
+	song.artist = "Test Artist";
+	song.title = "Test Song";
+	song.album = "Test Album";
+	song.coverArt = "http://example.com/art.jpg";
+	song.trackToken = "test_token";
+	song.rating = PIANO_RATE_NONE;
+	song.length = 180;
+	
+	station.name = "Test Station";
+	station.id = "S123456";
+	
+	app.playlist = &song;
+	app.curStation = &station;
+	app.settings = settings;
+	
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
+	
+	/* Simulate love command - should emit start event */
+	song.rating = PIANO_RATE_LOVE;  /* Simulate what BarUiDispatch does */
+	BarSocketIoEmitStart(&app);
+	
+	/* Verify "start" event was emitted with rating */
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "start") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "rating") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "1") != NULL);  /* PIANO_RATE_LOVE = 1 */
 	
 	clearBroadcastMock();
 }
@@ -331,6 +394,7 @@ Suite *socketio_suite(void) {
 	/* Event handler tests */
 	tc_handle = tcase_create("Event Handlers");
 	tcase_add_test(tc_handle, test_socketio_handle_query);
+	tcase_add_test(tc_handle, test_socketio_rating_emits_state);
 	suite_add_tcase(s, tc_handle);
 	
 	return s;

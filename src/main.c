@@ -448,6 +448,14 @@ static void BarMainLoop (BarApp_t *app) {
 					/* Dispatch single-letter command through pianobar's UI system */
 					BarUiDispatch(app, command[0], app->curStation, app->playlist,
 					             false, BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
+					
+					/* Emit updated state for commands that change song state */
+					if (command[0] == '+' || command[0] == '-') {
+						/* Love or ban - emit updated song info with new rating */
+						if (app->playlist) {
+							BarSocketIoEmitStart(app);
+						}
+					}
 				}
 				}
 				BarWsMessageFree(msg);
