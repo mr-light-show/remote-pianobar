@@ -14,6 +14,8 @@ import './components/create-station-modal';
 import './components/play-station-modal';
 import './components/select-station-modal';
 import './components/genre-modal';
+import './components/song-actions-menu';
+import './components/info-menu';
 
 @customElement('pianobar-app')
 export class PianobarApp extends LitElement {
@@ -54,6 +56,33 @@ export class PianobarApp extends LitElement {
       padding-bottom: 80px; /* Space for bottom toolbar */
     }
     
+    .menu-container {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: 150;
+    }
+    
+    .menu-button {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: none;
+      background: var(--surface-variant);
+      color: var(--on-surface);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+    
+    .menu-button:hover {
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+    }
+    
     .song-info {
       text-align: center;
       padding: 1rem 2rem;
@@ -73,10 +102,68 @@ export class PianobarApp extends LitElement {
       font-style: italic;
     }
     
-    .station-info {
-      color: var(--on-surface-variant);
-      font-size: 0.875rem;
-      margin: 0.5rem 0 0 0;
+    .controls-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+    
+    .rating-container {
+      position: relative;
+      display: flex;
+    }
+    
+    .rating-button {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: none;
+      background: var(--surface-variant);
+      color: var(--on-surface);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    
+    .rating-button:hover {
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+    }
+    
+    .rating-button.loved {
+      color: #4CAF50;
+    }
+    
+    .rating-button.loved:hover {
+      background: rgba(76, 175, 80, 0.1);
+      color: #4CAF50;
+    }
+    
+    .material-icons,
+    .material-icons-outlined {
+      font-family: 'Material Icons';
+      font-weight: normal;
+      font-style: normal;
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: normal;
+      text-transform: none;
+      display: inline-block;
+      white-space: nowrap;
+      word-wrap: normal;
+      direction: ltr;
+      -webkit-font-feature-settings: 'liga';
+      -moz-font-feature-settings: 'liga';
+      font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+    }
+    
+    .material-icons-outlined {
+      font-family: 'Material Icons Outlined';
     }
   `;
   
@@ -268,6 +355,20 @@ export class PianobarApp extends LitElement {
     this.socket.reconnect();
   }
   
+  toggleMenu() {
+    const menu = this.shadowRoot?.querySelector('info-menu');
+    if (menu) {
+      (menu as any).toggleMenu();
+    }
+  }
+  
+  toggleRatingMenu() {
+    const menu = this.shadowRoot?.querySelector('song-actions-menu');
+    if (menu) {
+      (menu as any).toggleMenu();
+    }
+  }
+  
   handleInfoExplain() {
     this.socket.emit('action', 'song.explain');
   }
@@ -417,6 +518,22 @@ export class PianobarApp extends LitElement {
   
   render() {
     return html`
+      ${this.connected ? html`
+        <div class="menu-container">
+          <button class="menu-button" @click=${this.toggleMenu} title="Menu">
+            <span class="material-icons">menu</span>
+          </button>
+          <info-menu
+            @info-explain=${this.handleInfoExplain}
+            @info-upcoming=${this.handleInfoUpcoming}
+            @info-quickmix=${this.handleInfoQuickMix}
+            @info-create-station=${this.handleInfoCreateStation}
+            @info-add-genre=${this.handleInfoAddGenre}
+            @info-delete-station=${this.handleInfoDeleteStation}
+          ></info-menu>
+        </div>
+      ` : ''}
+      
       <album-art 
         src="${this.connected ? this.albumArt : ''}"
       ></album-art>
@@ -424,9 +541,6 @@ export class PianobarApp extends LitElement {
       <div class="song-info">
         <h1>${this.connected ? this.songTitle : 'Disconnected'}</h1>
         <p class="artist">${this.connected ? this.artistName : '—'}</p>
-        ${this.songStationName ? html`
-          <p class="station-info">Station: ${this.songStationName}</p>
-        ` : ''}
       </div>
       
       <progress-bar 
@@ -441,16 +555,37 @@ export class PianobarApp extends LitElement {
           @volume-change=${this.handleVolumeChange}
         ></volume-control>
         
-        <playback-controls 
-          ?playing="${this.playing}"
-          @play=${this.handlePlayPause}
-          @next=${this.handleNext}
-        ></playback-controls>
+        <div class="controls-container">
+          <div class="rating-container">
+            <button 
+              class="rating-button ${this.rating === 1 ? 'loved' : ''}"
+              @click=${this.toggleRatingMenu}
+              title="${this.rating === 1 ? 'Loved' : 'Rate this song'}"
+            >
+              <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
+                ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
+              </span>
+            </button>
+            <song-actions-menu
+              rating="${this.rating}"
+              @love=${this.handleLove}
+              @ban=${this.handleBan}
+              @tired=${this.handleTired}
+            ></song-actions-menu>
+          </div>
+          
+          <playback-controls 
+            ?playing="${this.playing}"
+            @play=${this.handlePlayPause}
+            @next=${this.handleNext}
+          ></playback-controls>
+        </div>
         
         <bottom-toolbar
           .stations="${this.stations}"
           currentStation="${this.currentStation}"
           currentStationId="${this.currentStationId}"
+          songStationName="${this.songStationName}"
           rating="${this.rating}"
           @love=${this.handleLove}
           @ban=${this.handleBan}

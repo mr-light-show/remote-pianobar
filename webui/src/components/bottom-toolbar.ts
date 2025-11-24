@@ -1,8 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import './song-actions-menu';
 import './stations-popup';
-import './info-menu';
 
 interface Station {
   id: string;
@@ -15,6 +13,7 @@ export class BottomToolbar extends LitElement {
   @property() currentStation = '';
   @property() currentStationId = '';
   @property({ type: Number }) rating = 0;
+  @property() songStationName = '';
   
   static styles = css`
     :host {
@@ -93,76 +92,12 @@ export class BottomToolbar extends LitElement {
     }
   `;
   
-  toggleTools(e: MouseEvent) {
-    // Close stations menu first
-    const stationsPopup = this.shadowRoot!.querySelector('stations-popup');
-    if (stationsPopup) {
-      (stationsPopup as any).closeMenu();
-    }
-    
-    // Close info menu
-    const infoMenu = this.shadowRoot!.querySelector('info-menu');
-    if (infoMenu) {
-      (infoMenu as any).closeMenu();
-    }
-    
-    // Then toggle tools menu
-    const menu = this.shadowRoot!.querySelector('song-actions-menu');
-    if (menu) {
-      (menu as any).toggleMenu(e);
-    }
-  }
-  
   toggleStations(e: MouseEvent) {
-    // Close tools menu first
-    const toolsMenu = this.shadowRoot!.querySelector('song-actions-menu');
-    if (toolsMenu) {
-      (toolsMenu as any).closeMenu();
-    }
-    
-    // Close info menu
-    const infoMenu = this.shadowRoot!.querySelector('info-menu');
-    if (infoMenu) {
-      (infoMenu as any).closeMenu();
-    }
-    
-    // Then toggle stations menu
+    // Toggle stations menu
     const popup = this.shadowRoot!.querySelector('stations-popup');
     if (popup) {
       (popup as any).toggleMenu(e);
     }
-  }
-  
-  toggleInfo(e: MouseEvent) {
-    // Close tools menu first
-    const toolsMenu = this.shadowRoot!.querySelector('song-actions-menu');
-    if (toolsMenu) {
-      (toolsMenu as any).closeMenu();
-    }
-    
-    // Close stations menu
-    const stationsPopup = this.shadowRoot!.querySelector('stations-popup');
-    if (stationsPopup) {
-      (stationsPopup as any).closeMenu();
-    }
-    
-    // Then toggle info menu
-    const menu = this.shadowRoot!.querySelector('info-menu');
-    if (menu) {
-      (menu as any).toggleMenu(e);
-    }
-  }
-  
-  handleLove() {
-    this.dispatchEvent(new CustomEvent('love'));
-  }
-  
-  handleBan() {
-    this.dispatchEvent(new CustomEvent('ban'));
-  }
-  
-  handleTired() {
-    this.dispatchEvent(new CustomEvent('tired'));
   }
   
   handleStationChange(e: CustomEvent) {
@@ -171,68 +106,26 @@ export class BottomToolbar extends LitElement {
     }));
   }
   
-  handleInfoExplain() {
-    this.dispatchEvent(new CustomEvent('info-explain'));
-  }
-  
-  handleInfoUpcoming() {
-    this.dispatchEvent(new CustomEvent('info-upcoming'));
-  }
-  
-  handleInfoQuickMix() {
-    this.dispatchEvent(new CustomEvent('info-quickmix'));
-  }
-  
-  handleInfoCreateStation() {
-    this.dispatchEvent(new CustomEvent('info-create-station'));
-  }
-  
-  handleInfoDeleteStation() {
-    this.dispatchEvent(new CustomEvent('info-delete-station'));
-  }
-  
-  handleInfoAddGenre() {
-    this.dispatchEvent(new CustomEvent('info-add-genre'));
-  }
-  
   render() {
+    // Find current station object to check if it's QuickMix
+    const currentStationObj = this.stations.find(s => s.id === this.currentStationId);
+    const isQuickMix = currentStationObj?.isQuickMix || false;
+    
+    // Determine what to display on the button
+    let stationDisplayName = this.currentStation || 'Select Station';
+    let stationIcon = 'radio';
+    
+    if (isQuickMix && this.songStationName) {
+      // If it's QuickMix, show shuffle icon and the song's station name
+      stationIcon = 'shuffle';
+      stationDisplayName = this.songStationName;
+    }
+    
     return html`
       <div class="button-group">
-        <button 
-          @click=${this.toggleTools}
-          class="${this.rating === 1 ? 'loved' : ''}"
-          title="${this.rating === 1 ? 'Loved' : 'Rate this song'}"
-        >
-          <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
-            ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
-          </span>
-        </button>
-        <song-actions-menu
-          rating="${this.rating}"
-          @love=${this.handleLove}
-          @ban=${this.handleBan}
-          @tired=${this.handleTired}
-        ></song-actions-menu>
-      </div>
-      
-      <div class="button-group">
-        <button @click=${this.toggleInfo} title="Song info">
-          <span class="material-icons">info_outline</span>
-        </button>
-        <info-menu
-          @info-explain=${this.handleInfoExplain}
-          @info-upcoming=${this.handleInfoUpcoming}
-          @info-quickmix=${this.handleInfoQuickMix}
-          @info-create-station=${this.handleInfoCreateStation}
-          @info-add-genre=${this.handleInfoAddGenre}
-          @info-delete-station=${this.handleInfoDeleteStation}
-        ></info-menu>
-      </div>
-      
-      <div class="button-group">
-        <button @click=${this.toggleStations}>
-          <span class="material-icons">radio</span>
-          <span>Stations</span>
+        <button @click=${this.toggleStations} title="Select Station">
+          <span class="material-icons">${stationIcon}</span>
+          <span>${stationDisplayName}</span>
         </button>
         <stations-popup
           .stations="${this.stations}"

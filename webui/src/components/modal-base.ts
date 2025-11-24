@@ -75,9 +75,8 @@ export class ModalBase extends LitElement {
       right: 0;
       bottom: 0;
       z-index: 2000;
-      align-items: flex-end;
+      align-items: center;
       justify-content: center;
-      padding-bottom: 80px;
     }
     
     :host([open]) {

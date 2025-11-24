@@ -10,7 +10,6 @@ export class PlaybackControls extends LitElement {
       display: flex;
       justify-content: center;
       gap: 1rem;
-      margin: 2rem 0;
     }
     
     button {

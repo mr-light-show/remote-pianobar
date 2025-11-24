@@ -26,15 +26,15 @@ export class InfoMenu extends LitElement {
   
   static styles = css`
     :host {
-      position: relative;
-      display: inline-block;
+      position: absolute;
+      top: 0;
+      right: 0;
     }
     
     .menu-popup {
       position: absolute;
-      bottom: 64px;
-      left: 50%;
-      transform: translateX(-50%);
+      top: 56px;
+      right: 0;
       background: var(--surface);
       border-radius: 12px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
