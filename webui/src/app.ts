@@ -13,6 +13,7 @@ import './components/quickmix-modal';
 import './components/create-station-modal';
 import './components/play-station-modal';
 import './components/select-station-modal';
+import './components/genre-modal';
 
 @customElement('pianobar-app')
 export class PianobarApp extends LitElement {
@@ -35,11 +36,14 @@ export class PianobarApp extends LitElement {
   @state() private quickMixModalOpen = false;
   @state() private createStationModalOpen = false;
   @state() private currentTrackToken = '';
-  @state() private creatingStationFrom: 'song' | 'artist' | null = null;
+  @state() private creatingStationFrom: 'song' | 'artist' | 'genre' | null = null;
   @state() private newStationId: string | null = null;
   @state() private playNewStationModalOpen = false;
   @state() private newStationName = '';
   @state() private selectStationModalOpen = false;
+  @state() private genreModalOpen = false;
+  @state() private genreCategories: any[] = [];
+  @state() private genreLoading = false;
   
   static styles = css`
     :host {
@@ -66,6 +70,7 @@ export class PianobarApp extends LitElement {
     .artist {
       color: var(--on-surface-variant);
       margin: 0;
+      font-style: italic;
     }
     
     .station-info {
@@ -150,6 +155,11 @@ export class PianobarApp extends LitElement {
           this.creatingStationFrom = null;
         }
       }
+    });
+    
+    this.socket.on('genres', (data) => {
+      this.genreCategories = data.categories || [];
+      this.genreLoading = false;
     });
     
     this.socket.on('process', (data) => {
@@ -337,6 +347,27 @@ export class PianobarApp extends LitElement {
     this.selectStationModalOpen = false;
   }
   
+  handleInfoAddGenre() {
+    this.genreModalOpen = true;
+    this.genreLoading = true;
+    this.socket.emit('station.getGenres');
+  }
+  
+  handleGenreCreate(e: CustomEvent) {
+    const { musicId } = e.detail;
+    this.socket.emit('station.addGenre', { musicId });
+    this.creatingStationFrom = 'genre';
+    this.genreModalOpen = false;
+    this.genreCategories = [];
+    this.genreLoading = false;
+  }
+  
+  handleGenreCancel() {
+    this.genreModalOpen = false;
+    this.genreCategories = [];
+    this.genreLoading = false;
+  }
+  
   showToast(message: string) {
     const toast = document.createElement('toast-notification') as any;
     toast.message = message;
@@ -365,7 +396,7 @@ export class PianobarApp extends LitElement {
                 <p class="song-title">${song.title}</p>
                 <p class="song-artist">${song.artist}</p>
                 ${song.stationName ? html`
-                  <p class="song-station">From: ${song.stationName}</p>
+                  <p class="song-station">Station: ${song.stationName}</p>
                 ` : ''}
               </div>
               ${song.rating === 1 ? html`
@@ -394,7 +425,7 @@ export class PianobarApp extends LitElement {
         <h1>${this.connected ? this.songTitle : 'Disconnected'}</h1>
         <p class="artist">${this.connected ? this.artistName : '—'}</p>
         ${this.songStationName ? html`
-          <p class="station-info">From: ${this.songStationName}</p>
+          <p class="station-info">Station: ${this.songStationName}</p>
         ` : ''}
       </div>
       
@@ -429,6 +460,7 @@ export class PianobarApp extends LitElement {
           @info-upcoming=${this.handleInfoUpcoming}
           @info-quickmix=${this.handleInfoQuickMix}
           @info-create-station=${this.handleInfoCreateStation}
+          @info-add-genre=${this.handleInfoAddGenre}
           @info-delete-station=${this.handleInfoDeleteStation}
         ></bottom-toolbar>
         
@@ -462,6 +494,14 @@ export class PianobarApp extends LitElement {
           @station-select=${this.handleStationSelectedForDelete}
           @cancel=${this.handleCancelSelectStation}
         ></select-station-modal>
+        
+        <genre-modal
+          ?open="${this.genreModalOpen}"
+          ?loading="${this.genreLoading}"
+          .categories="${this.genreCategories}"
+          @create=${this.handleGenreCreate}
+          @cancel=${this.handleGenreCancel}
+        ></genre-modal>
       ` : html`
         <reconnect-button 
           @reconnect=${this.handleReconnect}

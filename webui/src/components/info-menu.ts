@@ -96,11 +96,12 @@ export class InfoMenu extends LitElement {
     }
   `;
   
-  toggleMenu(e?: MouseEvent) {
-    if (e) {
-      e.stopPropagation(); // Prevent immediate close from document click
-    }
-    this.menuOpen = !this.menuOpen;
+  toggleMenu() {
+    // Delay toggle to ensure it happens after current click event completes
+    // This prevents the document click listener from immediately closing the menu
+    setTimeout(() => {
+      this.menuOpen = !this.menuOpen;
+    }, 0);
   }
   
   closeMenu() {
@@ -132,6 +133,11 @@ export class InfoMenu extends LitElement {
     this.closeMenu();
   }
   
+  handleAddGenre() {
+    this.dispatchEvent(new CustomEvent('info-add-genre'));
+    this.closeMenu();
+  }
+  
   render() {
     return html`
       <div class="menu-popup ${this.menuOpen ? '' : 'hidden'}">
@@ -150,6 +156,10 @@ export class InfoMenu extends LitElement {
         <button class="action-button" @click=${this.handleCreateStation}>
           <span class="material-icons">add_circle</span>
           <span>Create station from song/artist</span>
+        </button>
+        <button class="action-button" @click=${this.handleAddGenre}>
+          <span class="material-icons">library_music</span>
+          <span>Add genre station</span>
         </button>
         <button class="action-button delete" @click=${this.handleDeleteStation}>
           <span class="material-icons">delete</span>

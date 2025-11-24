@@ -191,6 +191,10 @@ export class BottomToolbar extends LitElement {
     this.dispatchEvent(new CustomEvent('info-delete-station'));
   }
   
+  handleInfoAddGenre() {
+    this.dispatchEvent(new CustomEvent('info-add-genre'));
+  }
+  
   render() {
     return html`
       <div class="button-group">
@@ -220,6 +224,7 @@ export class BottomToolbar extends LitElement {
           @info-upcoming=${this.handleInfoUpcoming}
           @info-quickmix=${this.handleInfoQuickMix}
           @info-create-station=${this.handleInfoCreateStation}
+          @info-add-genre=${this.handleInfoAddGenre}
           @info-delete-station=${this.handleInfoDeleteStation}
         ></info-menu>
       </div>

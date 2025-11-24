@@ -94,5 +94,12 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, struct json_object *data)
 /* Handle 'query' event from client */
 void BarSocketIoHandleQuery(BarApp_t *app);
 
+/* Fetch genres and emit to client */
+void BarSocketIoHandleGetGenres(BarApp_t *app);
+void BarSocketIoEmitGenres(BarApp_t *app);
+
+/* Handle 'station.addGenre' with musicId */
+void BarSocketIoHandleAddGenre(BarApp_t *app, struct json_object *data);
+
 #endif /* _SOCKETIO_H */
 

@@ -241,6 +241,12 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	} else if (strcmp(eventName, "station.createFrom") == 0) {
 		/* Create station from current song or artist */
 		BarSocketIoHandleCreateStationFrom(app, data);
+	} else if (strcmp(eventName, "station.getGenres") == 0) {
+		/* Get genre categories and stations */
+		BarSocketIoHandleGetGenres(app);
+	} else if (strcmp(eventName, "station.addGenre") == 0) {
+		/* Add genre station */
+		BarSocketIoHandleAddGenre(app, data);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
 	}
@@ -562,6 +568,123 @@ void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs
 	
 	BarSocketIoEmit("query.upcoming.result", songs);
 	json_object_put(songs);
+}
+
+/* Emit 'genres' event (genre categories and stations) */
+void BarSocketIoEmitGenres(BarApp_t *app) {
+	json_object *data, *categories, *categoryObj, *genresArray, *genreObj;
+	PianoGenreCategory_t *category;
+	PianoGenre_t *genre;
+	
+	if (!app) {
+		return;
+	}
+	
+	data = json_object_new_object();
+	categories = json_object_new_array();
+	
+	/* Iterate through genre categories */
+	category = app->ph.genreStations;
+	while (category != NULL) {
+		categoryObj = json_object_new_object();
+		
+		json_object_object_add(categoryObj, "name",
+		                       json_object_new_string(category->name ? category->name : ""));
+		
+		/* Create genres array for this category */
+		genresArray = json_object_new_array();
+		genre = category->genres;
+		
+		while (genre != NULL) {
+			genreObj = json_object_new_object();
+			
+			json_object_object_add(genreObj, "name",
+			                       json_object_new_string(genre->name ? genre->name : ""));
+			json_object_object_add(genreObj, "musicId",
+			                       json_object_new_string(genre->musicId ? genre->musicId : ""));
+			
+			json_object_array_add(genresArray, genreObj);
+			
+			genre = (PianoGenre_t *)genre->head.next;
+		}
+		
+		json_object_object_add(categoryObj, "genres", genresArray);
+		json_object_array_add(categories, categoryObj);
+		
+		category = (PianoGenreCategory_t *)category->head.next;
+	}
+	
+	json_object_object_add(data, "categories", categories);
+	
+	BarSocketIoEmit("genres", data);
+	json_object_put(data);
+}
+
+/* Handle 'station.getGenres' event from client */
+void BarSocketIoHandleGetGenres(BarApp_t *app) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	
+	if (!app) {
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Get genres request\n");
+	
+	/* Fetch genre stations if not already cached */
+	if (app->ph.genreStations == NULL) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Fetching genre stations from API\n");
+		if (!BarUiPianoCall(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL, &pRet, &wRet)) {
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to fetch genre stations\n");
+			return;
+		}
+	}
+	
+	/* Emit genres to client */
+	BarSocketIoEmitGenres(app);
+}
+
+/* Handle 'station.addGenre' event from client */
+void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataCreateStation_t reqData;
+	json_object *musicIdObj;
+	const char *musicId;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addGenre - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract musicId from data */
+	if (!json_object_object_get_ex(data, "musicId", &musicIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addGenre - missing musicId\n");
+		return;
+	}
+	
+	musicId = json_object_get_string(musicIdObj);
+	
+	if (!musicId) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addGenre - invalid musicId\n");
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Creating genre station with musicId: %s\n", musicId);
+	
+	/* Set up request data */
+	reqData.token = (char *)musicId;
+	reqData.type = PIANO_MUSICTYPE_INVALID;
+	
+	/* Create the station */
+	if (BarUiPianoCall(app, PIANO_REQUEST_CREATE_STATION, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Genre station created successfully\n");
+		
+		/* Emit updated station list to all clients */
+		BarSocketIoEmitStations(app);
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to create genre station\n");
+	}
 }
 
 /* Helper: Find station by name or ID */

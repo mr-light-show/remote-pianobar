@@ -19,11 +19,11 @@ export class ToastNotification extends LitElement {
       this.visible = true;
     }, 10);
     
-    // Enable click-to-dismiss after 1 second to prevent modal close click from dismissing
+    // Enable click-to-dismiss after 250ms to prevent modal close click from dismissing
     setTimeout(() => {
       this.clickDismissEnabled = true;
       document.addEventListener('click', this.handleClickOutside);
-    }, 1000);
+    }, 250);
     
     // Auto-dismiss after duration
     if (this.duration > 0) {

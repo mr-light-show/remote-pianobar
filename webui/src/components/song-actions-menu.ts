@@ -109,11 +109,12 @@ export class SongActionsMenu extends LitElement {
     }
   `;
   
-  toggleMenu(e?: MouseEvent) {
-    if (e) {
-      e.stopPropagation(); // Prevent immediate close from document click
-    }
-    this.menuOpen = !this.menuOpen;
+  toggleMenu() {
+    // Delay toggle to ensure it happens after current click event completes
+    // This prevents the document click listener from immediately closing the menu
+    setTimeout(() => {
+      this.menuOpen = !this.menuOpen;
+    }, 0);
   }
   
   closeMenu() {
