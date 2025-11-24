@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include "../../main.h"
 #include "../../debug.h"
+#include "../../ui.h"
 #include "socketio.h"
 #include "../core/websocket.h"
 
@@ -379,16 +380,26 @@ void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
 /* Emit 'stations' event (station list) */
 void BarSocketIoEmitStations(BarApp_t *app) {
 	json_object *stations, *station;
-	PianoStation_t *curStation;
+	PianoStation_t **sortedStations;
+	size_t stationCount;
 	
 	if (!app) {
 		return;
 	}
 	
+	/* Sort stations using configured sort order */
+	sortedStations = BarSortedStations(app->ph.stations, &stationCount,
+	                                   app->settings.sortOrder);
+	if (!sortedStations) {
+		return;
+	}
+	
 	stations = json_object_new_array();
 	
-	curStation = app->ph.stations;
-	while (curStation != NULL) {
+	/* Emit stations in sorted order */
+	for (size_t i = 0; i < stationCount; i++) {
+		PianoStation_t *curStation = sortedStations[i];
+		
 		station = json_object_new_object();
 		json_object_object_add(station, "id", 
 		                       json_object_new_string(curStation->id));
@@ -400,8 +411,9 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 		                       json_object_new_boolean(curStation->useQuickMix));
 		
 		json_object_array_add(stations, station);
-		curStation = (PianoStation_t *) curStation->head.next;
 	}
+	
+	free(sortedStations);
 	
 	BarSocketIoEmit("stations", stations);
 	json_object_put(stations);

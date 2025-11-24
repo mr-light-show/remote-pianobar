@@ -113,15 +113,8 @@ export class PianobarApp extends LitElement {
     // });
     
     this.socket.on('stations', (data) => {
-      // Data is the array itself, not data.stations
-      // Sort: QuickMix first, then alphabetically by name
-      this.stations = (Array.isArray(data) ? data : []).sort((a, b) => {
-        // QuickMix always first
-        if (a.isQuickMix) return -1;
-        if (b.isQuickMix) return 1;
-        // Then alphabetically
-        return a.name.localeCompare(b.name);
-      });
+      // Backend sends stations pre-sorted according to user's sort setting
+      this.stations = Array.isArray(data) ? data : [];
     });
     
     this.socket.on('process', (data) => {

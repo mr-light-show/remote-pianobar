@@ -391,6 +391,12 @@ bool BarWebsocketInit(BarApp_t *app) {
 	
 	/* Initialize libwebsockets */
 	memset(&info, 0, sizeof(info));
+	
+#ifndef HAVE_DEBUGLOG
+	/* Suppress libwebsockets startup messages - only show errors and warnings */
+	lws_set_log_level(LLL_ERR | LLL_WARN, NULL);
+#endif
+	
 	info.port = app->settings.websocketPort;
 	info.protocols = protocols;
 	info.user = app;

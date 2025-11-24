@@ -422,7 +422,7 @@ static int BarStationCmpQuickmix10NameZA (const void *a, const void *b) {
  *	@param stations
  *	@return NULL-terminated array with sorted stations
  */
-static PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
+PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
 		size_t *retStationCount, BarStationSorting_t order) {
 	static const BarSortFunc_t orderMapping[] = {BarStationNameAZCmp,
 			BarStationNameZACmp,

@@ -415,8 +415,6 @@ static void BarMainLoop (BarApp_t *app) {
 			}
 		}
 
-		BarMainHandleUserInput (app);
-
 		#ifdef WEBSOCKET_ENABLED
 		/* Process WebSocket commands from web clients (queued by WS thread) */
 		if (app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
@@ -461,6 +459,8 @@ static void BarMainLoop (BarApp_t *app) {
 			}
 		}
 		#endif
+
+		BarMainHandleUserInput (app);
 
 		/* show time */
 		if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
