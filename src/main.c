@@ -434,18 +434,18 @@ static void BarMainLoop (BarApp_t *app) {
 				
 				/* Handle multi-character commands with parameters */
 				if (command[0] == '%' && strlen(command) > 1) {
-					/* Volume set command: "%75" */
-					int volume = atoi(&command[1]);
-					/* Clamp to valid range */
-					if (volume < 0) volume = 0;
-					if (volume > 100) volume = 100;
-					
-					app->settings.volume = volume;
-					BarPlayerSetVolume(&app->player);
-					
-					/* Broadcast to all clients */
-					BarSocketIoEmitVolume(app, volume);
-					debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %d%%\n", volume);
+				/* Volume set command: "%<db>" */
+				int volume = atoi(&command[1]);
+				/* Clamp to valid range: -40 dB to +20 dB */
+				if (volume < -40) volume = -40;
+				if (volume > 20) volume = 20;
+				
+				app->settings.volume = volume;
+				BarPlayerSetVolume(&app->player);
+				
+				/* Broadcast to all clients */
+				BarSocketIoEmitVolume(app, volume);
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %ddB\n", volume);
 				} else {
 					/* Dispatch single-letter command through pianobar's UI system */
 					BarUiDispatch(app, command[0], app->curStation, app->playlist,

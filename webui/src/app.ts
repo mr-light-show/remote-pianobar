@@ -5,6 +5,7 @@ import { SocketService } from './services/socket-service';
 import './components/album-art';
 import './components/progress-bar';
 import './components/playback-controls';
+import './components/volume-control';
 import './components/reconnect-button';
 import './components/bottom-toolbar';
 
@@ -19,7 +20,8 @@ export class PianobarApp extends LitElement {
   @state() private playing = false;
   @state() private currentTime = 0;
   @state() private totalTime = 0;
-  @state() private volume = 100;
+  @state() private volume = 0;
+  @state() private maxGain = 10;
   @state() private rating = 0;
   @state() private stations: any[] = [];
   @state() private currentStation = '';
@@ -151,10 +153,19 @@ export class PianobarApp extends LitElement {
         this.currentStation = data.station;
       }
       
-      // Volume control removed from UI
-      // if (typeof data.volume === 'number') {
-      //   this.volume = data.volume;
-      // }
+      // Update volume and maxGain from config
+      if (data.volume !== undefined) {
+        this.volume = data.volume;
+      }
+      if (data.maxGain !== undefined) {
+        this.maxGain = data.maxGain;
+      }
+      
+      // Update volume control if present
+      const volumeControl = this.shadowRoot?.querySelector('volume-control');
+      if (volumeControl && data.volume !== undefined) {
+        (volumeControl as any).updateFromDb(data.volume);
+      }
     });
   }
   
@@ -185,12 +196,12 @@ export class PianobarApp extends LitElement {
     this.socket.emit('station.change', station);
   }
   
-  // Volume control removed from UI
-  // handleVolumeChange(e: CustomEvent) {
-  //   const { volume } = e.detail;
-  //   this.volume = volume;
-  //   this.socket.emit('action', { command: 'volume.set', volume });
-  // }
+  handleVolumeChange(e: CustomEvent) {
+    const { percent, db } = e.detail;
+    this.volume = db;  // Store dB for display
+    // Send percentage to backend
+    this.socket.emit('action', { action: 'volume.set', volume: percent });
+  }
   
   handleReconnect() {
     this.socket.reconnect();
@@ -216,6 +227,12 @@ export class PianobarApp extends LitElement {
       ></progress-bar>
       
       ${this.connected ? html`
+        <volume-control
+          .volume="${50}"
+          .maxGain="${this.maxGain}"
+          @volume-change=${this.handleVolumeChange}
+        ></volume-control>
+        
         <playback-controls 
           ?playing="${this.playing}"
           @play=${this.handlePlayPause}

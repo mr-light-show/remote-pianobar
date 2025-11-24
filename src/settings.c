@@ -174,6 +174,7 @@ void BarSettingsRead (BarSettings_t *settings) {
 	settings->volume = 0;
 	settings->timeout = 30; /* seconds */
 	settings->gainMul = 1.0;
+	settings->maxGain = 10;
 	/* should be > 4, otherwise expired audio urls (403) can stop playback */
 	settings->maxRetry = 5;
 	settings->bufferSecs = 5;
@@ -391,6 +392,8 @@ void BarSettingsRead (BarSettings_t *settings) {
 				settings->volume = atoi (val);
 			} else if (streq ("gain_mul", key)) {
 				settings->gainMul = atof (val);
+			} else if (streq ("max_gain", key)) {
+				settings->maxGain = atoi (val);
 			} else if (streq ("format_nowplaying_song", key)) {
 				free (settings->npSongFormat);
 				settings->npSongFormat = strdup (val);

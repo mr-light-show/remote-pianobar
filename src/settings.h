@@ -96,6 +96,7 @@ typedef struct {
 	unsigned int history, maxRetry, timeout, bufferSecs;
 	int volume;
 	float gainMul;
+	int maxGain;
 	BarStationSorting_t sortOrder;
 	PianoAudioQuality_t audioQuality;
 	char *username;

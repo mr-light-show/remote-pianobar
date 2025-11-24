@@ -28,7 +28,22 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include <json-c/json.h>
+
+/* Convert slider percentage (0-100) to decibels (-40 to maxGain)
+ * Uses perceptual curve: squared for bottom half, linear for top half */
+static int sliderToDb(int sliderPercent, int maxGain) {
+	if (sliderPercent <= 50) {
+		/* Bottom half: -40 to 0 dB */
+		double normalized = sliderPercent / 50.0;
+		return (int)(-40.0 * pow(1.0 - normalized, 2.0));
+	} else {
+		/* Top half: 0 to maxGain dB */
+		double normalized = (sliderPercent - 50) / 50.0;
+		return (int)(maxGain * normalized);
+	}
+}
 
 /* Command mapping: descriptive → single-letter */
 typedef struct {
@@ -408,6 +423,10 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	json_object_object_add(data, "volume", 
 	                       json_object_new_int(app->settings.volume));
 	
+	/* Include max gain configuration */
+	json_object_object_add(data, "maxGain", 
+	                       json_object_new_int(app->settings.maxGain));
+	
 	if (app->curStation) {
 		json_object_object_add(data, "station", 
 		                       json_object_new_string(app->curStation->name));
@@ -489,15 +508,18 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	if (strcmp(action, "volume.set") == 0 && data) {
 		json_object *volumeObj;
 		if (json_object_object_get_ex(data, "volume", &volumeObj)) {
-			int volume = json_object_get_int(volumeObj);
+			int volumePercent = json_object_get_int(volumeObj);
 			/* Clamp to 0-100 range */
-			if (volume < 0) volume = 0;
-			if (volume > 100) volume = 100;
+			if (volumePercent < 0) volumePercent = 0;
+			if (volumePercent > 100) volumePercent = 100;
 			
-			/* Format as "%75" (command + value) */
-			snprintf(commandBuffer, sizeof(commandBuffer), "%%%d", volume);
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → '%s' (volume: %d)\n", 
-			           action, translated, volume);
+			/* Convert percentage to dB using perceptual curve */
+			int volumeDb = sliderToDb(volumePercent, app->settings.maxGain);
+			
+			/* Format as "%<db>" (command + value) */
+			snprintf(commandBuffer, sizeof(commandBuffer), "%%%d", volumeDb);
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → '%s' (%d%% = %ddB)\n", 
+			           action, translated, volumePercent, volumeDb);
 			
 			/* Queue command for main loop to process */
 			ctx = (BarWsContext_t *)app->wsContext;

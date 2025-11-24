@@ -33,7 +33,7 @@ export class SongActionsMenu extends LitElement {
     
     .menu-popup {
       position: absolute;
-      bottom: calc(100% + 8px);
+      bottom: 64px;
       left: 50%;
       transform: translateX(-50%);
       background: var(--surface);
