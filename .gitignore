@@ -4,6 +4,7 @@
 # vim swap files
 .*.sw*
 pianobar
+pianobar_test
 libpiano.a
 libpiano.so*
 waitress-test
