@@ -133,6 +133,21 @@ export class InfoMenu extends LitElement {
     this.closeMenu();
   }
   
+  handleRenameStation() {
+    this.dispatchEvent(new CustomEvent('info-rename-station'));
+    this.closeMenu();
+  }
+  
+  handleStationMode() {
+    this.dispatchEvent(new CustomEvent('info-station-mode'));
+    this.closeMenu();
+  }
+  
+  handleStationSeeds() {
+    this.dispatchEvent(new CustomEvent('info-station-seeds'));
+    this.closeMenu();
+  }
+  
   handleDeleteStation() {
     this.dispatchEvent(new CustomEvent('info-delete-station'));
     this.closeMenu();
@@ -165,6 +180,18 @@ export class InfoMenu extends LitElement {
         <button class="action-button" @click=${this.handleAddMusic}>
           <span class="material-icons">library_add</span>
           <span>Add Music to Station</span>
+        </button>
+        <button class="action-button" @click=${this.handleRenameStation}>
+          <span class="material-icons">edit</span>
+          <span>Rename Station</span>
+        </button>
+        <button class="action-button" @click=${this.handleStationMode}>
+          <span class="material-icons">tune</span>
+          <span>Manage Station Mode</span>
+        </button>
+        <button class="action-button" @click=${this.handleStationSeeds}>
+          <span class="material-icons">manage_search</span>
+          <span>Manage Seeds & Feedback</span>
         </button>
         <button class="action-button" @click=${this.handleAddGenre}>
           <span class="material-icons">library_music</span>

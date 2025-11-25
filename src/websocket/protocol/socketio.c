@@ -88,7 +88,8 @@ static const BarCommandMapping_t commandMappings[] = {
 	{"station.addGenre", "g"},
 	{"station.addShared", "j"},
 	{"station.selectQuickMix", "x"},
-	{"station.manage", "="},
+	{"station.mode", "M"},
+	{"station.seeds", "F"},
 	
 	/* Music Search */
 	{"music.search", "C"},
@@ -257,6 +258,24 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	} else if (strcmp(eventName, "station.addMusic") == 0) {
 		/* Add music to station */
 		BarSocketIoHandleAddMusic(app, data);
+	} else if (strcmp(eventName, "station.rename") == 0) {
+		/* Rename station */
+		BarSocketIoHandleRenameStation(app, data);
+	} else if (strcmp(eventName, "station.getModes") == 0) {
+		/* Get station modes */
+		BarSocketIoHandleGetStationModes(app, data);
+	} else if (strcmp(eventName, "station.setMode") == 0) {
+		/* Set station mode */
+		BarSocketIoHandleSetStationMode(app, data);
+	} else if (strcmp(eventName, "station.getInfo") == 0) {
+		/* Get station info (seeds/feedback) */
+		BarSocketIoHandleGetStationInfo(app, data);
+	} else if (strcmp(eventName, "station.deleteSeed") == 0) {
+		/* Delete seed */
+		BarSocketIoHandleDeleteSeed(app, data);
+	} else if (strcmp(eventName, "station.deleteFeedback") == 0) {
+		/* Delete feedback */
+		BarSocketIoHandleDeleteFeedback(app, data);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
 	}
@@ -751,6 +770,446 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to add music\n");
 	}
+}
+
+/* Handle 'station.rename' event from client */
+void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataRenameStation_t reqData;
+	json_object *stationIdObj, *newNameObj;
+	const char *stationId, *newName;
+	PianoStation_t *station;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract stationId and newName from data */
+	if (!json_object_object_get_ex(data, "stationId", &stationIdObj) ||
+	    !json_object_object_get_ex(data, "newName", &newNameObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - missing stationId or newName\n");
+		return;
+	}
+	
+	stationId = json_object_get_string(stationIdObj);
+	newName = json_object_get_string(newNameObj);
+	
+	if (!stationId || !newName || strlen(newName) == 0) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - invalid stationId or newName\n");
+		return;
+	}
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - station not found\n");
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Renaming station from '%s' to '%s'\n", station->name, newName);
+	
+	/* Check if station is shared and transform if needed */
+	if (!BarTransformIfShared(app, station)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - failed to transform shared station\n");
+		return;
+	}
+	
+	/* Set up request data */
+	reqData.station = station;
+	reqData.newName = (char *)newName;
+	
+	/* Rename station */
+	if (BarUiPianoCall(app, PIANO_REQUEST_RENAME_STATION, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station renamed successfully\n");
+		/* Emit updated station list to all clients */
+		BarSocketIoEmitStations(app);
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to rename station\n");
+	}
+}
+
+/* Handle 'station.getModes' event - fetch available modes for a station */
+void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataGetStationModes_t reqData;
+	json_object *stationIdObj;
+	const char *stationId;
+	PianoStation_t *station;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract stationId */
+	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - missing stationId\n");
+		return;
+	}
+	
+	stationId = json_object_get_string(stationIdObj);
+	if (!stationId) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid stationId\n");
+		return;
+	}
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - station not found\n");
+		return;
+	}
+	
+	if (station->isQuickMix) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - QuickMix not supported\n");
+		return;
+	}
+	
+	/* Fetch station modes */
+	memset(&reqData, 0, sizeof(reqData));
+	reqData.station = station;
+	if (BarUiPianoCall(app, PIANO_REQUEST_GET_STATION_MODES, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station modes fetched successfully\n");
+		/* Emit modes to client */
+		BarSocketIoEmitStationModes(app, &reqData);
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to fetch station modes\n");
+	}
+	
+	PianoDestroyStationMode(reqData.retModes);
+}
+
+/* Emit station modes to client */
+void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData) {
+	json_object *data, *modesArray, *modeObj;
+	const PianoStationMode_t *mode;
+	int i = 0;
+	
+	if (!app || !reqData || !reqData->retModes) {
+		return;
+	}
+	
+	data = json_object_new_object();
+	modesArray = json_object_new_array();
+	
+	mode = reqData->retModes;
+	PianoListForeachP(mode) {
+		modeObj = json_object_new_object();
+		json_object_object_add(modeObj, "id", json_object_new_int(i));
+		json_object_object_add(modeObj, "name", json_object_new_string(mode->name ? mode->name : ""));
+		json_object_object_add(modeObj, "description", json_object_new_string(mode->description ? mode->description : ""));
+		json_object_object_add(modeObj, "active", json_object_new_boolean(mode->active));
+		json_object_array_add(modesArray, modeObj);
+		i++;
+	}
+	
+	json_object_object_add(data, "modes", modesArray);
+	
+	BarSocketIoEmit("stationModes", data);
+	json_object_put(data);
+}
+
+/* Handle 'station.setMode' event - set station mode */
+void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataSetStationMode_t reqData;
+	json_object *stationIdObj, *modeIdObj;
+	const char *stationId;
+	int modeId;
+	PianoStation_t *station;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract stationId and modeId */
+	if (!json_object_object_get_ex(data, "stationId", &stationIdObj) ||
+	    !json_object_object_get_ex(data, "modeId", &modeIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - missing parameters\n");
+		return;
+	}
+	
+	stationId = json_object_get_string(stationIdObj);
+	modeId = json_object_get_int(modeIdObj);
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - station not found\n");
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Setting station mode to %d\n", modeId);
+	
+	/* Set station mode */
+	reqData.station = station;
+	reqData.id = modeId;
+	
+	if (BarUiPianoCall(app, PIANO_REQUEST_SET_STATION_MODE, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station mode set successfully\n");
+		/* Note: Mode change requires playlist drain - client should handle this */
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to set station mode\n");
+	}
+}
+
+/* Handle 'station.getInfo' event - fetch station info for seed/feedback management */
+void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataGetStationInfo_t reqData;
+	json_object *stationIdObj;
+	const char *stationId;
+	PianoStation_t *station;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract stationId */
+	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - missing stationId\n");
+		return;
+	}
+	
+	stationId = json_object_get_string(stationIdObj);
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
+		return;
+	}
+	
+	/* Fetch station info */
+	memset(&reqData, 0, sizeof(reqData));
+	reqData.station = station;
+	
+	if (BarUiPianoCall(app, PIANO_REQUEST_GET_STATION_INFO, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station info fetched successfully\n");
+		/* Emit info to client */
+		BarSocketIoEmitStationInfo(app, &reqData);
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to fetch station info\n");
+	}
+	
+	PianoDestroyStationInfo(&reqData.info);
+}
+
+/* Emit station info (seeds and feedback) to client */
+void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData) {
+	json_object *data, *artistsArray, *songsArray, *stationsArray, *feedbackArray;
+	json_object *itemObj;
+	PianoArtist_t *artist;
+	PianoSong_t *song;
+	PianoStation_t *station;
+	
+	if (!app || !reqData) {
+		return;
+	}
+	
+	data = json_object_new_object();
+	
+	/* Artist seeds */
+	artistsArray = json_object_new_array();
+	artist = reqData->info.artistSeeds;
+	PianoListForeachP(artist) {
+		itemObj = json_object_new_object();
+		json_object_object_add(itemObj, "seedId", json_object_new_string(artist->seedId ? artist->seedId : ""));
+		json_object_object_add(itemObj, "name", json_object_new_string(artist->name ? artist->name : ""));
+		json_object_array_add(artistsArray, itemObj);
+	}
+	json_object_object_add(data, "artistSeeds", artistsArray);
+	
+	/* Song seeds */
+	songsArray = json_object_new_array();
+	song = reqData->info.songSeeds;
+	PianoListForeachP(song) {
+		itemObj = json_object_new_object();
+		json_object_object_add(itemObj, "seedId", json_object_new_string(song->seedId ? song->seedId : ""));
+		json_object_object_add(itemObj, "title", json_object_new_string(song->title ? song->title : ""));
+		json_object_object_add(itemObj, "artist", json_object_new_string(song->artist ? song->artist : ""));
+		json_object_array_add(songsArray, itemObj);
+	}
+	json_object_object_add(data, "songSeeds", songsArray);
+	
+	/* Station seeds */
+	stationsArray = json_object_new_array();
+	station = reqData->info.stationSeeds;
+	PianoListForeachP(station) {
+		itemObj = json_object_new_object();
+		json_object_object_add(itemObj, "seedId", json_object_new_string(station->seedId ? station->seedId : ""));
+		json_object_object_add(itemObj, "name", json_object_new_string(station->name ? station->name : ""));
+		json_object_array_add(stationsArray, itemObj);
+	}
+	json_object_object_add(data, "stationSeeds", stationsArray);
+	
+	/* Feedback */
+	feedbackArray = json_object_new_array();
+	song = reqData->info.feedback;
+	PianoListForeachP(song) {
+		itemObj = json_object_new_object();
+		json_object_object_add(itemObj, "feedbackId", json_object_new_string(song->feedbackId ? song->feedbackId : ""));
+		json_object_object_add(itemObj, "title", json_object_new_string(song->title ? song->title : ""));
+		json_object_object_add(itemObj, "artist", json_object_new_string(song->artist ? song->artist : ""));
+		json_object_object_add(itemObj, "rating", json_object_new_int(song->rating));
+		json_object_array_add(feedbackArray, itemObj);
+	}
+	json_object_object_add(data, "feedback", feedbackArray);
+	
+	BarSocketIoEmit("stationInfo", data);
+	json_object_put(data);
+}
+
+/* Handle 'station.deleteSeed' event */
+void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataDeleteSeed_t reqData;
+	PianoRequestDataGetStationInfo_t infoReqData;
+	json_object *seedIdObj, *seedTypeObj, *stationIdObj;
+	const char *seedId, *seedType, *stationId;
+	PianoStation_t *station;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract parameters */
+	if (!json_object_object_get_ex(data, "seedId", &seedIdObj) ||
+	    !json_object_object_get_ex(data, "seedType", &seedTypeObj) ||
+	    !json_object_object_get_ex(data, "stationId", &stationIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - missing parameters\n");
+		return;
+	}
+	
+	seedId = json_object_get_string(seedIdObj);
+	seedType = json_object_get_string(seedTypeObj);
+	stationId = json_object_get_string(stationIdObj);
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - station not found\n");
+		return;
+	}
+	
+	/* Fetch station info to find the seed object */
+	memset(&infoReqData, 0, sizeof(infoReqData));
+	infoReqData.station = station;
+	
+	if (!BarUiPianoCall(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - failed to fetch station info\n");
+		return;
+	}
+	
+	/* Find and delete the seed based on type */
+	memset(&reqData, 0, sizeof(reqData));
+	
+	if (strcmp(seedType, "artist") == 0) {
+		PianoArtist_t *artist = infoReqData.info.artistSeeds;
+		PianoListForeachP(artist) {
+			if (strcmp(artist->seedId, seedId) == 0) {
+				reqData.artist = artist;
+				break;
+			}
+		}
+		if (reqData.artist != NULL) {
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting artist seed\n");
+			BarUiPianoCall(app, PIANO_REQUEST_DELETE_SEED, &reqData, &pRet, &wRet);
+		}
+	} else if (strcmp(seedType, "song") == 0) {
+		PianoSong_t *song = infoReqData.info.songSeeds;
+		PianoListForeachP(song) {
+			if (strcmp(song->seedId, seedId) == 0) {
+				reqData.song = song;
+				break;
+			}
+		}
+		if (reqData.song != NULL) {
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting song seed\n");
+			BarUiPianoCall(app, PIANO_REQUEST_DELETE_SEED, &reqData, &pRet, &wRet);
+		}
+	} else if (strcmp(seedType, "station") == 0) {
+		PianoStation_t *seedStation = infoReqData.info.stationSeeds;
+		PianoListForeachP(seedStation) {
+			if (strcmp(seedStation->seedId, seedId) == 0) {
+				reqData.station = seedStation;
+				break;
+			}
+		}
+		if (reqData.station != NULL) {
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting station seed\n");
+			BarUiPianoCall(app, PIANO_REQUEST_DELETE_SEED, &reqData, &pRet, &wRet);
+		}
+	}
+	
+	PianoDestroyStationInfo(&infoReqData.info);
+}
+
+/* Handle 'station.deleteFeedback' event */
+void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataGetStationInfo_t infoReqData;
+	json_object *feedbackIdObj, *stationIdObj;
+	const char *feedbackId, *stationId;
+	PianoStation_t *station;
+	PianoSong_t *feedbackSong = NULL;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract parameters */
+	if (!json_object_object_get_ex(data, "feedbackId", &feedbackIdObj) ||
+	    !json_object_object_get_ex(data, "stationId", &stationIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - missing parameters\n");
+		return;
+	}
+	
+	feedbackId = json_object_get_string(feedbackIdObj);
+	stationId = json_object_get_string(stationIdObj);
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - station not found\n");
+		return;
+	}
+	
+	/* Fetch station info to find the feedback object */
+	memset(&infoReqData, 0, sizeof(infoReqData));
+	infoReqData.station = station;
+	
+	if (!BarUiPianoCall(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - failed to fetch station info\n");
+		return;
+	}
+	
+	/* Find the feedback entry */
+	PianoSong_t *song = infoReqData.info.feedback;
+	PianoListForeachP(song) {
+		if (strcmp(song->feedbackId, feedbackId) == 0) {
+			feedbackSong = song;
+			break;
+		}
+	}
+	
+	if (feedbackSong != NULL) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting feedback\n");
+		BarUiPianoCall(app, PIANO_REQUEST_DELETE_FEEDBACK, feedbackSong, &pRet, &wRet);
+	}
+	
+	PianoDestroyStationInfo(&infoReqData.info);
 }
 
 /* Emit 'searchResults' event (music search results) */

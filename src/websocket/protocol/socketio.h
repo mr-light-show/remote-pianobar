@@ -108,5 +108,23 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searc
 /* Handle 'station.addMusic' with musicId and stationId */
 void BarSocketIoHandleAddMusic(BarApp_t *app, struct json_object *data);
 
+/* Handle 'station.rename' with stationId and newName */
+void BarSocketIoHandleRenameStation(BarApp_t *app, struct json_object *data);
+
+/* Handle 'station.getModes' - fetch available modes for a station */
+void BarSocketIoHandleGetStationModes(BarApp_t *app, struct json_object *data);
+void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData);
+
+/* Handle 'station.setMode' - set station mode */
+void BarSocketIoHandleSetStationMode(BarApp_t *app, struct json_object *data);
+
+/* Handle 'station.getInfo' - fetch station info for seed/feedback management */
+void BarSocketIoHandleGetStationInfo(BarApp_t *app, struct json_object *data);
+void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData);
+
+/* Handle 'station.deleteSeed' and 'station.deleteFeedback' */
+void BarSocketIoHandleDeleteSeed(BarApp_t *app, struct json_object *data);
+void BarSocketIoHandleDeleteFeedback(BarApp_t *app, struct json_object *data);
+
 #endif /* _SOCKETIO_H */
 

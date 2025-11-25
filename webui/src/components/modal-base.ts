@@ -66,7 +66,7 @@ export class ModalBase extends LitElement {
     `;
   }
   
-  static styles = css`
+  static styles = [css`
     :host {
       display: none;
       position: fixed;
@@ -296,6 +296,6 @@ export class ModalBase extends LitElement {
       color: var(--on-surface-variant);
       font-size: 16px;
     }
-  `;
+  `];
 }
 

@@ -15,6 +15,9 @@ import './components/play-station-modal';
 import './components/select-station-modal';
 import './components/genre-modal';
 import './components/add-music-modal';
+import './components/rename-station-modal';
+import './components/station-mode-modal';
+import './components/station-seeds-modal';
 import './components/song-actions-menu';
 import './components/info-menu';
 
@@ -25,6 +28,7 @@ export class PianobarApp extends LitElement {
   @state() private connected = false;
   @state() private albumArt = '';
   @state() private songTitle = 'Not Playing';
+  @state() private albumName = '';
   @state() private artistName = '—';
   @state() private playing = false;
   @state() private currentTime = 0;
@@ -50,6 +54,13 @@ export class PianobarApp extends LitElement {
   @state() private searchResults: any = { categories: [] };
   @state() private searchLoading = false;
   @state() private addMusicModalOpen = false;
+  @state() private renameStationModalOpen = false;
+  @state() private stationModeModalOpen = false;
+  @state() private stationModes: any[] = [];
+  @state() private modesLoading = false;
+  @state() private stationSeedsModalOpen = false;
+  @state() private stationInfo: any = null;
+  @state() private infoLoading = false;
   
   static styles = css`
     :host {
@@ -100,9 +111,15 @@ export class PianobarApp extends LitElement {
       margin: 0.5rem 0;
     }
     
+    .album {
+      color: var(--on-surface-variant);
+      margin: 0.25rem 0 0 0;
+      font-size: 0.9rem;
+    }
+    
     .artist {
       color: var(--on-surface-variant);
-      margin: 0;
+      margin: 0.25rem 0 0 0;
       font-style: italic;
     }
     
@@ -195,6 +212,7 @@ export class PianobarApp extends LitElement {
     this.socket.on('start', (data) => {
       this.albumArt = data.coverArt;
       this.songTitle = data.title;
+      this.albumName = data.album || '';
       this.artistName = data.artist;
       this.totalTime = data.duration;
       this.playing = true;
@@ -258,6 +276,16 @@ export class PianobarApp extends LitElement {
       this.searchLoading = false;
     });
     
+    this.socket.on('stationModes', (data) => {
+      this.stationModes = data.modes || [];
+      this.modesLoading = false;
+    });
+    
+    this.socket.on('stationInfo', (data) => {
+      this.stationInfo = data;
+      this.infoLoading = false;
+    });
+    
     this.socket.on('process', (data) => {
       console.log('Received process event:', data);
       
@@ -265,6 +293,7 @@ export class PianobarApp extends LitElement {
       if (data.song) {
         this.albumArt = data.song.coverArt || '';
         this.songTitle = data.song.title || 'Not Playing';
+        this.albumName = data.song.album || '';
         this.artistName = data.song.artist || '—';
         this.totalTime = data.song.duration || 0;
         this.playing = data.playing || false;
@@ -275,6 +304,7 @@ export class PianobarApp extends LitElement {
         // No song playing
         this.albumArt = '';
         this.songTitle = 'Not Playing';
+        this.albumName = '';
         this.artistName = '—';
         this.playing = false;
         this.currentTime = 0;
@@ -518,6 +548,82 @@ export class PianobarApp extends LitElement {
     this.searchLoading = false;
   }
   
+  handleInfoRenameStation() {
+    this.renameStationModalOpen = true;
+  }
+  
+  handleRenameStationSubmit(e: CustomEvent) {
+    const { stationId, newName } = e.detail;
+    this.socket.emit('station.rename', { stationId, newName });
+    this.renameStationModalOpen = false;
+    this.showToast('Renaming station...');
+  }
+  
+  handleRenameStationCancel() {
+    this.renameStationModalOpen = false;
+  }
+  
+  handleInfoStationMode() {
+    this.stationModeModalOpen = true;
+  }
+  
+  handleGetStationModes(e: CustomEvent) {
+    this.modesLoading = true;
+    this.socket.emit('station.getModes', { stationId: e.detail.stationId });
+  }
+  
+  handleSetStationMode(e: CustomEvent) {
+    const { stationId, modeId } = e.detail;
+    this.socket.emit('station.setMode', { stationId, modeId });
+    this.stationModeModalOpen = false;
+    this.stationModes = [];
+    this.modesLoading = false;
+    this.showToast('Setting station mode...');
+  }
+  
+  handleStationModeCancel() {
+    this.stationModeModalOpen = false;
+    this.stationModes = [];
+    this.modesLoading = false;
+  }
+  
+  handleInfoStationSeeds() {
+    this.stationSeedsModalOpen = true;
+  }
+  
+  handleGetStationInfo(e: CustomEvent) {
+    this.infoLoading = true;
+    this.socket.emit('station.getInfo', { stationId: e.detail.stationId });
+  }
+  
+  handleDeleteSeed(e: CustomEvent) {
+    const { seedId, seedType, stationId } = e.detail;
+    this.socket.emit('station.deleteSeed', { seedId, seedType, stationId });
+    this.showToast('Deleting seed...');
+    // Refresh station info after a short delay
+    setTimeout(() => {
+      this.infoLoading = true;
+      this.socket.emit('station.getInfo', { stationId });
+    }, 500);
+  }
+  
+  handleDeleteFeedback(e: CustomEvent) {
+    const { feedbackId, stationId } = e.detail;
+    this.socket.emit('station.deleteFeedback', { feedbackId, stationId });
+    this.showToast('Deleting feedback...');
+    // Refresh station info after a short delay
+    setTimeout(() => {
+      this.infoLoading = true;
+      this.socket.emit('station.getInfo', { stationId });
+    }, 500);
+  }
+  
+  handleStationSeedsCancel() {
+    this.stationSeedsModalOpen = false;
+    this.stationInfo = null;
+    this.infoLoading = false;
+  }
+  
   showToast(message: string) {
     const toast = document.createElement('toast-notification') as any;
     toast.message = message;
@@ -578,6 +684,9 @@ export class PianobarApp extends LitElement {
             @info-quickmix=${this.handleInfoQuickMix}
             @info-create-station=${this.handleInfoCreateStation}
             @info-add-music=${this.handleInfoAddMusic}
+            @info-rename-station=${this.handleInfoRenameStation}
+            @info-station-mode=${this.handleInfoStationMode}
+            @info-station-seeds=${this.handleInfoStationSeeds}
             @info-add-genre=${this.handleInfoAddGenre}
             @info-delete-station=${this.handleInfoDeleteStation}
           ></info-menu>
@@ -590,6 +699,7 @@ export class PianobarApp extends LitElement {
       
       <div class="song-info">
         <h1>${this.connected ? this.songTitle : 'Disconnected'}</h1>
+        ${this.connected && this.albumName ? html`<p class="album">${this.albumName}</p>` : ''}
         <p class="artist">${this.connected ? this.artistName : '—'}</p>
       </div>
       
@@ -646,6 +756,9 @@ export class PianobarApp extends LitElement {
           @info-quickmix=${this.handleInfoQuickMix}
           @info-create-station=${this.handleInfoCreateStation}
           @info-add-music=${this.handleInfoAddMusic}
+          @info-rename-station=${this.handleInfoRenameStation}
+          @info-station-mode=${this.handleInfoStationMode}
+          @info-station-seeds=${this.handleInfoStationSeeds}
           @info-add-genre=${this.handleInfoAddGenre}
           @info-delete-station=${this.handleInfoDeleteStation}
         ></bottom-toolbar>
@@ -705,6 +818,34 @@ export class PianobarApp extends LitElement {
           @add-music=${this.handleAddMusicSubmit}
           @cancel=${this.handleAddMusicCancel}
         ></add-music-modal>
+        
+        <rename-station-modal
+          ?open="${this.renameStationModalOpen}"
+          .stations="${this.stations}"
+          @rename-station=${this.handleRenameStationSubmit}
+          @cancel=${this.handleRenameStationCancel}
+        ></rename-station-modal>
+        
+        <station-mode-modal
+          ?open="${this.stationModeModalOpen}"
+          ?modesLoading="${this.modesLoading}"
+          .stations="${this.stations}"
+          .modes="${this.stationModes}"
+          @get-modes=${this.handleGetStationModes}
+          @set-mode=${this.handleSetStationMode}
+          @cancel=${this.handleStationModeCancel}
+        ></station-mode-modal>
+        
+        <station-seeds-modal
+          ?open="${this.stationSeedsModalOpen}"
+          ?infoLoading="${this.infoLoading}"
+          .stations="${this.stations}"
+          .stationInfo="${this.stationInfo}"
+          @get-info=${this.handleGetStationInfo}
+          @delete-seed=${this.handleDeleteSeed}
+          @delete-feedback=${this.handleDeleteFeedback}
+          @cancel=${this.handleStationSeedsCancel}
+        ></station-seeds-modal>
         
       ` : html`
         <reconnect-button 

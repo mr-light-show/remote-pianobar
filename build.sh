@@ -86,3 +86,5 @@ else
     ./pianobar
 fi
 
+
+# cd lldb ./pianobar -o "run" -o "bt" 2>&1 | head -100
