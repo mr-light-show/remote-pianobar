@@ -38,7 +38,7 @@ export class PianobarApp extends LitElement {
   @state() private quickMixModalOpen = false;
   @state() private createStationModalOpen = false;
   @state() private currentTrackToken = '';
-  @state() private creatingStationFrom: 'song' | 'artist' | 'genre' | null = null;
+  @state() private creatingStationFrom: 'song' | 'artist' | 'genre' | 'search' | null = null;
   @state() private newStationId: string | null = null;
   @state() private playNewStationModalOpen = false;
   @state() private newStationName = '';
@@ -46,6 +46,8 @@ export class PianobarApp extends LitElement {
   @state() private genreModalOpen = false;
   @state() private genreCategories: any[] = [];
   @state() private genreLoading = false;
+  @state() private searchResults: any = { categories: [] };
+  @state() private searchLoading = false;
   
   static styles = css`
     :host {
@@ -249,6 +251,11 @@ export class PianobarApp extends LitElement {
       this.genreLoading = false;
     });
     
+    this.socket.on('searchResults', (data) => {
+      this.searchResults = data;
+      this.searchLoading = false;
+    });
+    
     this.socket.on('process', (data) => {
       console.log('Received process event:', data);
       
@@ -415,6 +422,22 @@ export class PianobarApp extends LitElement {
   
   handleCreateStationCancel() {
     this.createStationModalOpen = false;
+    this.searchResults = { categories: [] };
+    this.searchLoading = false;
+  }
+  
+  handleCreateStationQuery(e: CustomEvent) {
+    this.searchLoading = true;
+    this.socket.emit('music.search', { query: e.detail.query });
+  }
+  
+  handleCreateStationFromSearch(e: CustomEvent) {
+    const { musicId } = e.detail;
+    this.socket.emit('station.addGenre', { musicId });
+    this.creatingStationFrom = 'search';
+    this.createStationModalOpen = false;
+    this.searchResults = { categories: [] };
+    this.searchLoading = false;
   }
   
   handlePlayNewStation() {
@@ -608,8 +631,15 @@ export class PianobarApp extends LitElement {
         
         <create-station-modal
           ?open="${this.createStationModalOpen}"
+          ?loading="${this.searchLoading}"
+          .searchResults="${this.searchResults}"
+          .currentSongName="${this.songTitle}"
+          .currentArtistName="${this.artistName}"
+          .currentTrackToken="${this.currentTrackToken}"
           @select-song=${this.handleCreateStationSong}
           @select-artist=${this.handleCreateStationArtist}
+          @search=${this.handleCreateStationQuery}
+          @create=${this.handleCreateStationFromSearch}
           @cancel=${this.handleCreateStationCancel}
         ></create-station-modal>
         
@@ -637,6 +667,7 @@ export class PianobarApp extends LitElement {
           @create=${this.handleGenreCreate}
           @cancel=${this.handleGenreCancel}
         ></genre-modal>
+        
       ` : html`
         <reconnect-button 
           @reconnect=${this.handleReconnect}

@@ -155,7 +155,7 @@ export class InfoMenu extends LitElement {
         </button>
         <button class="action-button" @click=${this.handleCreateStation}>
           <span class="material-icons">add_circle</span>
-          <span>Create station from song/artist</span>
+          <span>Create Station</span>
         </button>
         <button class="action-button" @click=${this.handleAddGenre}>
           <span class="material-icons">library_music</span>

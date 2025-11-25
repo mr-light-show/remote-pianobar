@@ -155,23 +155,27 @@ export class ModalBase extends LitElement {
     
     .button-confirm,
     .button-save {
-      background: var(--primary);
-      color: var(--on-primary);
-    }
-    
-    .button-confirm:not(:disabled),
-    .button-save:not(:disabled) {
       background: var(--primary-container);
       color: var(--on-primary-container);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
     
-    .button-confirm:hover,
-    .button-save:hover {
+    .button-confirm:hover:not(:disabled),
+    .button-save:hover:not(:disabled) {
       background: var(--primary-container);
       color: var(--on-primary-container);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
     
-    .button-confirm:disabled {
+    .button-confirm:active:not(:disabled),
+    .button-save:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+    }
+    
+    .button-confirm:disabled,
+    .button-save:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
@@ -181,9 +185,16 @@ export class ModalBase extends LitElement {
       color: var(--on-error);
     }
     
-    .button-confirm.button-danger:hover {
+    .button-confirm.button-danger:hover:not(:disabled) {
       background: var(--error-container);
       color: var(--on-error-container);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+    
+    .button-confirm.button-danger:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
     }
     
     /* Radio and checkbox inputs */

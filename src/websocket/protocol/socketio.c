@@ -89,6 +89,9 @@ static const BarCommandMapping_t commandMappings[] = {
 	{"station.selectQuickMix", "x"},
 	{"station.manage", "="},
 	
+	/* Music Search */
+	{"music.search", "C"},
+	
 	/* Query */
 	{"query.history", "h"},
 	{"query.upcoming", "u"},
@@ -247,6 +250,9 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	} else if (strcmp(eventName, "station.addGenre") == 0) {
 		/* Add genre station */
 		BarSocketIoHandleAddGenre(app, data);
+	} else if (strcmp(eventName, "music.search") == 0) {
+		/* Search for music (artists/songs) */
+		BarSocketIoHandleSearchMusic(app, data);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
 	}
@@ -684,6 +690,123 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
 		BarSocketIoEmitStations(app);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to create genre station\n");
+	}
+}
+
+/* Emit 'searchResults' event (music search results) */
+void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResult) {
+	json_object *data, *categories, *categoryObj, *resultsArray, *resultObj;
+	PianoArtist_t *artist;
+	PianoSong_t *song;
+	
+	if (!app || !searchResult) {
+		return;
+	}
+	
+	data = json_object_new_object();
+	categories = json_object_new_array();
+	
+	/* Create Artists category */
+	if (searchResult->artists != NULL) {
+		categoryObj = json_object_new_object();
+		json_object_object_add(categoryObj, "name", json_object_new_string("Artists"));
+		
+		resultsArray = json_object_new_array();
+		artist = searchResult->artists;
+		
+		while (artist != NULL) {
+			resultObj = json_object_new_object();
+			
+			json_object_object_add(resultObj, "name",
+			                       json_object_new_string(artist->name ? artist->name : ""));
+			json_object_object_add(resultObj, "musicId",
+			                       json_object_new_string(artist->musicId ? artist->musicId : ""));
+			
+			json_object_array_add(resultsArray, resultObj);
+			
+			artist = (PianoArtist_t *)artist->head.next;
+		}
+		
+		json_object_object_add(categoryObj, "results", resultsArray);
+		json_object_array_add(categories, categoryObj);
+	}
+	
+	/* Create Songs category */
+	if (searchResult->songs != NULL) {
+		categoryObj = json_object_new_object();
+		json_object_object_add(categoryObj, "name", json_object_new_string("Songs"));
+		
+		resultsArray = json_object_new_array();
+		song = searchResult->songs;
+		
+		while (song != NULL) {
+			resultObj = json_object_new_object();
+			
+			json_object_object_add(resultObj, "title",
+			                       json_object_new_string(song->title ? song->title : ""));
+			json_object_object_add(resultObj, "artist",
+			                       json_object_new_string(song->artist ? song->artist : ""));
+			json_object_object_add(resultObj, "musicId",
+			                       json_object_new_string(song->musicId ? song->musicId : ""));
+			
+			json_object_array_add(resultsArray, resultObj);
+			
+			song = (PianoSong_t *)song->head.next;
+		}
+		
+		json_object_object_add(categoryObj, "results", resultsArray);
+		json_object_array_add(categories, categoryObj);
+	}
+	
+	json_object_object_add(data, "categories", categories);
+	
+	BarSocketIoEmit("searchResults", data);
+	json_object_put(data);
+}
+
+/* Handle 'music.search' event from client */
+void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataSearch_t reqData;
+	json_object *queryObj;
+	const char *query;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract query from data */
+	if (!json_object_object_get_ex(data, "query", &queryObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: music.search - missing query\n");
+		return;
+	}
+	
+	query = json_object_get_string(queryObj);
+	
+	if (!query) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid query\n");
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Searching for: %s\n", query);
+	
+	/* Set up request data */
+	reqData.searchStr = (char *)query;
+	memset(&reqData.searchResult, 0, sizeof(reqData.searchResult));
+	
+	/* Perform the search */
+	if (BarUiPianoCall(app, PIANO_REQUEST_SEARCH, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Search completed successfully\n");
+		
+		/* Emit search results to client */
+		BarSocketIoEmitSearchResults(app, &reqData.searchResult);
+		
+		/* Clean up search results */
+		PianoDestroySearchResult(&reqData.searchResult);
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Search failed\n");
 	}
 }
 

@@ -50,33 +50,7 @@ export class PlayStationModal extends ModalBase {
     button {
       flex: 1;
       padding: 14px 20px;
-      border: none;
-      border-radius: 8px;
       font-size: 16px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    
-    .play-button {
-      background: var(--primary);
-      color: var(--on-primary);
-    }
-    
-    .play-button:hover {
-      background: var(--primary-container);
-      color: var(--on-primary-container);
-      transform: translateY(-1px);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-    }
-    
-    .cancel-button {
-      background: var(--surface-variant);
-      color: var(--on-surface);
-    }
-    
-    .cancel-button:hover {
-      background: var(--surface-container-high);
     }
   `
   ];
@@ -87,10 +61,10 @@ export class PlayStationModal extends ModalBase {
         Play <span class="station-name">${this.stationName}</span> now?
       </p>
       <div class="buttons">
-        <button class="cancel-button" @click=${this.handleCancel}>
+        <button class="button-cancel" @click=${this.handleCancel}>
           Later
         </button>
-        <button class="play-button" @click=${this.handlePlay}>
+        <button class="button-confirm" @click=${this.handlePlay}>
           Play Now
         </button>
       </div>
