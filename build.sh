@@ -8,39 +8,46 @@ set -e  # Exit on error
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$BUILD_DIR"
 
-# Function to run pianobar with crash capture under lldb
+# Function to run pianobar with crash capture only
 run_with_crash_capture() {
     local timestamp=$(date +%Y%m%d-%H%M%S)
     local crash_file="pianobar-crash-${timestamp}.log"
-    local lldb_script="debug-commands.lldb"
     
-    # Create lldb command script
-    cat > "$lldb_script" << EOF
-env PIANOBAR_DEBUG=8
-run
-thread backtrace all > $crash_file
-quit
-EOF
-    
-    echo "Running pianobar with crash capture..."
-    echo "  (Crash backtraces will be saved if crash occurs)"
+    echo "Running pianobar with debug output..."
+    echo "  (Crash info will be saved if crash occurs)"
     echo ""
     
-    # Run under lldb - full console interaction
-    lldb -s "$lldb_script" ./pianobar
+    # Enable core dumps for crash analysis
+    ulimit -c unlimited
     
-    # Check if crash file was created and has content
-    if [ -f "$crash_file" ] && [ -s "$crash_file" ]; then
+    # Run pianobar with debug output - normal CLI interaction
+    PIANOBAR_DEBUG=8 ./pianobar
+    local exit_code=$?
+    
+    # Check if pianobar crashed (abnormal exit)
+    if [ $exit_code -ne 0 ] && [ $exit_code -ne 1 ]; then
         echo ""
-        echo "=== CRASH DETECTED ==="
-        echo "Full backtrace saved to: $crash_file"
-    else
-        # Remove empty crash file if no crash occurred
-        rm -f "$crash_file"
+        echo "=== CRASH DETECTED (exit code: $exit_code) ==="
+        
+        # Check for core dump
+        if ls core* 2>/dev/null | grep -q .; then
+            echo "Extracting backtrace from core dump..."
+            lldb -c core* -b -o "thread backtrace all" -o "quit" ./pianobar > "$crash_file" 2>&1
+            echo "Crash backtrace saved to: $crash_file"
+            echo "Core dump available for analysis"
+        else
+            echo "No core dump generated. Consider checking system crash logs:"
+            echo "  ~/Library/Logs/DiagnosticReports/"
+            
+            # Try to find recent crash logs
+            if ls ~/Library/Logs/DiagnosticReports/pianobar*.crash 2>/dev/null | tail -1 | grep -q .; then
+                local latest_crash=$(ls -t ~/Library/Logs/DiagnosticReports/pianobar*.crash 2>/dev/null | head -1)
+                echo "Recent crash log found: $latest_crash"
+                cp "$latest_crash" "$crash_file"
+                echo "Crash info saved to: $crash_file"
+            fi
+        fi
     fi
-    
-    # Cleanup temporary script
-    rm -f "$lldb_script"
 }
 
 # Check if debug mode is requested
@@ -110,7 +117,7 @@ echo "Web interface will be available at:"
 echo "  http://localhost:8080"
 echo ""
 
-# If debug mode, run with crash capture under lldb
+# If debug mode, run with crash capture
 if [ "$1" = "debug" ]; then
     echo "Starting pianobar with debug output and crash capture..."
     echo ""
