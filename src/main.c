@@ -59,6 +59,7 @@ THE SOFTWARE.
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"
+#include "websocket/daemon/daemon.h"
 #endif
 #include "ui_readline.h"
 
@@ -574,6 +575,16 @@ int main (int argc, char **argv) {
 	++app.input.maxfd;
 
 	#ifdef WEBSOCKET_ENABLED
+	/* Daemonize if running in web-only mode */
+	if (app.settings.uiMode == BAR_UI_MODE_WEB) {
+		if (!BarDaemonize(&app)) {
+			BarUiMsg (&app.settings, MSG_ERR, "Failed to daemonize\n");
+			return 1;
+		}
+		/* After daemonization, we're in the child process */
+		/* Parent has already exited, child continues here */
+	}
+	
 	/* Initialize WebSocket server if enabled */
 	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
 		if (!BarWebsocketInit(&app)) {
@@ -602,6 +613,11 @@ int main (int argc, char **argv) {
 	/* Cleanup WebSocket server */
 	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
 		BarWebsocketDestroy(&app);
+	}
+	
+	/* Remove PID file if we created one */
+	if (app.settings.uiMode == BAR_UI_MODE_WEB) {
+		BarDaemonRemovePidFile(&app);
 	}
 	#endif
 	

@@ -232,11 +232,25 @@ Configuration
 
 Add these settings to your ``~/.config/pianobar/config``::
 
-	ui_mode = websocket
+	ui_mode = both
 	websocket_port = 8080
 	webui_path = ./dist/webui
 
-Then start pianobar and open ``http://localhost:8080`` in your browser.
+UI mode options:
+
+- ``cli``: Command-line interface only, no WebSocket
+- ``web``: Web-only (daemonizes, runs in background)
+- ``both``: Both CLI and WebSocket (default, runs in foreground)
+
+When using ``web`` mode, pianobar runs as a daemon and you should specify::
+
+	ui_mode = web
+	websocket_port = 8080
+	webui_path = ./dist/webui
+	pid_file = /tmp/pianobar.pid
+	log_file = /tmp/pianobar.log
+
+Then start pianobar and it will run in the background. Open ``http://localhost:8080`` in your browser.
 
 Included Web UI
 +++++++++++++++

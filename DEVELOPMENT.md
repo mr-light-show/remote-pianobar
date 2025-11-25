@@ -351,6 +351,39 @@ webui_path = ./dist/webui
 log_file = /tmp/pianobar.log
 ```
 
+#### Daemon Mode (Headless)
+
+For running pianobar as a background service:
+
+```ini
+# ~/.config/pianobar/config
+user = your_email@example.com
+password = your_password
+
+# Daemon mode
+ui_mode = web
+websocket_port = 8080
+websocket_host = 0.0.0.0
+webui_enabled = 1
+webui_path = ./dist/webui
+
+# Required for daemon mode
+pid_file = /tmp/pianobar.pid
+log_file = /tmp/pianobar.log
+```
+
+Start as daemon:
+```bash
+./pianobar
+# Returns to command line immediately
+# Web interface: http://localhost:8080/
+```
+
+Stop daemon:
+```bash
+kill $(cat /tmp/pianobar.pid)
+```
+
 ### 2. Development Mode (Hot Reload)
 
 **Terminal 1:** Run Pianobar with WebSocket

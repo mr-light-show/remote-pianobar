@@ -125,13 +125,22 @@ These options are only available when pianobar is compiled with `WEBSOCKET_ENABL
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `ui_mode` | `both` | UI mode: `cli` (CLI only), `web` (headless), or `both` |
+| `ui_mode` | `both` | UI mode: `cli` (CLI only), `web` (headless daemon), or `both` (CLI+WebSocket) |
 | `websocket_port` | (none) | WebSocket server port (e.g., `9001`) - **required** for web UI |
 | `websocket_host` | `127.0.0.1` | WebSocket bind address (use `0.0.0.0` for all interfaces) |
 | `webui_enabled` | `false` | Enable built-in web UI server |
 | `webui_path` | (none) | Custom path to web UI files (defaults to built-in) |
 | `pid_file` | (none) | Path to PID file for daemon mode |
 | `log_file` | (none) | Path to log file for daemon mode |
+
+**Note on `ui_mode` values:**
+- `cli`: Traditional command-line interface only, WebSocket disabled
+- `web`: Headless web-only mode - pianobar daemonizes and runs in background, returning control to shell
+- `both`: Both CLI and WebSocket enabled, runs in foreground (default)
+
+When using `ui_mode = web`, you should also configure:
+- `pid_file`: Location to write process ID (for managing the daemon)
+- `log_file`: Location for log output (since stdout/stderr are redirected)
 
 ### Web UI Example Configuration
 
