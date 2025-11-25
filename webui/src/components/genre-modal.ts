@@ -53,7 +53,7 @@ export class GenreModal extends ModalBase {
   }
   
   static styles = [
-    ModalBase.styles,
+    ...ModalBase.styles,
     css`
     .category-list {
       display: flex;

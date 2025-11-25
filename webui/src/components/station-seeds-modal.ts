@@ -2,11 +2,6 @@ import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
 
-interface Station {
-  id: string;
-  name: string;
-}
-
 interface ArtistSeed {
   seedId: string;
   name: string;
@@ -96,7 +91,7 @@ export class StationSeedsModal extends ModalBase {
   }
   
   static override styles = [
-    ModalBase.styles,
+    ...ModalBase.styles,
     css`
     .modal {
       max-width: 700px;

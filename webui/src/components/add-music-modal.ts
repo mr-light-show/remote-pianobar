@@ -125,7 +125,7 @@ export class AddMusicModal extends ModalBase {
   }
   
   static styles = [
-    ModalBase.styles,
+    ...ModalBase.styles,
     css`
     .modal {
       max-width: 500px;

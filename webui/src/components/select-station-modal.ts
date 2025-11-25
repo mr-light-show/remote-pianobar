@@ -39,7 +39,7 @@ export class SelectStationModal extends ModalBase {
   }
   
   static styles = [
-    ModalBase.styles,
+    ...ModalBase.styles,
     css`
     .modal {
       max-height: 60vh;

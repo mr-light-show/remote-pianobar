@@ -66,7 +66,7 @@ export class RenameStationModal extends ModalBase {
   }
   
   static styles = [
-    ModalBase.styles,
+    ...ModalBase.styles,
     css`
     .modal {
       max-width: 500px;

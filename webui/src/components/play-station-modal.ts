@@ -16,7 +16,7 @@ export class PlayStationModal extends ModalBase {
   }
   
   static styles = [
-    ModalBase.styles,
+    ...ModalBase.styles,
     css`
     .modal {
       max-width: 400px;

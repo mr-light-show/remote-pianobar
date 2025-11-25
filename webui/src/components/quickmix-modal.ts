@@ -55,7 +55,7 @@ export class QuickMixModal extends ModalBase {
     }));
   }
   
-  static styles = [ModalBase.styles];
+  static styles = [...ModalBase.styles];
   
   render() {
     // Filter out the QuickMix station itself
