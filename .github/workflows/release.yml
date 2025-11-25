@@ -3,6 +3,9 @@ name: Build and Release
 on:
   release:
     types: [created, published]
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags
   pull_request:
     branches: [main, websocket-feature]
   workflow_dispatch:  # Allow manual triggers
@@ -121,8 +124,8 @@ jobs:
           VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
           dpkg-deb --build package pianobar-websockets_${VERSION}_amd64.deb
           
-      - name: Upload artifact for PRs
-        if: github.event_name == 'pull_request'
+      - name: Upload artifact for PRs and tags
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: pianobar-websockets-ubuntu22.04
@@ -314,8 +317,8 @@ jobs:
             hdiutil create -volname "Pianobar WebSockets" -srcfolder "${APP_NAME}" -ov -format UDZO "${DMG_NAME}"
           fi
           
-      - name: Upload artifact for PRs
-        if: github.event_name == 'pull_request'
+      - name: Upload artifact for PRs and tags
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: pianobar-websockets-macos14
