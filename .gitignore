@@ -17,3 +17,8 @@ dist/
 
 # Agent context and plans
 .claude/
+
+# Debug and session logs
+*.lldb
+pianobar-session-*.log
+pianobar-crash-*.log
