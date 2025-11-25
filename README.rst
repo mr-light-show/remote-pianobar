@@ -1,6 +1,10 @@
 pianobar
 ========
 
+.. image:: https://github.com/mr-light-show/pianobar-websockets/actions/workflows/release.yml/badge.svg
+   :target: https://github.com/mr-light-show/pianobar-websockets/actions
+   :alt: Build Status
+
 pianobar is a free/open-source, console-based client for the personalized
 online radio Pandora_.
 

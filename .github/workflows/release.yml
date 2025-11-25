@@ -1,0 +1,332 @@
+name: Build and Release
+
+on:
+  release:
+    types: [created, published]
+  pull_request:
+    branches: [main, websocket-feature]
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  build-ubuntu:
+    name: Build Ubuntu 22.04 Package
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libao-dev \
+            libcurl4-openssl-dev \
+            libgcrypt20-dev \
+            libjson-c-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavutil-dev \
+            libswresample-dev \
+            libwebsockets-dev \
+            nodejs \
+            npm
+      
+      - name: Build pianobar with WebSocket
+        run: |
+          make WEBSOCKET=1 clean
+          make WEBSOCKET=1
+          
+      - name: Build Web UI
+        run: |
+          cd webui
+          npm ci
+          npm run build
+          cd ..
+          
+      - name: Create package structure
+        run: |
+          mkdir -p package/usr/local/bin
+          mkdir -p package/usr/local/share/pianobar/webui
+          mkdir -p package/usr/local/share/doc/pianobar
+          mkdir -p package/usr/local/share/man/man1
+          mkdir -p package/DEBIAN
+          
+          # Copy binary
+          cp pianobar package/usr/local/bin/
+          
+          # Copy web UI
+          cp -r dist/webui/* package/usr/local/share/pianobar/webui/
+          
+          # Copy documentation
+          cp README.rst package/usr/local/share/doc/pianobar/
+          cp config.md package/usr/local/share/doc/pianobar/
+          cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
+          cp README_TESTING.md package/usr/local/share/doc/pianobar/
+          cp -r contrib package/usr/local/share/doc/pianobar/
+          
+          # Copy man page
+          cp contrib/pianobar.1 package/usr/local/share/man/man1/
+          
+      - name: Create Debian control file
+        run: |
+          cat > package/DEBIAN/control << EOF
+          Package: pianobar-websockets
+          Version: $(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Depends: libao4, libcurl4, libgcrypt20, libjson-c5, libavcodec58 | libavcodec59 | libavcodec60, libavformat58 | libavformat59 | libavformat60, libwebsockets16 | libwebsockets17 | libwebsockets19
+          Maintainer: Pianobar WebSockets <pianobar-websockets@github.com>
+          Homepage: https://github.com/mr-light-show/pianobar-websockets
+          Description: Console-based client for Pandora with WebSocket support
+           Pianobar is a free/open-source, console-based client for Pandora.
+           This fork adds WebSocket support for building custom UIs (web, mobile, desktop).
+           .
+           Features:
+            - Play and manage stations
+            - Rate songs and explain why they were selected
+            - WebSocket API for custom UIs
+            - Modern web interface included
+            - Remote control via WebSocket
+          EOF
+          
+      - name: Create post-install script
+        run: |
+          cat > package/DEBIAN/postinst << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          # Create config directory for users
+          echo "Pianobar with WebSocket support installed successfully!"
+          echo ""
+          echo "To configure pianobar, create ~/.config/pianobar/config"
+          echo "Example configuration: /usr/local/share/doc/pianobar/contrib/config-example"
+          echo ""
+          echo "For WebSocket/Web UI setup, see:"
+          echo "  /usr/local/share/doc/pianobar/README.rst"
+          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo ""
+          echo "Web UI files are located at: /usr/local/share/pianobar/webui"
+          
+          exit 0
+          EOF
+          
+          chmod 755 package/DEBIAN/postinst
+          
+      - name: Build .deb package
+        run: |
+          VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
+          dpkg-deb --build package pianobar-websockets_${VERSION}_amd64.deb
+          
+      - name: Upload artifact for PRs
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pianobar-websockets-ubuntu22.04
+          path: pianobar-websockets_*.deb
+          retention-days: 30
+          
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: pianobar-websockets_*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: Build macOS 14 Package
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install \
+            libao \
+            curl \
+            libgcrypt \
+            json-c \
+            ffmpeg \
+            libwebsockets \
+            node \
+            create-dmg
+      
+      - name: Build pianobar with WebSocket
+        run: |
+          make WEBSOCKET=1 clean
+          make WEBSOCKET=1
+          
+      - name: Build Web UI
+        run: |
+          cd webui
+          npm ci
+          npm run build
+          cd ..
+          
+      - name: Create app bundle structure
+        run: |
+          VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
+          APP_NAME="Pianobar-WebSockets-${VERSION}"
+          
+          mkdir -p "${APP_NAME}/bin"
+          mkdir -p "${APP_NAME}/share/pianobar/webui"
+          mkdir -p "${APP_NAME}/share/doc/pianobar"
+          mkdir -p "${APP_NAME}/share/man/man1"
+          
+          # Copy binary
+          cp pianobar "${APP_NAME}/bin/"
+          
+          # Copy web UI
+          cp -r dist/webui/* "${APP_NAME}/share/pianobar/webui/"
+          
+          # Copy documentation
+          cp README.rst "${APP_NAME}/share/doc/pianobar/"
+          cp config.md "${APP_NAME}/share/doc/pianobar/"
+          cp DEVELOPMENT.md "${APP_NAME}/share/doc/pianobar/"
+          cp README_TESTING.md "${APP_NAME}/share/doc/pianobar/"
+          cp -r contrib "${APP_NAME}/share/doc/pianobar/"
+          
+          # Copy man page
+          cp contrib/pianobar.1 "${APP_NAME}/share/man/man1/"
+          
+          # Create installation instructions
+          cat > "${APP_NAME}/INSTALL.txt" << 'EOF'
+          Pianobar with WebSocket Support
+          ================================
+          
+          Installation:
+          
+          1. Copy the 'bin/pianobar' binary to a location in your PATH:
+             sudo cp bin/pianobar /usr/local/bin/
+          
+          2. Copy the web UI files:
+             sudo mkdir -p /usr/local/share/pianobar
+             sudo cp -r share/pianobar/webui /usr/local/share/pianobar/
+          
+          3. (Optional) Install documentation:
+             sudo cp -r share/doc/pianobar /usr/local/share/doc/
+             sudo cp share/man/man1/pianobar.1 /usr/local/share/man/man1/
+          
+          Configuration:
+          
+          1. Create config directory:
+             mkdir -p ~/.config/pianobar
+          
+          2. Create config file (~/.config/pianobar/config):
+             user = your_email@example.com
+             password = your_password
+             
+             # WebSocket settings
+             ui_mode = both
+             websocket_port = 8080
+             webui_path = /usr/local/share/pianobar/webui
+          
+          3. Run pianobar:
+             pianobar
+          
+          4. Open web interface:
+             http://localhost:8080
+          
+          For more information, see share/doc/pianobar/README.rst
+          
+          Dependencies:
+          
+          If you installed via Homebrew, dependencies should already be installed.
+          Otherwise, install:
+            brew install libao curl libgcrypt json-c ffmpeg libwebsockets
+          EOF
+          
+          # Create simple install script
+          cat > "${APP_NAME}/install.sh" << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          echo "Installing Pianobar with WebSocket support..."
+          echo ""
+          
+          # Check for sudo
+          if [ "$EUID" -ne 0 ]; then
+            echo "This script needs sudo privileges to install to /usr/local"
+            echo "You may be prompted for your password."
+            echo ""
+          fi
+          
+          # Install binary
+          sudo cp bin/pianobar /usr/local/bin/
+          echo "✓ Installed binary to /usr/local/bin/pianobar"
+          
+          # Install web UI
+          sudo mkdir -p /usr/local/share/pianobar
+          sudo cp -r share/pianobar/webui /usr/local/share/pianobar/
+          echo "✓ Installed web UI to /usr/local/share/pianobar/webui"
+          
+          # Install documentation
+          sudo mkdir -p /usr/local/share/doc
+          sudo cp -r share/doc/pianobar /usr/local/share/doc/
+          echo "✓ Installed documentation to /usr/local/share/doc/pianobar"
+          
+          # Install man page
+          sudo mkdir -p /usr/local/share/man/man1
+          sudo cp share/man/man1/pianobar.1 /usr/local/share/man/man1/
+          echo "✓ Installed man page"
+          
+          echo ""
+          echo "Installation complete!"
+          echo ""
+          echo "Next steps:"
+          echo "1. Create config directory: mkdir -p ~/.config/pianobar"
+          echo "2. Create config file: ~/.config/pianobar/config"
+          echo "3. See share/doc/pianobar/contrib/config-example for configuration examples"
+          echo "4. Run: pianobar"
+          echo ""
+          EOF
+          
+          chmod +x "${APP_NAME}/install.sh"
+          
+      - name: Create DMG
+        run: |
+          VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
+          APP_NAME="Pianobar-WebSockets-${VERSION}"
+          DMG_NAME="pianobar-websockets_${VERSION}_macos14.dmg"
+          
+          create-dmg \
+            --volname "Pianobar WebSockets" \
+            --volicon "contrib/pianobar.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --text-size 12 \
+            --app-drop-link 600 185 \
+            "${DMG_NAME}" \
+            "${APP_NAME}" \
+            || true
+          
+          # Fallback if create-dmg fails (missing icon, etc)
+          if [ ! -f "${DMG_NAME}" ]; then
+            echo "create-dmg failed, using hdiutil instead..."
+            hdiutil create -volname "Pianobar WebSockets" -srcfolder "${APP_NAME}" -ov -format UDZO "${DMG_NAME}"
+          fi
+          
+      - name: Upload artifact for PRs
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pianobar-websockets-macos14
+          path: pianobar-websockets_*.dmg
+          retention-days: 30
+          
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: pianobar-websockets_*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
