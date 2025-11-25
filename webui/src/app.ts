@@ -14,6 +14,7 @@ import './components/create-station-modal';
 import './components/play-station-modal';
 import './components/select-station-modal';
 import './components/genre-modal';
+import './components/add-music-modal';
 import './components/song-actions-menu';
 import './components/info-menu';
 
@@ -48,6 +49,7 @@ export class PianobarApp extends LitElement {
   @state() private genreLoading = false;
   @state() private searchResults: any = { categories: [] };
   @state() private searchLoading = false;
+  @state() private addMusicModalOpen = false;
   
   static styles = css`
     :host {
@@ -492,6 +494,30 @@ export class PianobarApp extends LitElement {
     this.genreLoading = false;
   }
   
+  handleInfoAddMusic() {
+    this.addMusicModalOpen = true;
+  }
+  
+  handleAddMusicSearch(e: CustomEvent) {
+    this.searchLoading = true;
+    this.socket.emit('music.search', { query: e.detail.query });
+  }
+  
+  handleAddMusicSubmit(e: CustomEvent) {
+    const { musicId, stationId } = e.detail;
+    this.socket.emit('station.addMusic', { musicId, stationId });
+    this.addMusicModalOpen = false;
+    this.searchResults = { categories: [] };
+    this.searchLoading = false;
+    this.showToast('Adding music to station...');
+  }
+  
+  handleAddMusicCancel() {
+    this.addMusicModalOpen = false;
+    this.searchResults = { categories: [] };
+    this.searchLoading = false;
+  }
+  
   showToast(message: string) {
     const toast = document.createElement('toast-notification') as any;
     toast.message = message;
@@ -551,6 +577,7 @@ export class PianobarApp extends LitElement {
             @info-upcoming=${this.handleInfoUpcoming}
             @info-quickmix=${this.handleInfoQuickMix}
             @info-create-station=${this.handleInfoCreateStation}
+            @info-add-music=${this.handleInfoAddMusic}
             @info-add-genre=${this.handleInfoAddGenre}
             @info-delete-station=${this.handleInfoDeleteStation}
           ></info-menu>
@@ -618,6 +645,7 @@ export class PianobarApp extends LitElement {
           @info-upcoming=${this.handleInfoUpcoming}
           @info-quickmix=${this.handleInfoQuickMix}
           @info-create-station=${this.handleInfoCreateStation}
+          @info-add-music=${this.handleInfoAddMusic}
           @info-add-genre=${this.handleInfoAddGenre}
           @info-delete-station=${this.handleInfoDeleteStation}
         ></bottom-toolbar>
@@ -667,6 +695,16 @@ export class PianobarApp extends LitElement {
           @create=${this.handleGenreCreate}
           @cancel=${this.handleGenreCancel}
         ></genre-modal>
+        
+        <add-music-modal
+          ?open="${this.addMusicModalOpen}"
+          ?loading="${this.searchLoading}"
+          .stations="${this.stations}"
+          .searchResults="${this.searchResults}"
+          @search=${this.handleAddMusicSearch}
+          @add-music=${this.handleAddMusicSubmit}
+          @cancel=${this.handleAddMusicCancel}
+        ></add-music-modal>
         
       ` : html`
         <reconnect-button 

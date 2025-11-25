@@ -128,6 +128,11 @@ export class InfoMenu extends LitElement {
     this.closeMenu();
   }
   
+  handleAddMusic() {
+    this.dispatchEvent(new CustomEvent('info-add-music'));
+    this.closeMenu();
+  }
+  
   handleDeleteStation() {
     this.dispatchEvent(new CustomEvent('info-delete-station'));
     this.closeMenu();
@@ -156,6 +161,10 @@ export class InfoMenu extends LitElement {
         <button class="action-button" @click=${this.handleCreateStation}>
           <span class="material-icons">add_circle</span>
           <span>Create Station</span>
+        </button>
+        <button class="action-button" @click=${this.handleAddMusic}>
+          <span class="material-icons">library_add</span>
+          <span>Add Music to Station</span>
         </button>
         <button class="action-button" @click=${this.handleAddGenre}>
           <span class="material-icons">library_music</span>

@@ -105,5 +105,8 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, struct json_object *data);
 void BarSocketIoHandleSearchMusic(BarApp_t *app, struct json_object *data);
 void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searchResult);
 
+/* Handle 'station.addMusic' with musicId and stationId */
+void BarSocketIoHandleAddMusic(BarApp_t *app, struct json_object *data);
+
 #endif /* _SOCKETIO_H */
 

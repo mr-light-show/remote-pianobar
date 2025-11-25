@@ -71,7 +71,7 @@ static inline void BarUiDoSkipSong (player_t * const player) {
  *	@param transform this station
  *	@return 0 = error, 1 = everything went well
  */
-static int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 

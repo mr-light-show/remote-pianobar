@@ -27,8 +27,9 @@ THE SOFTWARE.
 #include "socketio.h"
 #include "../core/websocket.h"
 
-/* Forward declare ui_act function to avoid full header include */
+/* Forward declare ui_act functions to avoid full header include */
 extern void BarUiSwitchStation(BarApp_t *app, PianoStation_t *station);
+extern int BarTransformIfShared(BarApp_t *app, PianoStation_t *station);
 
 #include <stdlib.h>
 #include <string.h>
@@ -253,6 +254,9 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	} else if (strcmp(eventName, "music.search") == 0) {
 		/* Search for music (artists/songs) */
 		BarSocketIoHandleSearchMusic(app, data);
+	} else if (strcmp(eventName, "station.addMusic") == 0) {
+		/* Add music to station */
+		BarSocketIoHandleAddMusic(app, data);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
 	}
@@ -690,6 +694,62 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
 		BarSocketIoEmitStations(app);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to create genre station\n");
+	}
+}
+
+/* Handle 'station.addMusic' event from client */
+void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataAddSeed_t reqData;
+	json_object *musicIdObj, *stationIdObj;
+	const char *musicId, *stationId;
+	PianoStation_t *station;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract musicId and stationId from data */
+	if (!json_object_object_get_ex(data, "musicId", &musicIdObj) ||
+	    !json_object_object_get_ex(data, "stationId", &stationIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - missing musicId or stationId\n");
+		return;
+	}
+	
+	musicId = json_object_get_string(musicIdObj);
+	stationId = json_object_get_string(stationIdObj);
+	
+	if (!musicId || !stationId) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - invalid musicId or stationId\n");
+		return;
+	}
+	
+	/* Find the station */
+	station = PianoFindStationById(app->ph.stations, stationId);
+	if (!station) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - station not found\n");
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Adding music to station: %s\n", station->name);
+	
+	/* Check if station is shared (QuickMix) and transform if needed */
+	if (!BarTransformIfShared(app, station)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - failed to transform shared station\n");
+		return;
+	}
+	
+	/* Set up request data */
+	reqData.musicId = (char *)musicId;
+	reqData.station = station;
+	
+	/* Add music to station */
+	if (BarUiPianoCall(app, PIANO_REQUEST_ADD_SEED, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Music added successfully\n");
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to add music\n");
 	}
 }
 
