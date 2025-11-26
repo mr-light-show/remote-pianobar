@@ -178,11 +178,18 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	json_object *data = NULL;
 	
 	if (!app || !message) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: HandleMessage called with null app or message\n");
 		return;
 	}
 	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: HandleMessage called with: %.100s%s\n", 
+	           message, strlen(message) > 100 ? "..." : "");
+	
 	/* Parse Socket.IO message */
 	type = BarSocketIoParse(message, &eventName, &data);
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Parsed message - type=%d, eventName=%s\n", 
+	           type, eventName ? eventName : "(null)");
 	
 	if (type == SOCKETIO_CONNECT) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
@@ -332,23 +339,32 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 	char *message;
 	
 	if (!event) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit called with null event\n");
 		return;
 	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
 	
 	message = BarSocketIoFormat(event, data);
 	if (!message) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to format message\n");
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to format message for event '%s'\n", event);
 		return;
 	}
 	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Formatted message (len=%zu): %.100s%s\n", 
+	           strlen(message), message, strlen(message) > 100 ? "..." : "");
+	
 	/* Broadcast to all clients if callback is set */
 	if (g_broadcastCallback) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Calling broadcast callback\n");
 		g_broadcastCallback(message, strlen(message));
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Broadcast callback returned\n");
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
 	}
 	
 	free(message);
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
 /* Emit 'start' event (song started) */
@@ -476,8 +492,11 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	json_object *data, *song;
 	
 	if (!app) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
 		return;
 	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess starting\n");
 	
 	data = json_object_new_object();
 	json_object_object_add(data, "playing", 
@@ -529,8 +548,11 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 		json_object_object_add(data, "song", song);
 	}
 	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
 	BarSocketIoEmit("process", data);
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
 	json_object_put(data);
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
 }
 
 /* Emit 'song.explanation' event (explanation text) */

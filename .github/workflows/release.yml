@@ -3,6 +3,7 @@ name: Build and Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
   workflow_dispatch:  # Allow manual triggers
 
 jobs:

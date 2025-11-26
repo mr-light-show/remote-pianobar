@@ -295,9 +295,14 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 	case MSG_TYPE_BROADCAST_PROGRESS: {
 		/* Progress update - data contains elapsed time (unsigned int) */
 		if (msg->data && msg->dataLen >= sizeof(unsigned int) * 2) {
-			unsigned int *times = (unsigned int *)msg->data;
+			/* ARM64 FIX: Use memcpy to avoid unaligned access */
+			unsigned int times[2];
+			memcpy(times, msg->data, sizeof(times));
 			unsigned int elapsed = times[0];
 			unsigned int duration = times[1];
+			
+			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Progress broadcast - elapsed=%u, duration=%u\n", 
+			           elapsed, duration);
 			
 			/* We can't access BarApp_t here, but we can call SocketIO directly
 			 * since it uses the global broadcast callback */
@@ -320,7 +325,10 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 		case MSG_TYPE_BROADCAST_VOLUME: {
 			/* Volume changed - data contains volume (int) */
 			if (msg->data && msg->dataLen >= sizeof(int)) {
-				int volume = *(int *)msg->data;
+				/* ARM64 FIX: Use memcpy to avoid unaligned access */
+				int volume;
+				memcpy(&volume, msg->data, sizeof(volume));
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Volume broadcast - volume=%d\n", volume);
 				/* TODO: Emit volume event */
 			}
 			break;
@@ -689,40 +697,48 @@ void BarWebsocketBroadcastProgress(BarApp_t *app) {
 /* Broadcast message to all connected WebSocket clients */
 static void BarWebsocketBroadcast(const char *message, size_t len) {
 	if (!g_wsContext || !message || len == 0) {
+		debugPrint(DEBUG_WEBSOCKET, "WebSocket: Broadcast called with null/empty message\n");
 		return;
 	}
 	
 	BarWsContext_t *ctx = g_wsContext;
 	
-	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Broadcasting to %zu clients (%zu bytes): %s\n", 
-	           ctx->numConnections, len, message);
+	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Broadcasting to %zu clients (%zu bytes): %.100s%s\n", 
+	           ctx->numConnections, len, message, len > 100 ? "..." : "");
 	
 	/* Iterate through all connected clients */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
 		if (ctx->connections[i].wsi != NULL) {
 			struct lws *wsi = (struct lws *)ctx->connections[i].wsi;
 			
+			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Sending to client %zu (wsi=%p)\n", i, wsi);
+			
 			/* Allocate buffer with LWS_PRE padding */
 			unsigned char *buf = malloc(LWS_PRE + len);
 			if (!buf) {
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Failed to allocate buffer for client %zu\n", i);
 				continue;
 			}
 			
 			/* Copy message after LWS_PRE padding */
 			memcpy(&buf[LWS_PRE], message, len);
 			
+			debugPrint(DEBUG_WEBSOCKET, "WebSocket: About to call lws_write (len=%zu)\n", len);
+			
 			/* Send to this client */
 			int written = lws_write(wsi, &buf[LWS_PRE], len, LWS_WRITE_TEXT);
 			
 			if (written < 0) {
-				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Failed to send to client %zu\n", i);
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: lws_write failed for client %zu (error=%d)\n", i, written);
 			} else {
-				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Sent %d bytes to client %zu\n", written, i);
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: lws_write succeeded for client %zu (%d bytes)\n", i, written);
 			}
 			
 			free(buf);
 		}
 	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Broadcast complete\n");
 }
 
 /* Handle incoming WebSocket message */
