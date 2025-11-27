@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Socket.IO Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        #status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        #status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        #output {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #4CAF50;
+        }
+        .message.received {
+            border-left-color: #2196F3;
+        }
+        .message.sent {
+            border-left-color: #FF9800;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Socket.IO Test Client - Pianobar</h1>
+        
+        <div id="status" class="disconnected">Disconnected</div>
+        
+        <div class="controls">
+            <h3>Connection:</h3>
+            <input type="text" id="serverUrl" value="ws://localhost:8080" style="width: 300px;" />
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+        
+        <div class="controls">
+            <h3>Query Commands:</h3>
+            <button onclick="sendQuery()">Query State</button>
+            <button onclick="sendQueryStations()">Query Stations</button>
+        </div>
+        
+        <div class="controls">
+            <h3>Playback Commands:</h3>
+            <button onclick="sendAction('playback.toggle')">Play/Pause</button>
+            <button onclick="sendAction('playback.next')">Next Song</button>
+            <button onclick="sendAction('playback.play')">Resume</button>
+            <button onclick="sendAction('playback.pause')">Pause</button>
+        </div>
+        
+        <div class="controls">
+            <h3>Song Commands:</h3>
+            <button onclick="sendAction('song.love')">❤️ Love Song</button>
+            <button onclick="sendAction('song.ban')">🚫 Ban Song</button>
+            <button onclick="sendAction('song.tired')">😴 Tired of Song</button>
+        </div>
+        
+        <div class="controls">
+            <h3>Volume Commands:</h3>
+            <button onclick="sendAction('volume.up')">🔊 Volume Up</button>
+            <button onclick="sendAction('volume.down')">🔉 Volume Down</button>
+            <button onclick="sendAction('volume.reset')">↩️ Reset Volume</button>
+        </div>
+        
+        <div id="serverMessages" style="background: #fff3cd; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #ffc107;">
+            <h3 style="margin: 0 0 10px 0;">📡 Server Messages</h3>
+            <div id="serverMessageList" style="font-size: 14px; max-height: 150px; overflow-y: auto;">
+                <em style="color: #666;">Waiting for messages from server...</em>
+            </div>
+        </div>
+        
+        <div id="nowPlaying" style="display: none; background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 5px;">
+            <h3 style="margin: 0 0 10px 0;">Now Playing</h3>
+            <div id="songInfo" style="font-size: 16px; margin-bottom: 10px;">
+                <strong id="songTitle">-</strong> by <span id="songArtist">-</span>
+            </div>
+            <div id="progressBar" style="background: #ddd; height: 20px; border-radius: 10px; overflow: hidden;">
+                <div id="progressFill" style="background: #4CAF50; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            </div>
+            <div id="progressText" style="margin-top: 5px; font-size: 12px; color: #666;">0:00 / 0:00</div>
+        </div>
+        
+        <h3>Output:</h3>
+        <div id="output"></div>
+        <button onclick="clearOutput()">Clear Output</button>
+    </div>
+    
+    <script>
+        let ws = null;
+        
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const div = document.createElement('div');
+            div.className = 'message ' + type;
+            div.textContent = new Date().toLocaleTimeString() + ' - ' + message;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+        
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            if (connected) {
+                status.textContent = 'Connected';
+                status.className = 'connected';
+            } else {
+                status.textContent = 'Disconnected';
+                status.className = 'disconnected';
+            }
+        }
+        
+        function connect() {
+            const url = document.getElementById('serverUrl').value;
+            log('Connecting to ' + url + '...');
+            
+            try {
+                ws = new WebSocket(url, 'socketio');
+                
+                ws.onopen = function() {
+                    log('✓ Connected!');
+                    updateStatus(true);
+                    // Send Socket.IO connect message
+                    ws.send('0');
+                    log('Sent: 0 (CONNECT)', 'sent');
+                };
+                
+                ws.onmessage = function(event) {
+                    log('Received: ' + event.data, 'received');
+                    
+                    // Parse and handle Socket.IO events
+                    try {
+                        if (event.data.startsWith('2[')) {
+                            const json = event.data.substring(1); // Remove '2' packet type
+                            const arr = JSON.parse(json);
+                            const eventName = arr[0];
+                            const data = arr[1];
+                            
+                            handleSocketEvent(eventName, data);
+                        }
+                    } catch (e) {
+                        log('Parse error: ' + e.message);
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    log('✗ Error: ' + error.message);
+                };
+                
+                ws.onclose = function() {
+                    log('✗ Disconnected');
+                    updateStatus(false);
+                    ws = null;
+                };
+            } catch (e) {
+                log('✗ Connection error: ' + e.message);
+                updateStatus(false);
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                log('Disconnected by user');
+                updateStatus(false);
+            }
+        }
+        
+        function sendMessage(message) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('✗ Not connected!');
+                return false;
+            }
+            ws.send(message);
+            log('Sent: ' + message, 'sent');
+            return true;
+        }
+        
+        function sendQuery() {
+            sendMessage('2["query"]');
+        }
+        
+        function sendQueryStations() {
+            sendMessage('2["query.stations"]');
+        }
+        
+        function sendAction(action) {
+            sendMessage('2["action","' + action + '"]');
+        }
+        
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+        
+        function logServerMessage(eventName, data) {
+            const list = document.getElementById('serverMessageList');
+            const div = document.createElement('div');
+            div.style.padding = '5px 0';
+            div.style.borderBottom = '1px solid #eee';
+            
+            const time = new Date().toLocaleTimeString();
+            const emoji = {
+                'start': '▶️',
+                'stop': '⏹️',
+                'progress': '⏱️',
+                'process': '📊',
+                'stations': '📻',
+                'volume': '🔊'
+            }[eventName] || '📨';
+            
+            // Handle undefined data (e.g., stop event has no payload)
+            const dataStr = data ? JSON.stringify(data).substring(0, 100) : '(no data)';
+            div.innerHTML = '<strong>' + time + '</strong> ' + emoji + ' <code>' + eventName + '</code>: ' + dataStr;
+            
+            list.insertBefore(div, list.firstChild);
+            
+            // Keep only last 10 messages
+            while (list.children.length > 10) {
+                list.removeChild(list.lastChild);
+            }
+        }
+        
+        function handleSocketEvent(eventName, data) {
+            logServerMessage(eventName, data);
+            
+            const nowPlaying = document.getElementById('nowPlaying');
+            
+            if (eventName === 'start') {
+                // Show now playing section
+                nowPlaying.style.display = 'block';
+                
+                // Update song info
+                document.getElementById('songTitle').textContent = data.title || '-';
+                document.getElementById('songArtist').textContent = data.artist || '-';
+                
+                log('▶ Now Playing: ' + data.artist + ' - ' + data.title, 'received');
+                
+            } else if (eventName === 'stop') {
+                // Hide now playing section
+                nowPlaying.style.display = 'none';
+                log('⏹ Playback stopped', 'received');
+                
+            } else if (eventName === 'progress') {
+                // Update progress bar
+                const percentage = data.percentage || 0;
+                document.getElementById('progressFill').style.width = percentage + '%';
+                
+                // Update time display
+                const elapsed = formatTime(data.elapsed || 0);
+                const duration = formatTime(data.duration || 0);
+                document.getElementById('progressText').textContent = elapsed + ' / ' + duration;
+                
+                // Only log every 5 seconds to avoid spam
+                if (data.elapsed % 5 === 0) {
+                    log('⏱ Progress: ' + elapsed + ' / ' + duration + ' (' + 
+                        percentage.toFixed(1) + '%)', 'received');
+                }
+                
+            } else if (eventName === 'stations') {
+                log('📻 Received ' + (data ? data.length : 0) + ' stations', 'received');
+                
+            } else if (eventName === 'process') {
+                log('📊 State: playing=' + data.playing + ', station=' + 
+                    (data.station || 'none'), 'received');
+            }
+        }
+        
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return mins + ':' + (secs < 10 ? '0' : '') + secs;
+        }
+        
+        // Log initial state
+        log('Socket.IO Test Client ready');
+        log('Instructions: 1) Click Connect 2) Try sending commands');
+    </script>
+</body>
+</html>
+

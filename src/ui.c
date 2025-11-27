@@ -422,7 +422,7 @@ static int BarStationCmpQuickmix10NameZA (const void *a, const void *b) {
  *	@param stations
  *	@return NULL-terminated array with sorted stations
  */
-static PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
+PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
 		size_t *retStationCount, BarStationSorting_t order) {
 	static const BarSortFunc_t orderMapping[] = {BarStationNameAZCmp,
 			BarStationNameZACmp,
@@ -817,21 +817,21 @@ size_t BarUiListSongs (const BarApp_t * const app,
 				stationName = deleted;
 			}
 
-			char outstr[512], digits[8], duration[8] = "??:??";
-			const char *vals[] = {digits, song->artist, song->title,
-					ratingToIcon (settings, song),
-					duration,
-					stationName != empty ? settings->atIcon : "",
-					stationName,
-					};
+		char outstr[512], digits[8], duration[16] = "??:??";
+		const char *vals[] = {digits, song->artist, song->title,
+				ratingToIcon (settings, song),
+				duration,
+				stationName != empty ? settings->atIcon : "",
+				stationName,
+				};
 
-			/* pre-format a few strings */
-			snprintf (digits, sizeof (digits) / sizeof (*digits), "%2zu", i);
-			const unsigned int length = song->length;
-			if (length > 0) {
-				snprintf (duration, sizeof (duration), "%02u:%02u",
-						length / 60, length % 60);
-			}
+		/* pre-format a few strings */
+		snprintf (digits, sizeof (digits) / sizeof (*digits), "%2zu", i);
+		const unsigned int length = song->length;
+		if (length > 0) {
+			snprintf (duration, sizeof (duration), "%02u:%02u",
+					length / 60, length % 60);
+		}
 
 			BarUiCustomFormat (outstr, sizeof (outstr), settings->listSongFormat,
 					"iatrd@s", vals);

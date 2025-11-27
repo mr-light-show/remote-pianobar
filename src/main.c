@@ -55,6 +55,12 @@ THE SOFTWARE.
 #include "terminal.h"
 #include "ui.h"
 #include "ui_dispatch.h"
+
+#ifdef WEBSOCKET_ENABLED
+#include "websocket/core/websocket.h"
+#include "websocket/protocol/socketio.h"
+#include "websocket/daemon/daemon.h"
+#endif
 #include "ui_readline.h"
 
 /*	authenticate user
@@ -268,6 +274,13 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 				app->curStation, curSong, &app->player, app->ph.stations,
 				PIANO_RET_OK, CURLE_OK);
 
+	#ifdef WEBSOCKET_ENABLED
+	/* Broadcast to WebSocket clients */
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
+		BarWebsocketBroadcastSongStart(app);
+	}
+	#endif
+
 		/* prevent race condition, mode must _not_ be DEAD if
 		 * thread has been started */
 		app->player.mode = PLAYER_WAITING;
@@ -285,6 +298,13 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 	BarUiStartEventCmd (&app->settings, "songfinish", app->curStation,
 			app->playlist, &app->player, app->ph.stations, PIANO_RET_OK,
 			CURLE_OK);
+
+	#ifdef WEBSOCKET_ENABLED
+	/* Broadcast to WebSocket clients */
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
+		BarWebsocketBroadcastSongStop(app);
+	}
+	#endif
 
 	/* FIXME: pthread_join blocks everything if network connection
 	 * is hung up e.g. */
@@ -396,7 +416,66 @@ static void BarMainLoop (BarApp_t *app) {
 			}
 		}
 
-		BarMainHandleUserInput (app);
+		#ifdef WEBSOCKET_ENABLED
+		/* Process WebSocket commands from web clients (queued by WS thread) */
+		if (app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
+			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+			BarWsMessage_t *msg;
+			
+			/* Process all queued commands from WebSocket clients */
+			while ((msg = BarWsQueuePop(&ctx->commandQueue, 0)) != NULL) {
+				if (msg->type == MSG_TYPE_COMMAND_ACTION && msg->data) {
+				/* msg->data contains single-letter command (e.g., "n", "+", "q") 
+				 * or multi-character command with parameter (e.g., "%75" for volume.set) */
+				const char *command = (const char *)msg->data;
+				
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Processing command '%s'\n", command);
+				
+				/* Handle multi-character commands with parameters */
+				if (command[0] == '%' && strlen(command) > 1) {
+				/* Volume set command: "%<db>" */
+				int volume = atoi(&command[1]);
+				/* Clamp to valid range: -40 dB to +20 dB */
+				if (volume < -40) volume = -40;
+				if (volume > 20) volume = 20;
+				
+				app->settings.volume = volume;
+				BarPlayerSetVolume(&app->player);
+				
+				/* Broadcast to all clients */
+				BarSocketIoEmitVolume(app, volume);
+				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %ddB\n", volume);
+				} else {
+					/* Dispatch single-letter command through pianobar's UI system */
+					BarUiDispatch(app, command[0], app->curStation, app->playlist,
+					             false, BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
+					
+					/* Emit updated state for commands that change song state */
+					if (command[0] == '+' || command[0] == '-') {
+						/* Love or ban - emit updated song info with new rating */
+						if (app->playlist) {
+							BarSocketIoEmitStart(app);
+						}
+					}
+				}
+				}
+				BarWsMessageFree(msg);
+			}
+			
+			/* Broadcast progress updates while playing */
+			if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
+				BarWebsocketBroadcastProgress(app);
+			}
+		}
+		#endif
+
+		#ifdef WEBSOCKET_ENABLED
+		if (app->settings.uiMode != BAR_UI_MODE_WEB) {
+		#endif
+			BarMainHandleUserInput (app);
+		#ifdef WEBSOCKET_ENABLED
+		}
+		#endif
 
 		/* show time */
 		if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
@@ -434,9 +513,6 @@ int main (int argc, char **argv) {
 
 	memset (&app, 0, sizeof (app));
 
-	/* save terminal attributes, before disabling echoing */
-	BarTermInit ();
-
 	/* signals */
 	signal (SIGPIPE, SIG_IGN);
 	BarMainSetupSigaction ();
@@ -451,6 +527,27 @@ int main (int argc, char **argv) {
 	BarSettingsInit (&app.settings);
 	BarSettingsRead (&app.settings);
 
+	#ifdef WEBSOCKET_ENABLED
+	/* Daemonize EARLY if running in web-only mode - before any terminal/stdin setup */
+	if (app.settings.uiMode == BAR_UI_MODE_WEB) {
+		if (!BarDaemonize(&app)) {
+			fprintf(stderr, "Failed to daemonize\n");
+			return 1;
+		}
+		/* After daemonization, we're in the child process */
+		/* Parent has already exited, child continues here */
+	}
+	#endif
+
+	/* save terminal attributes, before disabling echoing */
+	#ifdef WEBSOCKET_ENABLED
+	if (app.settings.uiMode != BAR_UI_MODE_WEB) {
+	#endif
+		BarTermInit ();
+	#ifdef WEBSOCKET_ENABLED
+	}
+	#endif
+
 	PianoReturn_t pret;
 	if ((pret = PianoInit (&app.ph, app.settings.partnerUser,
 			app.settings.partnerPassword, app.settings.device,
@@ -460,15 +557,21 @@ int main (int argc, char **argv) {
 		return 0;
 	}
 
-	BarUiMsg (&app.settings, MSG_NONE,
-			"Welcome to " PACKAGE " (" VERSION ")! ");
-	if (app.settings.keys[BAR_KS_HELP] == BAR_KS_DISABLED) {
-		BarUiMsg (&app.settings, MSG_NONE, "\n");
-	} else {
+	#ifdef WEBSOCKET_ENABLED
+	if (app.settings.uiMode != BAR_UI_MODE_WEB) {
+	#endif
 		BarUiMsg (&app.settings, MSG_NONE,
-				"Press %c for a list of commands.\n",
-				app.settings.keys[BAR_KS_HELP]);
+				"Welcome to " PACKAGE " (" VERSION ")! ");
+		if (app.settings.keys[BAR_KS_HELP] == BAR_KS_DISABLED) {
+			BarUiMsg (&app.settings, MSG_NONE, "\n");
+		} else {
+			BarUiMsg (&app.settings, MSG_NONE,
+					"Press %c for a list of commands.\n",
+					app.settings.keys[BAR_KS_HELP]);
+		}
+	#ifdef WEBSOCKET_ENABLED
 	}
+	#endif
 
 	curl_global_init (CURL_GLOBAL_DEFAULT);
 	app.http = curl_easy_init ();
@@ -476,30 +579,51 @@ int main (int argc, char **argv) {
 
 	/* init fds */
 	FD_ZERO(&app.input.set);
-	app.input.fds[0] = STDIN_FILENO;
-	FD_SET(app.input.fds[0], &app.input.set);
 
-	/* open fifo read/write so it won't EOF if nobody writes to it */
-	assert (sizeof (app.input.fds) / sizeof (*app.input.fds) >= 2);
-	app.input.fds[1] = open (app.settings.fifo, O_RDWR);
-	if (app.input.fds[1] != -1) {
-		struct stat s;
+	#ifdef WEBSOCKET_ENABLED
+	if (app.settings.uiMode != BAR_UI_MODE_WEB) {
+	#endif
+		app.input.fds[0] = STDIN_FILENO;
+		FD_SET(app.input.fds[0], &app.input.set);
+		
+		/* open fifo read/write so it won't EOF if nobody writes to it */
+		assert (sizeof (app.input.fds) / sizeof (*app.input.fds) >= 2);
+		app.input.fds[1] = open (app.settings.fifo, O_RDWR);
+		if (app.input.fds[1] != -1) {
+			struct stat s;
+			
+			/* check for file type, must be fifo */
+			fstat (app.input.fds[1], &s);
+			if (!S_ISFIFO (s.st_mode)) {
+				BarUiMsg (&app.settings, MSG_ERR, "File at %s is not a fifo\n", app.settings.fifo);
+				close (app.input.fds[1]);
+				app.input.fds[1] = -1;
+			} else {
+				FD_SET(app.input.fds[1], &app.input.set);
+				BarUiMsg (&app.settings, MSG_INFO, "Control fifo at %s opened\n",
+						app.settings.fifo);
+			}
+		}
+		app.input.maxfd = app.input.fds[0] > app.input.fds[1] ? app.input.fds[0] :
+				app.input.fds[1];
+		++app.input.maxfd;
+	#ifdef WEBSOCKET_ENABLED
+	} else {
+		/* Web-only mode: no stdin/FIFO needed */
+		app.input.fds[0] = -1;
+		app.input.fds[1] = -1;
+		app.input.maxfd = 0;
+	}
+	#endif
 
-		/* check for file type, must be fifo */
-		fstat (app.input.fds[1], &s);
-		if (!S_ISFIFO (s.st_mode)) {
-			BarUiMsg (&app.settings, MSG_ERR, "File at %s is not a fifo\n", app.settings.fifo);
-			close (app.input.fds[1]);
-			app.input.fds[1] = -1;
-		} else {
-			FD_SET(app.input.fds[1], &app.input.set);
-			BarUiMsg (&app.settings, MSG_INFO, "Control fifo at %s opened\n",
-					app.settings.fifo);
+	#ifdef WEBSOCKET_ENABLED
+	/* Initialize WebSocket server if enabled */
+	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
+		if (!BarWebsocketInit(&app)) {
+			BarUiMsg (&app.settings, MSG_ERR, "Failed to start WebSocket server\n");
 		}
 	}
-	app.input.maxfd = app.input.fds[0] > app.input.fds[1] ? app.input.fds[0] :
-			app.input.fds[1];
-	++app.input.maxfd;
+	#endif
 
 	BarMainLoop (&app);
 
@@ -516,10 +640,29 @@ int main (int argc, char **argv) {
 	curl_easy_cleanup (app.http);
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);
+	
+	#ifdef WEBSOCKET_ENABLED
+	/* Cleanup WebSocket server */
+	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
+		BarWebsocketDestroy(&app);
+	}
+	
+	/* Remove PID file if we created one */
+	if (app.settings.uiMode == BAR_UI_MODE_WEB) {
+		BarDaemonRemovePidFile(&app);
+	}
+	#endif
+	
 	BarSettingsDestroy (&app.settings);
 
 	/* restore terminal attributes, zsh doesn't need this, bash does... */
-	BarTermRestore ();
+	#ifdef WEBSOCKET_ENABLED
+	if (app.settings.uiMode != BAR_UI_MODE_WEB) {
+	#endif
+		BarTermRestore ();
+	#ifdef WEBSOCKET_ENABLED
+	}
+	#endif
 
 	return 0;
 }

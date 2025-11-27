@@ -82,11 +82,21 @@ typedef struct {
 
 #include "ui_types.h"
 
+#ifdef WEBSOCKET_ENABLED
+/* UI mode selection */
+typedef enum {
+	BAR_UI_MODE_BOTH = 0,  /* CLI + Web (default) */
+	BAR_UI_MODE_CLI = 1,   /* CLI only, no WebSocket */
+	BAR_UI_MODE_WEB = 2,   /* Web only (daemon), no CLI */
+} BarUiMode_t;
+#endif
+
 typedef struct {
 	bool autoselect;
 	unsigned int history, maxRetry, timeout, bufferSecs;
 	int volume;
 	float gainMul;
+	int maxGain;
 	BarStationSorting_t sortOrder;
 	PianoAudioQuality_t audioQuality;
 	char *username;
@@ -107,6 +117,17 @@ typedef struct {
 	char keys[BAR_KS_COUNT];
 	int sampleRate;
 	BarMsgFormatStr_t msgFormat[MSG_COUNT];
+	
+	/* WebSocket support (conditional compilation) */
+	#ifdef WEBSOCKET_ENABLED
+	BarUiMode_t uiMode;
+	int websocketPort;
+	char *websocketHost;
+	bool webuiEnabled;
+	char *webuiPath;
+	char *pidFile;
+	char *logFile;
+	#endif
 } BarSettings_t;
 
 #include <piano.h>

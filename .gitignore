@@ -4,6 +4,22 @@
 # vim swap files
 .*.sw*
 pianobar
+pianobar_test
 libpiano.a
 libpiano.so*
 waitress-test
+
+# WebUI dependencies and test artifacts
+node_modules/
+playwright-report/
+test-results/
+.vite/
+dist/
+
+# Agent context and plans
+.claude/
+
+# Debug and session logs
+*.lldb
+pianobar-session-*.log
+pianobar-crash-*.log

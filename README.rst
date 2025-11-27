@@ -1,10 +1,19 @@
 pianobar
 ========
 
+.. image:: https://github.com/mr-light-show/pianobar-websockets/actions/workflows/release.yml/badge.svg
+   :target: https://github.com/mr-light-show/pianobar-websockets/actions
+   :alt: Build Status
+
 pianobar is a free/open-source, console-based client for the personalized
 online radio Pandora_.
 
 .. _Pandora: http://www.pandora.com
+
+.. note::
+   This is a fork of the original pianobar with WebSocket support for custom UIs.
+   See the `WebSocket Support`_ section below for details.
+   Original repository: https://github.com/PromyLOPh/pianobar
 
 .. image:: https://6xq.net/pianobar/pianobar-screenshot.png
     :target: https://6xq.net/pianobar/pianobar-screenshot.png
@@ -18,6 +27,8 @@ Features
 - upcoming songs/song history
 - customize keybindings and text output (see `configuration example`_)
 - remote control and eventcmd interface (send tracks to last.fm_, for example)
+- WebSocket API for building custom UIs (web, mobile, desktop)
+- included modern web UI built with Lit components
 - proxy support for listeners outside the USA
 
 .. _last.fm: https://www.last.fm
@@ -190,6 +201,104 @@ You can run the client directly from the source directory now::
 Or install it to ``/usr/local`` by issuing::
 
 	gmake install
+
+WebSocket Support
+-----------------
+
+This fork adds WebSocket support, enabling real-time communication for custom user
+interfaces. Build web, mobile, or desktop UIs that control pianobar and receive
+live updates.
+
+Features
+++++++++
+
+- Real-time playback state updates
+- Song metadata (title, artist, album, art URL)
+- Station management (list, create, delete, switch)
+- Playback control (play, pause, skip, volume)
+- Song actions (love, ban, tired, create station)
+- Two-way communication via Socket.IO protocol
+
+Building with WebSocket Support
+++++++++++++++++++++++++++++++++
+
+To build pianobar with WebSocket support enabled::
+
+	make WEBSOCKET=1 clean && make WEBSOCKET=1
+
+Or use the included build script for development::
+
+	./build.sh        # Standard build with WebSocket
+	./build.sh debug  # Debug build with crash capture
+
+Configuration
++++++++++++++
+
+Add these settings to your ``~/.config/pianobar/config``::
+
+	ui_mode = both
+	websocket_port = 8080
+	webui_path = ./dist/webui
+
+UI mode options:
+
+- ``cli``: Command-line interface only, no WebSocket
+- ``web``: Web-only (daemonizes, runs in background)
+- ``both``: Both CLI and WebSocket (default, runs in foreground)
+
+When using ``web`` mode, pianobar runs as a daemon and you should specify::
+
+	ui_mode = web
+	websocket_port = 8080
+	webui_path = ./dist/webui
+	pid_file = /tmp/pianobar.pid
+	log_file = /tmp/pianobar.log
+
+Then start pianobar and it will run in the background. Open ``http://localhost:8080`` in your browser.
+
+Included Web UI
++++++++++++++++
+
+A modern, lightweight web interface is included:
+
+- Built with Lit web components (5KB framework)
+- Material Design styling with dark mode
+- Real-time updates via WebSocket
+- Mobile-responsive design
+- Album art display
+- Volume control and playback controls
+- Station management
+
+See ``webui/README.md`` for development and build instructions.
+
+Building Custom UIs
++++++++++++++++++++
+
+The WebSocket API uses Socket.IO and provides events for:
+
+**Client → Server (Commands)**::
+
+	- play, pause, skip
+	- love_song, ban_song, tired_song
+	- set_volume
+	- list_stations, play_station
+	- create_station, delete_station
+
+**Server → Client (Events)**::
+
+	- state_update: Playback state changes
+	- song_update: New song metadata
+	- station_update: Station list changes
+	- volume_update: Volume changes
+
+Connect to ``ws://localhost:8080`` using any Socket.IO client library.
+Full protocol documentation available in ``WEBSOCKET_PROTOCOL.md``.
+
+For more information, see:
+
+- Web UI development: ``webui/README.md``
+- WebSocket protocol: ``WEBSOCKET_PROTOCOL.md``
+- Original repository: https://github.com/PromyLOPh/pianobar
 
 FAQ
 ---

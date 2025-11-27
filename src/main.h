@@ -45,6 +45,11 @@ typedef struct {
 	sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
+	
+	/* WebSocket support (conditional compilation) */
+	#ifdef WEBSOCKET_ENABLED
+	void *wsContext;  /* BarWsContext_t */
+	#endif
 } BarApp_t;
 
 #include <signal.h>

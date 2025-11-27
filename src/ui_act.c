@@ -35,6 +35,10 @@ THE SOFTWARE.
 #include "ui_readline.h"
 #include "ui_dispatch.h"
 
+#ifdef WEBSOCKET_ENABLED
+#include "websocket/protocol/socketio.h"
+#endif
+
 /*	standard eventcmd call
  */
 #define BarUiActDefaultEventcmd(name) BarUiStartEventCmd (&app->settings, \
@@ -67,7 +71,7 @@ static inline void BarUiDoSkipSong (player_t * const player) {
  *	@param transform this station
  *	@return 0 = error, 1 = everything went well
  */
-static int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 
@@ -233,6 +237,16 @@ static void drainPlaylist (BarApp_t * const app) {
 	}
 }
 
+/*	Switch to a station (for WebSocket/programmatic use)
+ */
+void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station) {
+	assert (app != NULL);
+	assert (station != NULL);
+	
+	app->nextStation = station;
+	drainPlaylist (app);
+}
+
 /*	delete current station
  */
 BarUiActCallback(BarUiActDeleteStation) {
@@ -275,6 +289,14 @@ BarUiActCallback(BarUiActExplain) {
 			BarUiMsg (&app->settings, MSG_ERR, "No explanation provided.\n");
 		} else {
 			BarUiMsg (&app->settings, MSG_INFO, "%s\n", reqData.retExplain);
+			
+			/* Emit explanation via WebSocket */
+			#ifdef WEBSOCKET_ENABLED
+			if (app->wsContext) {
+				BarSocketIoEmitExplanation(app, reqData.retExplain);
+			}
+			#endif
+			
 			free (reqData.retExplain);
 		}
 	}
@@ -511,6 +533,13 @@ BarUiActCallback(BarUiActPrintUpcoming) {
 	PianoSong_t * const nextSong = PianoListNextP (selSong);
 	if (nextSong != NULL) {
 		BarUiListSongs (app, nextSong, NULL);
+		
+		/* Emit upcoming songs via WebSocket (max 5) */
+		#ifdef WEBSOCKET_ENABLED
+		if (app->wsContext) {
+			BarSocketIoEmitUpcoming(app, nextSong, 5);
+		}
+		#endif
 	} else {
 		BarUiMsg (&app->settings, MSG_INFO, "No songs in queue.\n");
 	}
@@ -652,6 +681,9 @@ BarUiActCallback(BarUiActBookmark) {
 BarUiActCallback(BarUiActVolDown) {
 	--app->settings.volume;
 	BarPlayerSetVolume (&app->player);
+	#ifdef WEBSOCKET_ENABLED
+	BarSocketIoEmitVolume(app, app->settings.volume);
+	#endif
 }
 
 /*	increase volume
@@ -659,6 +691,9 @@ BarUiActCallback(BarUiActVolDown) {
 BarUiActCallback(BarUiActVolUp) {
 	++app->settings.volume;
 	BarPlayerSetVolume (&app->player);
+	#ifdef WEBSOCKET_ENABLED
+	BarSocketIoEmitVolume(app, app->settings.volume);
+	#endif
 }
 
 /*	reset volume
@@ -666,6 +701,9 @@ BarUiActCallback(BarUiActVolUp) {
 BarUiActCallback(BarUiActVolReset) {
 	app->settings.volume = 0;
 	BarPlayerSetVolume (&app->player);
+	#ifdef WEBSOCKET_ENABLED
+	BarSocketIoEmitVolume(app, app->settings.volume);
+	#endif
 }
 
 static const char *boolToYesNo (const bool value) {
