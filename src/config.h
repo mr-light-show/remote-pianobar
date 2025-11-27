@@ -6,7 +6,9 @@
 #define VERSION "2024.12.21-dev"
 
 /* glibc feature test macros, define _before_ including other files */
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 /* ffmpeg/libav quirks detection
  * ffmpeg’s micro versions always start at 100, that’s how we can distinguish
