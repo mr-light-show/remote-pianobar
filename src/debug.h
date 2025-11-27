@@ -23,8 +23,6 @@ THE SOFTWARE.
 
 #pragma once
 
-#define _POSIX_C_SOURCE 200112L  /* Enable POSIX features for fileno() */
-
 #include "config.h"
 #include <stdbool.h>
 
