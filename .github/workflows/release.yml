@@ -116,13 +116,43 @@ jobs:
           
       - name: Create Debian control file
         run: |
+          # Detect actual library dependencies from the binary
+          echo "=== Detecting library dependencies ==="
+          ldd pianobar | grep "=>" || true
+          
+          # Extract exact library versions
+          AVCODEC=$(ldd pianobar | grep libavcodec | sed -n 's/.*libavcodec\.so\.\([0-9]*\).*/libavcodec\1/p')
+          AVFORMAT=$(ldd pianobar | grep libavformat | sed -n 's/.*libavformat\.so\.\([0-9]*\).*/libavformat\1/p')
+          AVFILTER=$(ldd pianobar | grep libavfilter | sed -n 's/.*libavfilter\.so\.\([0-9]*\).*/libavfilter\1/p')
+          AVUTIL=$(ldd pianobar | grep libavutil | sed -n 's/.*libavutil\.so\.\([0-9]*\).*/libavutil\1/p')
+          SWRESAMPLE=$(ldd pianobar | grep libswresample | sed -n 's/.*libswresample\.so\.\([0-9]*\).*/libswresample\1/p')
+          WEBSOCKETS=$(ldd pianobar | grep libwebsockets | sed -n 's/.*libwebsockets\.so\.\([0-9]*\).*/libwebsockets\1/p')
+          
+          echo "Detected FFmpeg libavcodec: $AVCODEC"
+          echo "Detected FFmpeg libavformat: $AVFORMAT"
+          echo "Detected FFmpeg libavfilter: $AVFILTER"
+          echo "Detected FFmpeg libavutil: $AVUTIL"
+          echo "Detected FFmpeg libswresample: $SWRESAMPLE"
+          echo "Detected libwebsockets: $WEBSOCKETS"
+          
+          # Build dependency string with exact versions
+          DEPENDS="libao4, libcurl4, libgcrypt20, libjson-c5"
+          [ -n "$AVCODEC" ] && DEPENDS="$DEPENDS, $AVCODEC"
+          [ -n "$AVFORMAT" ] && DEPENDS="$DEPENDS, $AVFORMAT"
+          [ -n "$AVFILTER" ] && DEPENDS="$DEPENDS, $AVFILTER"
+          [ -n "$AVUTIL" ] && DEPENDS="$DEPENDS, $AVUTIL"
+          [ -n "$SWRESAMPLE" ] && DEPENDS="$DEPENDS, $SWRESAMPLE"
+          [ -n "$WEBSOCKETS" ] && DEPENDS="$DEPENDS, $WEBSOCKETS"
+          
+          echo "Final dependencies: $DEPENDS"
+          
           cat > package/DEBIAN/control << EOF
           Package: pianobar-websockets
           Version: $(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
           Section: sound
           Priority: optional
           Architecture: ${{ matrix.arch }}
-          Depends: libao4, libcurl4, libgcrypt20, libjson-c5, libavcodec58 | libavcodec59 | libavcodec60, libavformat58 | libavformat59 | libavformat60, libwebsockets16 | libwebsockets17 | libwebsockets19
+          Depends: $DEPENDS
           Maintainer: Pianobar WebSockets <pianobar-websockets@github.com>
           Homepage: https://github.com/mr-light-show/pianobar-websockets
           Description: Console-based client for Pandora with WebSocket support
@@ -136,6 +166,9 @@ jobs:
             - Modern web interface included
             - Remote control via WebSocket
           EOF
+          
+          echo "=== Generated Control File ==="
+          cat package/DEBIAN/control
           
       - name: Create post-install script
         run: |
