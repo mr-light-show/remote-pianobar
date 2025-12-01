@@ -408,7 +408,7 @@ Create or edit ``~/.config/pianobar/config``:
     # Daemon mode settings
     ui_mode = web
     websocket_port = 8080
-    websocket_host = 127.0.0.1
+    websocket_host = 0.0.0.0
     
     # Daemon-specific settings
     pid_file = /tmp/pianobar.pid
@@ -422,10 +422,12 @@ Create ``~/.config/systemd/user/pianobar.service``:
 
     [Unit]
     Description=Pianobar WebSocket Daemon
-    After=network.target
+    After=network-online.target
+    Wants=network-online.target
     
     [Service]
     Type=forking
+    ExecStartPre=/bin/sleep 5
     ExecStart=/usr/local/bin/pianobar
     Restart=on-failure
     RestartSec=10

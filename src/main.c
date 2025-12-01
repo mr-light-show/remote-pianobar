@@ -196,6 +196,16 @@ static void BarMainGetInitialStation (BarApp_t *app) {
 					"Error: Autostart station not found.\n");
 		}
 	}
+	
+	#ifdef WEBSOCKET_ENABLED
+	/* In web-only mode, don't prompt for station - let the web UI handle it */
+	if (app->settings.uiMode == BAR_UI_MODE_WEB && app->nextStation == NULL) {
+		BarUiMsg (&app->settings, MSG_INFO,
+				"Waiting for station selection via web interface...\n");
+		return;
+	}
+	#endif
+	
 	/* no autostart? ask the user */
 	if (app->nextStation == NULL) {
 		app->nextStation = BarUiSelectStation (app, app->ph.stations,
