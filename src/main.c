@@ -488,9 +488,15 @@ static void BarMainLoop (BarApp_t *app) {
 		#endif
 
 		/* show time */
-		if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
-			BarMainPrintTime (app);
+		#ifdef WEBSOCKET_ENABLED
+		if (app->settings.uiMode != BAR_UI_MODE_WEB) {
+		#endif
+			if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
+				BarMainPrintTime (app);
+			}
+		#ifdef WEBSOCKET_ENABLED
 		}
+		#endif
 	}
 
 	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
