@@ -21,6 +21,72 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Get webui_path from pianobar config
+get_webui_path() {
+    local config_file=""
+    
+    # Check for config in standard locations
+    if [ -f "$HOME/.config/pianobar/config" ]; then
+        config_file="$HOME/.config/pianobar/config"
+    elif [ -f "$HOME/.pianobar/config" ]; then
+        config_file="$HOME/.pianobar/config"
+    fi
+    
+    if [ -z "$config_file" ]; then
+        return 1
+    fi
+    
+    # Extract webui_path, strip whitespace and comments
+    local webui_path=$(grep -E "^[[:space:]]*webui_path[[:space:]]*=" "$config_file" | \
+                       sed 's/^[[:space:]]*webui_path[[:space:]]*=[[:space:]]*//;s/[[:space:]]*#.*$//' | \
+                       tr -d '\r')
+    
+    if [ -n "$webui_path" ]; then
+        # Expand ~ to home directory
+        webui_path="${webui_path/#\~/$HOME}"
+        echo "$webui_path"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Copy WebUI to configured location
+deploy_webui() {
+    echo -e "${BLUE}=== Deploying Web UI ===${NC}"
+    echo ""
+    
+    if [ ! -d "dist/webui" ]; then
+        echo -e "${YELLOW}Warning: dist/webui not found, skipping deployment${NC}"
+        return
+    fi
+    
+    local webui_path=$(get_webui_path)
+    
+    if [ -z "$webui_path" ]; then
+        echo -e "${YELLOW}No webui_path configured in pianobar config${NC}"
+        echo -e "${YELLOW}WebUI files are in: dist/webui/${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}Found webui_path: $webui_path${NC}"
+    
+    # Create target directory if it doesn't exist
+    mkdir -p "$webui_path"
+    
+    # Use rsync if available for efficiency, otherwise cp
+    if command -v rsync &> /dev/null; then
+        echo -e "${YELLOW}Syncing files to $webui_path...${NC}"
+        rsync -av --delete dist/webui/ "$webui_path/"
+    else
+        echo -e "${YELLOW}Copying files to $webui_path...${NC}"
+        cp -r dist/webui/* "$webui_path/"
+    fi
+    
+    echo -e "${GREEN}✓ WebUI deployed to: $webui_path${NC}"
+    echo ""
+}
+
 # Parse command line arguments
 MODE="build"
 SANITIZE=false
@@ -248,6 +314,9 @@ build_webui() {
     
     if [ -d "dist/webui" ]; then
         echo -e "${GREEN}✓ WebUI built successfully${NC}"
+        
+        # Deploy WebUI to configured location
+        deploy_webui
     else
         echo -e "${YELLOW}Warning: WebUI build may have failed${NC}"
     fi
@@ -328,7 +397,7 @@ create_package() {
     echo -e "${BLUE}Creating .deb package...${NC}"
     
     VERSION=$(date +%Y.%m.%d)-debug-arm64
-    PKG_NAME="pianobar-websockets-debug"
+    PKG_NAME="remote-pianobar-debug"
     PKG_DIR="${PKG_NAME}_${VERSION}"
     
     # Create package structure
@@ -364,12 +433,12 @@ Architecture: arm64
 Maintainer: Local ARM64 Build
 Installed-Size: $INSTALLED_SIZE
 Depends: libao4, libcurl4, libgcrypt20, libjson-c5, libavcodec60 | libavcodec59 | libavcodec58, libavformat60 | libavformat59 | libavformat58, libavfilter9 | libavfilter8 | libavfilter7, libavutil58 | libavutil57 | libavutil56, libswresample4 | libswresample3, libwebsockets19 | libwebsockets17 | libwebsockets16 | libwebsockets15
-Description: Console-based Pandora client with WebSocket support (ARM64 debug)
+Description: Remote Pianobar - Console Pandora client with remote control (ARM64 debug)
  Pianobar is a console-based music player for Pandora.
  .
- This debug build includes WebSocket support for custom UIs and includes
+ Remote Pianobar enables custom UIs and includes
  a modern web interface. Built with debug symbols for ARM64 architecture.
-Homepage: https://github.com/mr-light-show/pianobar-websockets
+Homepage: https://github.com/mr-light-show/remote-pianobar
 EOF
     
     # Build package
@@ -420,7 +489,7 @@ build_linux_deb_docker() {
     fi
     
     VERSION=$(date +%Y.%m.%d)-debug-arm64
-    PKG_NAME="pianobar-websockets-debug"
+    PKG_NAME="remote-pianobar-debug"
     
     # Create a build script to run inside the container
     cat > /tmp/docker-build.sh << 'DOCKER_EOF'
@@ -492,15 +561,15 @@ Version: VERSION_HERE
 Section: sound
 Priority: optional
 Architecture: arm64
-Maintainer: Pianobar WebSocket Build
+Maintainer: Remote Pianobar Build
 Installed-Size: $INSTALLED_SIZE
 Depends: libao4, libcurl4, libgcrypt20, libjson-c5, libavcodec60 | libavcodec59 | libavcodec58, libavformat60 | libavformat59 | libavformat58, libavfilter9 | libavfilter8 | libavfilter7, libavutil58 | libavutil57 | libavutil56, libswresample4 | libswresample3, libwebsockets19 | libwebsockets17 | libwebsockets16
-Description: Console-based Pandora client with WebSocket support (ARM64 debug)
+Description: Remote Pianobar - Console Pandora client with remote control (ARM64 debug)
  Pianobar is a console-based music player for Pandora.
  .
- This debug build includes WebSocket support for custom UIs and includes
+ Remote Pianobar enables custom UIs and includes
  a modern web interface. Built with debug symbols for ARM64 architecture.
-Homepage: https://github.com/mr-light-show/pianobar-websockets
+Homepage: https://github.com/mr-light-show/remote-pianobar
 EOF
 
 # Build package

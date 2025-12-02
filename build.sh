@@ -1,12 +1,78 @@
 #!/bin/bash
 
-# Build script for pianobar with WebSocket support
+# Build script for Remote Pianobar
 # Usage: ./build.sh [debug]
 
 set -e  # Exit on error
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$BUILD_DIR"
+
+# Get webui_path from pianobar config
+get_webui_path() {
+    local config_file=""
+    
+    # Check for config in standard locations
+    if [ -f "$HOME/.config/pianobar/config" ]; then
+        config_file="$HOME/.config/pianobar/config"
+    elif [ -f "$HOME/.pianobar/config" ]; then
+        config_file="$HOME/.pianobar/config"
+    fi
+    
+    if [ -z "$config_file" ]; then
+        return 1
+    fi
+    
+    # Extract webui_path, strip whitespace and comments
+    local webui_path=$(grep -E "^[[:space:]]*webui_path[[:space:]]*=" "$config_file" | \
+                       sed 's/^[[:space:]]*webui_path[[:space:]]*=[[:space:]]*//;s/[[:space:]]*#.*$//' | \
+                       tr -d '\r')
+    
+    if [ -n "$webui_path" ]; then
+        # Expand ~ to home directory
+        webui_path="${webui_path/#\~/$HOME}"
+        echo "$webui_path"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Copy WebUI to configured location
+deploy_webui() {
+    echo "=== Deploying Web UI ==="
+    echo ""
+    
+    if [ ! -d "dist/webui" ]; then
+        echo "Warning: dist/webui not found, skipping deployment"
+        return
+    fi
+    
+    local webui_path=$(get_webui_path)
+    
+    if [ -z "$webui_path" ]; then
+        echo "No webui_path configured in pianobar config"
+        echo "WebUI files are in: dist/webui/"
+        return
+    fi
+    
+    echo "Found webui_path: $webui_path"
+    
+    # Create target directory if it doesn't exist
+    mkdir -p "$webui_path"
+    
+    # Use rsync if available for efficiency, otherwise cp
+    if command -v rsync &> /dev/null; then
+        echo "Syncing files to $webui_path..."
+        rsync -av --delete dist/webui/ "$webui_path/"
+    else
+        echo "Copying files to $webui_path..."
+        cp -r dist/webui/* "$webui_path/"
+    fi
+    
+    echo "✓ WebUI deployed to: $webui_path"
+    echo ""
+}
 
 # Function to run pianobar with crash capture only
 run_with_crash_capture() {
@@ -52,7 +118,7 @@ run_with_crash_capture() {
 
 # Check if debug mode is requested
 if [ "$1" = "debug" ]; then
-    echo "=== Building pianobar with WebSocket + Debug support ==="
+    echo "=== Building Remote Pianobar with Debug support ==="
     echo ""
     
     # Clean previous build
@@ -71,7 +137,7 @@ if [ "$1" = "debug" ]; then
     echo "  PIANOBAR_DEBUG=8 ./pianobar"
     echo ""
 else
-    echo "=== Building pianobar with WebSocket support ==="
+    echo "=== Building Remote Pianobar ==="
     echo ""
     
     # Clean previous build
@@ -108,6 +174,9 @@ fi
     cd "$BUILD_DIR"
     echo "✓ Web UI build complete!"
     echo ""
+    
+    # Deploy WebUI to configured location
+    deploy_webui
 
 echo "=========================================="
 echo "Build finished successfully!"

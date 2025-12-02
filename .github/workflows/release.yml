@@ -147,17 +147,17 @@ jobs:
           echo "Final dependencies: $DEPENDS"
           
           cat > package/DEBIAN/control << EOF
-          Package: pianobar-websockets
+          Package: remote-pianobar
           Version: $(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
           Section: sound
           Priority: optional
           Architecture: ${{ matrix.arch }}
           Depends: $DEPENDS
-          Maintainer: Pianobar WebSockets <pianobar-websockets@github.com>
-          Homepage: https://github.com/mr-light-show/pianobar-websockets
-          Description: Console-based client for Pandora with WebSocket support
+          Maintainer: Remote Pianobar <remote-pianobar@github.com>
+          Homepage: https://github.com/mr-light-show/remote-pianobar
+          Description: Remote Pianobar - Console-based Pandora client with remote control
            Pianobar is a free/open-source, console-based client for Pandora.
-           This fork adds WebSocket support for building custom UIs (web, mobile, desktop).
+           Remote Pianobar enables building custom UIs (web, mobile, desktop) with remote control.
            .
            Features:
             - Play and manage stations
@@ -177,7 +177,7 @@ jobs:
           set -e
           
           # Create config directory for users
-          echo "Pianobar with WebSocket support installed successfully!"
+          echo "Remote Pianobar installed successfully!"
           echo ""
           echo "To configure pianobar, create ~/.config/pianobar/config"
           echo "Example configuration: /usr/local/share/doc/pianobar/contrib/config-example"
@@ -196,13 +196,13 @@ jobs:
       - name: Build .deb package
         run: |
           VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
-          dpkg-deb --build package pianobar-websockets_${{ matrix.arch }}.deb
+          dpkg-deb --build package remote-pianobar_${{ matrix.arch }}.deb
           
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: pianobar-websockets_*.deb
+          files: remote-pianobar_*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -227,7 +227,7 @@ jobs:
             node \
             create-dmg
       
-      - name: Build pianobar with WebSocket
+      - name: Build Remote Pianobar
         run: |
           make WEBSOCKET=1 clean
           make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
@@ -242,7 +242,7 @@ jobs:
       - name: Create app bundle structure
         run: |
           VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
-          APP_NAME="Pianobar-WebSockets-${VERSION}"
+          APP_NAME="Remote-Pianobar-${VERSION}"
           
           mkdir -p "${APP_NAME}/bin"
           mkdir -p "${APP_NAME}/share/pianobar/webui"
@@ -267,8 +267,8 @@ jobs:
           
           # Create installation instructions
           cat > "${APP_NAME}/INSTALL.txt" << 'EOF'
-          Pianobar with WebSocket Support
-          ================================
+          Remote Pianobar
+          ===============
           
           Installation:
           
@@ -317,7 +317,7 @@ jobs:
           #!/bin/bash
           set -e
           
-          echo "Installing Pianobar with WebSocket support..."
+          echo "Installing Remote Pianobar..."
           echo ""
           
           # Check for sudo
@@ -362,11 +362,11 @@ jobs:
       - name: Create DMG
         run: |
           VERSION=$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)
-          APP_NAME="Pianobar-WebSockets-${VERSION}"
-          DMG_NAME="pianobar-websockets_macos14.dmg"
+          APP_NAME="Remote-Pianobar-${VERSION}"
+          DMG_NAME="remote-pianobar_macos14.dmg"
           
           create-dmg \
-            --volname "Pianobar WebSockets" \
+            --volname "Remote Pianobar" \
             --volicon "contrib/pianobar.icns" \
             --window-pos 200 120 \
             --window-size 800 400 \
@@ -380,14 +380,14 @@ jobs:
           # Fallback if create-dmg fails (missing icon, etc)
           if [ ! -f "${DMG_NAME}" ]; then
             echo "create-dmg failed, using hdiutil instead..."
-            hdiutil create -volname "Pianobar WebSockets" -srcfolder "${APP_NAME}" -ov -format UDZO "${DMG_NAME}"
+            hdiutil create -volname "Remote Pianobar" -srcfolder "${APP_NAME}" -ov -format UDZO "${DMG_NAME}"
           fi
           
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: pianobar-websockets_*.dmg
+          files: remote-pianobar_*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

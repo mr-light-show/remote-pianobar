@@ -1,6 +1,6 @@
-# Pianobar Development Guide
+# Remote Pianobar Development Guide
 
-This guide covers setting up your development environment for contributing to Pianobar with WebSocket support.
+This guide covers setting up your development environment for contributing to Remote Pianobar.
 
 ## Table of Contents
 
@@ -155,13 +155,13 @@ make
 ./pianobar
 ```
 
-### WebSocket-Enabled Build
+### Remote Pianobar Build
 
 ```bash
 # Clean previous builds
 make clean WEBSOCKET=1
 
-# Build with WebSocket support and debug symbols
+# Build Remote Pianobar with debug symbols
 make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 # The binary will be created as ./pianobar
@@ -298,7 +298,7 @@ npx playwright test test/e2e/connection.spec.ts
 PIANOBAR_RUNNING=1 npm run test:e2e
 ```
 
-**Note:** Most E2E tests require a running pianobar instance with WebSocket enabled. Tests without this requirement run by default; others are skipped.
+**Note:** Most E2E tests require a running pianobar instance with Remote API enabled. Tests without this requirement run by default; others are skipped.
 
 ### Running All Tests
 
@@ -384,7 +384,7 @@ kill $(cat /tmp/pianobar.pid)
 
 ### 2. Development Mode (Hot Reload)
 
-**Terminal 1:** Run Pianobar with WebSocket
+**Terminal 1:** Run Remote Pianobar
 
 ```bash
 # Build with debug symbols
@@ -593,7 +593,7 @@ npm run dev
 Use the test HTML page for manual protocol testing:
 
 ```bash
-# Start pianobar with WebSocket
+# Start Remote Pianobar
 ./pianobar
 
 # Open test page in browser
@@ -709,6 +709,31 @@ websocket_port = 8081
 - Use 2 spaces for indentation
 - Prefer arrow functions
 - Use TypeScript types
+
+---
+
+## Git Hooks Setup
+
+To prevent `package-lock.json` sync issues, install the pre-commit hook:
+
+```bash
+cp contrib/git-hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+This hook validates that `webui/package-lock.json` is in sync with `webui/package.json` before allowing commits. When you try to commit changes to `package.json` without the corresponding `package-lock.json` updates, the commit will be blocked with instructions on how to fix it.
+
+**How it works:**
+- Runs automatically before each commit
+- Checks if `webui/package.json` is being committed
+- Verifies `webui/package-lock.json` is also staged
+- Validates the lock file is in sync using `npm ls`
+- Provides clear error messages if validation fails
+
+**To bypass the hook** (not recommended):
+```bash
+git commit --no-verify
+```
 
 ---
 

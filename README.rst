@@ -1,8 +1,8 @@
 pianobar
 ========
 
-.. image:: https://github.com/mr-light-show/pianobar-websockets/actions/workflows/release.yml/badge.svg
-   :target: https://github.com/mr-light-show/pianobar-websockets/actions
+.. image:: https://github.com/mr-light-show/remote-pianobar/actions/workflows/release.yml/badge.svg
+   :target: https://github.com/mr-light-show/remote-pianobar/actions
    :alt: Build Status
 
 pianobar is a free/open-source, console-based client for the personalized
@@ -11,8 +11,8 @@ online radio Pandora_.
 .. _Pandora: http://www.pandora.com
 
 .. note::
-   This is a fork of the original pianobar with WebSocket support for custom UIs.
-   See the `WebSocket Support`_ section below for details.
+   Remote Pianobar - a fork of the original pianobar with remote control capabilities.
+   See the `Remote Pianobar Features`_ section below for details.
    Original repository: https://github.com/PromyLOPh/pianobar
 
 .. image:: https://6xq.net/pianobar/pianobar-screenshot.png
@@ -27,7 +27,7 @@ Features
 - upcoming songs/song history
 - customize keybindings and text output (see `configuration example`_)
 - remote control and eventcmd interface (send tracks to last.fm_, for example)
-- WebSocket API for building custom UIs (web, mobile, desktop)
+- Remote API for building custom UIs (web, mobile, desktop)
 - included modern web UI built with Lit components
 - proxy support for listeners outside the USA
 
@@ -202,10 +202,10 @@ Or install it to ``/usr/local`` by issuing::
 
 	gmake install
 
-WebSocket Support
------------------
+Remote Pianobar Features
+-------------------------
 
-This fork adds WebSocket support, enabling real-time communication for custom user
+Remote Pianobar enables real-time communication for custom user
 interfaces. Build web, mobile, or desktop UIs that control pianobar and receive
 live updates.
 
@@ -219,10 +219,10 @@ Features
 - Song actions (love, ban, tired, create station)
 - Two-way communication via Socket.IO protocol
 
-Building with WebSocket Support
-++++++++++++++++++++++++++++++++
+Building Remote Pianobar
++++++++++++++++++++++++++
 
-To build pianobar with WebSocket support enabled::
+To build Remote Pianobar::
 
 	make WEBSOCKET=1 clean && make WEBSOCKET=1
 
@@ -242,9 +242,9 @@ Add these settings to your ``~/.config/pianobar/config``::
 
 UI mode options:
 
-- ``cli``: Command-line interface only, no WebSocket
+- ``cli``: Command-line interface only, no remote API
 - ``web``: Web-only (daemonizes, runs in background)
-- ``both``: Both CLI and WebSocket (default, runs in foreground)
+- ``both``: Both CLI and remote API (default, runs in foreground)
 
 When using ``web`` mode, pianobar runs as a daemon and you should specify::
 
@@ -263,7 +263,7 @@ A modern, lightweight web interface is included:
 
 - Built with Lit web components (5KB framework)
 - Material Design styling with dark mode
-- Real-time updates via WebSocket
+- Real-time updates via remote API
 - Mobile-responsive design
 - Album art display
 - Volume control and playback controls
@@ -274,7 +274,7 @@ See ``webui/README.md`` for development and build instructions.
 Building Custom UIs
 +++++++++++++++++++
 
-The WebSocket API uses Socket.IO and provides events for:
+The Remote API uses Socket.IO and provides events for:
 
 **Client → Server (Commands)**::
 
@@ -297,7 +297,7 @@ Full protocol documentation available in ``WEBSOCKET_PROTOCOL.md``.
 For more information, see:
 
 - Web UI development: ``webui/README.md``
-- WebSocket protocol: ``WEBSOCKET_PROTOCOL.md``
+- API protocol: ``WEBSOCKET_PROTOCOL.md``
 - Original repository: https://github.com/PromyLOPh/pianobar
 
 FAQ
@@ -408,7 +408,7 @@ Create or edit ``~/.config/pianobar/config``:
     # Daemon mode settings
     ui_mode = web
     websocket_port = 8080
-    websocket_host = 127.0.0.1
+    websocket_host = 0.0.0.0
     
     # Daemon-specific settings
     pid_file = /tmp/pianobar.pid
@@ -421,11 +421,13 @@ Create ``~/.config/systemd/user/pianobar.service``:
 .. code:: ini
 
     [Unit]
-    Description=Pianobar WebSocket Daemon
-    After=network.target
+    Description=Remote Pianobar Daemon
+    After=network-online.target
+    Wants=network-online.target
     
     [Service]
     Type=forking
+    ExecStartPre=/bin/sleep 5
     ExecStart=/usr/local/bin/pianobar
     Restart=on-failure
     RestartSec=10

@@ -515,11 +515,17 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	json_object_object_add(data, "maxGain", 
 	                       json_object_new_int(app->settings.maxGain));
 	
+	/* Always include station fields, even if NULL */
 	if (app->curStation) {
 		json_object_object_add(data, "station", 
 		                       json_object_new_string(app->curStation->name));
 		json_object_object_add(data, "stationId",
 		                       json_object_new_string(app->curStation->id));
+	} else {
+		json_object_object_add(data, "station", 
+		                       json_object_new_string(""));
+		json_object_object_add(data, "stationId",
+		                       json_object_new_string(""));
 	}
 	
 	if (app->playlist) {
