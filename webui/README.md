@@ -6,7 +6,7 @@ A modern, component-based web interface for pianobar built with:
 - **Lit 3.x** - Lightweight web components (5KB)
 - **Material Icons** - Google's icon set
 - **Vite** - Fast build tool
-- **Socket.IO** - Real-time WebSocket communication
+- **Socket.IO** - Real-time API communication
 
 ## Features
 
@@ -30,7 +30,7 @@ npm install
 ```bash
 npm run dev
 ```
-Opens at http://localhost:3000 with live reload and proxy to pianobar WebSocket on port 8080.
+Opens at http://localhost:3000 with live reload and proxy to Remote API server on port 8080.
 
 ### Production Build
 ```bash
@@ -40,7 +40,7 @@ Outputs to `../dist/webui/` - these files are served by pianobar's HTTP server.
 
 ## Testing
 
-### 1. Start pianobar with WebSocket enabled
+### 1. Start Remote Pianobar
 
 Make sure your `~/.config/pianobar/config` includes:
 ```
@@ -140,7 +140,7 @@ Much smaller than React/Angular alternatives!
 
 ## Development Notes
 
-- Uses Vite's dev server with proxy for WebSocket connections
+- Uses Vite's dev server with proxy for Remote API connections
 - TypeScript with strict mode enabled
 - Material Design 3 inspired theming
 - CSS variables for easy customization

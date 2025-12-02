@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Build script for pianobar with WebSocket support
+# Build script for Remote Pianobar
 # Usage: ./build.sh [debug]
 
 set -e  # Exit on error
@@ -118,7 +118,7 @@ run_with_crash_capture() {
 
 # Check if debug mode is requested
 if [ "$1" = "debug" ]; then
-    echo "=== Building pianobar with WebSocket + Debug support ==="
+    echo "=== Building Remote Pianobar with Debug support ==="
     echo ""
     
     # Clean previous build
@@ -137,7 +137,7 @@ if [ "$1" = "debug" ]; then
     echo "  PIANOBAR_DEBUG=8 ./pianobar"
     echo ""
 else
-    echo "=== Building pianobar with WebSocket support ==="
+    echo "=== Building Remote Pianobar ==="
     echo ""
     
     # Clean previous build

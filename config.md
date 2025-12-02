@@ -119,13 +119,13 @@ These control the prefix for different message types in the CLI.
 
 The FIFO allows external programs to control pianobar. See `contrib/remote.sh` for examples.
 
-## WebSocket/Web UI Options
+## Remote API/Web UI Options
 
 These options are only available when pianobar is compiled with `WEBSOCKET_ENABLED`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `ui_mode` | `both` | UI mode: `cli` (CLI only), `web` (headless daemon), or `both` (CLI+WebSocket) |
+| `ui_mode` | `both` | UI mode: `cli` (CLI only), `web` (Remote API - headless daemon), or `both` (CLI+Remote API) |
 | `websocket_port` | (none) | WebSocket server port (e.g., `9001`) - **required** for web UI |
 | `websocket_host` | `0.0.0.0` | WebSocket bind address (use `127.0.0.1` for localhost only) |
 | `webui_path` | (none) | Custom path to web UI files (defaults to built-in) |
@@ -135,9 +135,9 @@ These options are only available when pianobar is compiled with `WEBSOCKET_ENABL
 **Security Note:** By default, `websocket_host` is set to `0.0.0.0`, which binds the web interface to all network interfaces, making it accessible from remote machines. The web interface has no built-in authentication. For localhost-only access, set `websocket_host = 127.0.0.1` in your config. Consider using a firewall to restrict access to trusted IP addresses when exposing the interface remotely.
 
 **Note on `ui_mode` values:**
-- `cli`: Traditional command-line interface only, WebSocket disabled
-- `web`: Headless web-only mode - pianobar daemonizes and runs in background, returning control to shell
-- `both`: Both CLI and WebSocket enabled, runs in foreground (default)
+- `cli`: Traditional command-line interface only, Remote API disabled
+- `web`: Headless Remote API (web-only) mode - pianobar daemonizes and runs in background, returning control to shell
+- `both`: Both CLI and Remote API enabled, runs in foreground (default)
 
 When using `ui_mode = web`, you should also configure:
 - `pid_file`: Location to write process ID (for managing the daemon)

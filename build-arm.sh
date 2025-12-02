@@ -397,7 +397,7 @@ create_package() {
     echo -e "${BLUE}Creating .deb package...${NC}"
     
     VERSION=$(date +%Y.%m.%d)-debug-arm64
-    PKG_NAME="pianobar-websockets-debug"
+    PKG_NAME="remote-pianobar-debug"
     PKG_DIR="${PKG_NAME}_${VERSION}"
     
     # Create package structure
@@ -433,12 +433,12 @@ Architecture: arm64
 Maintainer: Local ARM64 Build
 Installed-Size: $INSTALLED_SIZE
 Depends: libao4, libcurl4, libgcrypt20, libjson-c5, libavcodec60 | libavcodec59 | libavcodec58, libavformat60 | libavformat59 | libavformat58, libavfilter9 | libavfilter8 | libavfilter7, libavutil58 | libavutil57 | libavutil56, libswresample4 | libswresample3, libwebsockets19 | libwebsockets17 | libwebsockets16 | libwebsockets15
-Description: Console-based Pandora client with WebSocket support (ARM64 debug)
+Description: Remote Pianobar - Console Pandora client with remote control (ARM64 debug)
  Pianobar is a console-based music player for Pandora.
  .
- This debug build includes WebSocket support for custom UIs and includes
+ Remote Pianobar enables custom UIs and includes
  a modern web interface. Built with debug symbols for ARM64 architecture.
-Homepage: https://github.com/mr-light-show/pianobar-websockets
+Homepage: https://github.com/mr-light-show/remote-pianobar
 EOF
     
     # Build package
@@ -489,7 +489,7 @@ build_linux_deb_docker() {
     fi
     
     VERSION=$(date +%Y.%m.%d)-debug-arm64
-    PKG_NAME="pianobar-websockets-debug"
+    PKG_NAME="remote-pianobar-debug"
     
     # Create a build script to run inside the container
     cat > /tmp/docker-build.sh << 'DOCKER_EOF'
@@ -561,15 +561,15 @@ Version: VERSION_HERE
 Section: sound
 Priority: optional
 Architecture: arm64
-Maintainer: Pianobar WebSocket Build
+Maintainer: Remote Pianobar Build
 Installed-Size: $INSTALLED_SIZE
 Depends: libao4, libcurl4, libgcrypt20, libjson-c5, libavcodec60 | libavcodec59 | libavcodec58, libavformat60 | libavformat59 | libavformat58, libavfilter9 | libavfilter8 | libavfilter7, libavutil58 | libavutil57 | libavutil56, libswresample4 | libswresample3, libwebsockets19 | libwebsockets17 | libwebsockets16
-Description: Console-based Pandora client with WebSocket support (ARM64 debug)
+Description: Remote Pianobar - Console Pandora client with remote control (ARM64 debug)
  Pianobar is a console-based music player for Pandora.
  .
- This debug build includes WebSocket support for custom UIs and includes
+ Remote Pianobar enables custom UIs and includes
  a modern web interface. Built with debug symbols for ARM64 architecture.
-Homepage: https://github.com/mr-light-show/pianobar-websockets
+Homepage: https://github.com/mr-light-show/remote-pianobar
 EOF
 
 # Build package

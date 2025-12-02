@@ -1,6 +1,6 @@
-# Pianobar WebSocket Test Suite
+# Remote Pianobar Test Suite
 
-This document describes how to build, run, and extend the test suite for the pianobar WebSocket implementation.
+This document describes how to build, run, and extend the test suite for Remote Pianobar.
 
 ## Prerequisites
 
@@ -208,7 +208,7 @@ This runs the comprehensive test suite and exits with non-zero status on any fai
 
 ### Tests fail to compile
 
-Make sure you have built pianobar with WebSocket support first:
+Make sure you have built Remote Pianobar first:
 ```bash
 make clean
 make WEBSOCKET=1

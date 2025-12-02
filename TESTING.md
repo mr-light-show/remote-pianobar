@@ -1,6 +1,6 @@
-# Pianobar Testing Guide
+# Remote Pianobar Testing Guide
 
-Comprehensive testing documentation for Pianobar with WebSocket support.
+Comprehensive testing documentation for Remote Pianobar.
 
 ## Test Coverage Summary
 
@@ -276,7 +276,7 @@ npx playwright show-report
 To run tests that require a live pianobar instance:
 
 ```bash
-# Terminal 1: Start pianobar with WebSocket
+# Terminal 1: Start Remote Pianobar
 ./pianobar
 
 # Terminal 2: Run E2E tests with server flag
