@@ -56,13 +56,39 @@ The volume system uses a perceptual curve for smoother control:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `autoselect` | `true` | Auto-select station on startup |
-| `autostart_station` | (none) | Station ID to auto-start |
+| `autostart_station` | (none) | Station ID to auto-start. Set to empty (`autostart_station = `) to prevent auto-play and wait for manual selection. |
 | `history` | `5` | Number of songs to keep in history |
 | `sort` | `name_az` | Station sort order (see below) |
 | `love_icon` | ` <3` | Icon for loved songs |
 | `ban_icon` | ` </3` | Icon for banned songs |
 | `tired_icon` | ` zZ` | Icon for tired songs |
 | `at_icon` | ` @ ` | Separator icon |
+
+### Notes on Station Auto-Start
+
+**State File Behavior:**
+- Pianobar automatically saves the last played station to `~/.config/pianobar/state`
+- On next startup, this station will auto-play unless overridden in your config
+- The config file (`~/.config/pianobar/config`) is read **after** the state file and takes precedence
+
+**To prevent auto-play on startup:**
+
+Set an empty value in your config file to override the state file:
+```ini
+autostart_station = 
+```
+
+This is particularly useful for:
+- Web-only mode (`ui_mode = web`) - wait for station selection via web UI
+- Headless installations - prevent unexpected audio playback on boot
+- Shared systems - let each user choose their station
+
+**To auto-play a specific station:**
+
+Find the station ID by running pianobar in CLI mode, then use it in your config:
+```ini
+autostart_station = 122728589551497388
+```
 
 ### Sort Options
 
@@ -239,6 +265,9 @@ password = your_password
 
 # Audio quality
 audio_quality = high
+
+# Prevent auto-play - wait for station selection (overrides state file)
+autostart_station = 
 
 # Volume (0 dB is unchanged, negative is quieter, positive is louder)
 volume = 0

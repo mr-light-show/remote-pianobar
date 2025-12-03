@@ -50,6 +50,7 @@ typedef enum {
 	DEBUG_AUDIO = 2,
 	DEBUG_UI = 4,
 	DEBUG_WEBSOCKET = 8,
+	DEBUG_WEBSOCKET_PROGRESS = 16,  /* Progress updates (noisy) */
 } debugKind;
 
 extern unsigned int debug;
@@ -75,6 +76,7 @@ inline static void debugPrint(debugKind kind, const char * const format, ...) {
 				case DEBUG_AUDIO:     color = COLOR_YELLOW; break;
 				case DEBUG_UI:        color = COLOR_GREEN; break;
 				case DEBUG_WEBSOCKET: color = COLOR_MAGENTA; break;
+				case DEBUG_WEBSOCKET_PROGRESS: color = COLOR_MAGENTA; break;
 				default:              color = ""; break;
 			}
 			fprintf(stderr, "%s", color);

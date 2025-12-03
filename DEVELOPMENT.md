@@ -547,21 +547,56 @@ lldb ./pianobar
 
 ### Debug Logging
 
-Enable debug output for specific subsystems:
+Enable debug output for specific subsystems using the `PIANOBAR_DEBUG` environment variable.
+
+#### Debug Flags
+
+Debug flags are bitfield values that can be combined:
+
+- `1` - `DEBUG_NETWORK` - Network/API calls (cyan)
+- `2` - `DEBUG_AUDIO` - Audio playback (yellow)
+- `4` - `DEBUG_UI` - User interface (green)
+- `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (magenta)
+- `16` - `DEBUG_WEBSOCKET_PROGRESS` - Progress updates every second (magenta, very noisy)
+
+#### Usage Examples
 
 ```bash
-# Build with all debug flags
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -DPIANOBAR_DEBUG=0xFFFFFFFF"
+# All debugging (including noisy progress updates)
+export PIANOBAR_DEBUG=31  # 1+2+4+8+16
+./pianobar
 
-# Or selective flags:
-# WebSocket only
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -DPIANOBAR_DEBUG_WS"
+# WebSocket debugging WITHOUT progress spam (recommended)
+export PIANOBAR_DEBUG=15  # 1+2+4+8 (everything except progress)
+./pianobar
+
+# Only WebSocket events (no progress)
+export PIANOBAR_DEBUG=8
+./pianobar
+
+# Only progress updates (for testing)
+export PIANOBAR_DEBUG=16
+./pianobar
+
+# Network + WebSocket (no progress)
+export PIANOBAR_DEBUG=9  # 1+8
+./pianobar
+
+# Disable all debugging
+export PIANOBAR_DEBUG=0
+./pianobar
 
 # Run and redirect output
-./pianobar 2>&1 | tee debug.log
+PIANOBAR_DEBUG=15 ./pianobar 2>&1 | tee debug.log
 ```
 
-See `WEBSOCKET_DEBUG.md` for detailed debug flag documentation.
+#### Color-Coded Output
+
+When stderr is a terminal, debug messages are color-coded by subsystem:
+- **Cyan**: Network operations
+- **Yellow**: Audio processing
+- **Green**: UI interactions
+- **Magenta**: WebSocket/Remote API events
 
 ### Debugging TypeScript/Web UI
 
