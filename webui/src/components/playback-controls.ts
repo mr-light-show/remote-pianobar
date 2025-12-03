@@ -4,6 +4,7 @@ import { customElement, property } from 'lit/decorators.js';
 @customElement('playback-controls')
 export class PlaybackControls extends LitElement {
   @property({ type: Boolean }) playing = false;
+  @property({ type: Boolean }) disabled = false;
   
   static styles = css`
     :host {
@@ -40,6 +41,20 @@ export class PlaybackControls extends LitElement {
       background: var(--primary-dark);
     }
     
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    button:disabled:hover {
+      background: var(--surface-variant);
+      color: var(--on-surface);
+    }
+    
+    button.primary:disabled:hover {
+      background: var(--primary-color);
+    }
+    
     .material-icons {
       font-family: 'Material Icons';
       font-weight: normal;
@@ -69,10 +84,19 @@ export class PlaybackControls extends LitElement {
   
   render() {
     return html`
-      <button @click=${this.handlePlay} class="primary" title="${this.playing ? 'Pause' : 'Play'}">
+      <button 
+        @click=${this.handlePlay} 
+        class="primary" 
+        ?disabled=${this.disabled}
+        title="${this.disabled ? 'Select a station first' : (this.playing ? 'Pause' : 'Play')}"
+      >
         <span class="material-icons">${this.playing ? 'pause' : 'play_arrow'}</span>
       </button>
-      <button @click=${this.handleNext} title="Next Song">
+      <button 
+        @click=${this.handleNext} 
+        ?disabled=${this.disabled}
+        title="${this.disabled ? 'Select a station first' : 'Next Song'}"
+      >
         <span class="material-icons">skip_next</span>
       </button>
     `;

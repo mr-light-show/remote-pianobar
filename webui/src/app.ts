@@ -64,11 +64,19 @@ export class PianobarApp extends LitElement {
   
   static styles = css`
     :host {
-      display: block;
-      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
       background: var(--background);
       color: var(--on-background);
-      padding-bottom: 80px; /* Space for bottom toolbar */
+      overflow: hidden;
+    }
+    
+    .content-wrapper {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-bottom: 5rem;
     }
     
     .menu-container {
@@ -160,6 +168,21 @@ export class PianobarApp extends LitElement {
     }
     
     .rating-button.loved:hover {
+      background: rgba(76, 175, 80, 0.1);
+      color: #4CAF50;
+    }
+    
+    .rating-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .rating-button:disabled:hover {
+      background: var(--surface-variant);
+      color: var(--on-surface);
+    }
+    
+    .rating-button.loved:disabled:hover {
       background: rgba(76, 175, 80, 0.1);
       color: #4CAF50;
     }
@@ -359,9 +382,13 @@ export class PianobarApp extends LitElement {
   }
   
   handlePlayPause() {
+    if (this.playing) {
+      this.socket.emit('action', 'playback.pause');
+    } else {
+      this.socket.emit('action', 'playback.play');
+    }
     // Optimistic UI update for immediate feedback
     this.playing = !this.playing;
-    this.socket.emit('action', 'playback.toggle');
   }
   
   handleNext() {
@@ -699,74 +726,84 @@ export class PianobarApp extends LitElement {
   
   render() {
     return html`
-      ${this.connected ? html`
-        <div class="menu-container">
-          <button class="menu-button" @click=${this.toggleMenu} title="Menu">
-            <span class="material-icons">menu</span>
-          </button>
-          <info-menu
-            @info-explain=${this.handleInfoExplain}
-            @info-upcoming=${this.handleInfoUpcoming}
-            @info-quickmix=${this.handleInfoQuickMix}
-            @info-create-station=${this.handleInfoCreateStation}
-            @info-add-music=${this.handleInfoAddMusic}
-            @info-rename-station=${this.handleInfoRenameStation}
-            @info-station-mode=${this.handleInfoStationMode}
-            @info-station-seeds=${this.handleInfoStationSeeds}
-            @info-add-genre=${this.handleInfoAddGenre}
-            @info-delete-station=${this.handleInfoDeleteStation}
-          ></info-menu>
+      <div class="content-wrapper">
+        ${this.connected ? html`
+          <div class="menu-container">
+            <button class="menu-button" @click=${this.toggleMenu} title="Menu">
+              <span class="material-icons">menu</span>
+            </button>
+            <info-menu
+              @info-explain=${this.handleInfoExplain}
+              @info-upcoming=${this.handleInfoUpcoming}
+              @info-quickmix=${this.handleInfoQuickMix}
+              @info-create-station=${this.handleInfoCreateStation}
+              @info-add-music=${this.handleInfoAddMusic}
+              @info-rename-station=${this.handleInfoRenameStation}
+              @info-station-mode=${this.handleInfoStationMode}
+              @info-station-seeds=${this.handleInfoStationSeeds}
+              @info-add-genre=${this.handleInfoAddGenre}
+              @info-delete-station=${this.handleInfoDeleteStation}
+            ></info-menu>
+          </div>
+        ` : ''}
+        
+        <album-art 
+          src="${this.connected ? this.albumArt : ''}"
+        ></album-art>
+        
+        <div class="song-info">
+          <h1>${this.connected ? this.songTitle : 'Disconnected'}</h1>
+          ${this.connected && this.albumName ? html`<p class="album">${this.albumName}</p>` : ''}
+          <p class="artist">${this.connected ? this.artistName : '—'}</p>
         </div>
-      ` : ''}
-      
-      <album-art 
-        src="${this.connected ? this.albumArt : ''}"
-      ></album-art>
-      
-      <div class="song-info">
-        <h1>${this.connected ? this.songTitle : 'Disconnected'}</h1>
-        ${this.connected && this.albumName ? html`<p class="album">${this.albumName}</p>` : ''}
-        <p class="artist">${this.connected ? this.artistName : '—'}</p>
+        
+        <progress-bar 
+          current="${this.connected ? this.currentTime : 0}"
+          total="${this.connected ? this.totalTime : 0}"
+        ></progress-bar>
+        
+        ${this.connected ? html`
+          <volume-control
+            .volume="${50}"
+            .maxGain="${this.maxGain}"
+            @volume-change=${this.handleVolumeChange}
+          ></volume-control>
+          
+          <div class="controls-container">
+            <div class="rating-container">
+              <button 
+                class="rating-button ${this.rating === 1 ? 'loved' : ''}"
+                ?disabled="${!this.currentStationId}"
+                @click=${this.toggleRatingMenu}
+                title="${!this.currentStationId ? 'Select a station first' : (this.rating === 1 ? 'Loved' : 'Rate this song')}"
+              >
+                <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
+                  ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
+                </span>
+              </button>
+              <song-actions-menu
+                rating="${this.rating}"
+                @love=${this.handleLove}
+                @ban=${this.handleBan}
+                @tired=${this.handleTired}
+              ></song-actions-menu>
+            </div>
+            
+            <playback-controls 
+              ?playing="${this.playing}"
+              ?disabled="${!this.currentStationId}"
+              @play=${this.handlePlayPause}
+              @next=${this.handleNext}
+            ></playback-controls>
+          </div>
+        ` : html`
+          <reconnect-button 
+            @reconnect=${this.handleReconnect}
+          ></reconnect-button>
+        `}
       </div>
       
-      <progress-bar 
-        current="${this.connected ? this.currentTime : 0}"
-        total="${this.connected ? this.totalTime : 0}"
-      ></progress-bar>
-      
       ${this.connected ? html`
-        <volume-control
-          .volume="${50}"
-          .maxGain="${this.maxGain}"
-          @volume-change=${this.handleVolumeChange}
-        ></volume-control>
-        
-        <div class="controls-container">
-          <div class="rating-container">
-            <button 
-              class="rating-button ${this.rating === 1 ? 'loved' : ''}"
-              @click=${this.toggleRatingMenu}
-              title="${this.rating === 1 ? 'Loved' : 'Rate this song'}"
-            >
-              <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
-                ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
-              </span>
-            </button>
-            <song-actions-menu
-              rating="${this.rating}"
-              @love=${this.handleLove}
-              @ban=${this.handleBan}
-              @tired=${this.handleTired}
-            ></song-actions-menu>
-          </div>
-          
-          <playback-controls 
-            ?playing="${this.playing}"
-            @play=${this.handlePlayPause}
-            @next=${this.handleNext}
-          ></playback-controls>
-        </div>
-        
         <bottom-toolbar
           .stations="${this.stations}"
           currentStation="${this.currentStation}"
@@ -874,12 +911,7 @@ export class PianobarApp extends LitElement {
           @delete-feedback=${this.handleDeleteFeedback}
           @cancel=${this.handleStationSeedsCancel}
         ></station-seeds-modal>
-        
-      ` : html`
-        <reconnect-button 
-          @reconnect=${this.handleReconnect}
-        ></reconnect-button>
-      `}
+      ` : ''}
     `;
   }
 }
