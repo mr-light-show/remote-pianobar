@@ -39,6 +39,7 @@ extern int BarTransformIfShared(BarApp_t *app, PianoStation_t *station);
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <math.h>
 #include <json-c/json.h>
 
@@ -348,28 +349,36 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
+	/* Use separate debug flag for progress events */
+	bool isProgress = (strcmp(event, "progress") == 0);
+#ifdef HAVE_DEBUGLOG
+	debugKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
+#else
+	int dbgFlag = 0;  /* Unused when debugPrint is a no-op */
+#endif
+	
+	debugPrint(dbgFlag, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
 	
 	message = BarSocketIoFormat(event, data);
 	if (!message) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to format message for event '%s'\n", event);
+		debugPrint(dbgFlag, "Socket.IO: Failed to format message for event '%s'\n", event);
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Formatted message (len=%zu): %.100s%s\n", 
+	debugPrint(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.100s%s\n", 
 	           strlen(message), message, strlen(message) > 100 ? "..." : "");
 	
 	/* Broadcast to all clients if callback is set */
 	if (g_broadcastCallback) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Calling broadcast callback\n");
+		debugPrint(dbgFlag, "Socket.IO: Calling broadcast callback\n");
 		g_broadcastCallback(message, strlen(message));
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Broadcast callback returned\n");
+		debugPrint(dbgFlag, "Socket.IO: Broadcast callback returned\n");
 	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
+		debugPrint(dbgFlag, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
 	}
 	
 	free(message);
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit complete for event '%s'\n", event);
+	debugPrint(dbgFlag, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
 /* Emit 'start' event (song started) */
