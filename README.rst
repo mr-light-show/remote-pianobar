@@ -236,10 +236,14 @@ pianod_
     Pandora UNIX daemon, based on pianobar
 Hermes_
     Pandora Client for OS X
+`Remote pianobar`_
+    Fork of pianobar, which includes a HTTP server and serves a
+    Websocket-powered frontend for remote control.
 
 .. _pithos: http://pithos.github.io/
 .. _pianod: http://deviousfish.com/pianod/
 .. _Hermes: http://hermesapp.org/
+.. _Remote pianobar: https://github.com/mr-light-show/remote-pianobar
 
 Standalone devices
 ++++++++++++++++++
