@@ -385,7 +385,7 @@ static void BarMainLoop (BarApp_t *app) {
 	}
 
 	#ifdef WEBSOCKET_ENABLED
-	/* Start playback manager for WebSocket modes BEFORE initial station prompt */
+	/* Start playback manager for WebSocket modes */
 	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
 		if (!BarPlaybackManagerStart(app)) {
 			return;
@@ -393,11 +393,27 @@ static void BarMainLoop (BarApp_t *app) {
 	}
 	#endif
 
-	BarMainGetInitialStation (app);
-
 	player_t * const player = &app->player;
+	bool promptedForStation = false;
 
 	while (!app->doQuit) {
+		/* One-time prompt if no station selected */
+		if (!promptedForStation && BarStateGetNextStation(app) == NULL && 
+		    BarStateGetCurrentStation(app) == NULL) {
+			#ifdef WEBSOCKET_ENABLED
+			if (app->settings.uiMode == BAR_UI_MODE_WEB) {
+				BarUiMsg(&app->settings, MSG_INFO,
+				         "Waiting for station selection via web interface...\n");
+			} else {
+			#endif
+				BarUiMsg(&app->settings, MSG_INFO,
+				         "No station selected. Press 's' to select a station.\n");
+			#ifdef WEBSOCKET_ENABLED
+			}
+			#endif
+			promptedForStation = true;
+		}
+
 		#ifndef WEBSOCKET_ENABLED
 		/* Original playback state machine for non-WebSocket builds */
 		/* song finished playing, clean up things/scrobble song */
