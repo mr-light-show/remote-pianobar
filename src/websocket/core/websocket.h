@@ -79,9 +79,6 @@ typedef struct {
 	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
 	BarWsBucket_t buckets[BUCKET_COUNT];
 	
-	/* Command queue (WS thread → Main) - UNCHANGED */
-	BarWsQueue_t commandQueue;
-	
 	/* Progress tracking (WS thread only) */
 	BarWsProgress_t progress;
 	

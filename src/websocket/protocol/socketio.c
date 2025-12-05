@@ -1408,8 +1408,6 @@ static PianoStation_t *BarSocketIoFindStation(BarApp_t *app, const char *nameOrI
 /* Handle 'action' event from client */
 void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *data) {
 	const char *translated;
-	BarWsContext_t *ctx;
-	char commandBuffer[16];
 	
 	if (!app || !action || !app->wsContext) {
 		return;
@@ -1436,25 +1434,32 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			/* Convert percentage to dB using perceptual curve */
 			int volumeDb = sliderToDb(volumePercent, app->settings.maxGain);
 			
-			/* Format as "%<db>" (command + value) */
-			snprintf(commandBuffer, sizeof(commandBuffer), "%%%d", volumeDb);
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → '%s' (%d%% = %ddB)\n", 
-			           action, translated, volumePercent, volumeDb);
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%ddB (%d%%)\n", 
+			           action, volumeDb, volumePercent);
 			
-			/* Queue command for main loop to process */
-			ctx = (BarWsContext_t *)app->wsContext;
-			BarWsQueuePush(&ctx->commandQueue, MSG_TYPE_COMMAND_ACTION, 
-			               commandBuffer, strlen(commandBuffer) + 1);
+			/* Execute directly in WebSocket thread */
+			app->settings.volume = volumeDb;
+			BarPlayerSetVolume(&app->player);
+			BarSocketIoEmitVolume(app, volumeDb);
 			return;
 		}
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → '%s'\n", action, translated);
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → '%s' (executing directly)\n", 
+	           action, translated);
 	
-	/* Queue command for main loop to process */
-	ctx = (BarWsContext_t *)app->wsContext;
-	BarWsQueuePush(&ctx->commandQueue, MSG_TYPE_COMMAND_ACTION, 
-	               translated, strlen(translated) + 1);
+	/* Execute command directly in WebSocket thread */
+	BarUiDispatch(app, translated[0], BarStateGetCurrentStation(app), 
+	              BarStateGetPlaylist(app), false, 
+	              BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
+	
+	/* Emit updated state for commands that change song state */
+	if (translated[0] == '+' || translated[0] == '-') {
+		/* Love or ban - emit updated song info with new rating */
+		if (BarStateGetPlaylist(app)) {
+			BarSocketIoEmitStart(app);
+		}
+	}
 }
 
 /* Handle 'changeStation' event from client */

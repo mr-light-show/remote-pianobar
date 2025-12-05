@@ -432,11 +432,8 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->maxConnections = 32;
 	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	
-	/* Initialize buckets (REPLACES BarWsQueueInit for broadcast) */
+	/* Initialize buckets */
 	BarWsBucketsInit(ctx);
-	
-	/* Initialize command queue (UNCHANGED) */
-	BarWsQueueInit(&ctx->commandQueue, 50, ctx->context);
 	
 	/* Initialize mutex */
 	pthread_mutex_init(&ctx->stateMutex, NULL);
@@ -454,7 +451,6 @@ bool BarWebsocketInit(BarApp_t *app) {
 		
 		/* Cleanup on failure */
 		BarWsBucketsDestroy(ctx);
-		BarWsQueueDestroy(&ctx->commandQueue);
 		pthread_mutex_destroy(&ctx->stateMutex);
 		lws_context_destroy(ctx->context);
 		free(ctx->connections);
@@ -481,9 +477,6 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	/* Signal thread to stop */
 	ctx->threadRunning = false;
 	
-	/* Close command queue to wake up any waiting operations */
-	BarWsQueueClose(&ctx->commandQueue);
-	
 	/* Cancel any ongoing lws_service() calls - safe in multi-threaded mode */
 	if (ctx->context) {
 		lws_cancel_service(ctx->context);
@@ -500,11 +493,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		ctx->context = NULL;
 	}
 	
-	/* Cleanup buckets (REPLACES BarWsQueueDestroy for broadcast) */
+	/* Cleanup buckets */
 	BarWsBucketsDestroy(ctx);
 	
-	/* Cleanup command queue (UNCHANGED) */
-	BarWsQueueDestroy(&ctx->commandQueue);
 	pthread_mutex_destroy(&ctx->stateMutex);
 	
 	if (ctx->connections) {

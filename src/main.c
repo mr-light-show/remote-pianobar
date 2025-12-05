@@ -56,6 +56,7 @@ THE SOFTWARE.
 #include "ui.h"
 #include "ui_dispatch.h"
 #include "bar_state.h"
+#include "playback_manager.h"
 
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
@@ -227,7 +228,7 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 
 /*	fetch new playlist
  */
-static void BarMainGetPlaylist (BarApp_t *app) {
+void BarMainGetPlaylist (BarApp_t *app) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataGetPlaylist_t reqData;
@@ -254,7 +255,7 @@ static void BarMainGetPlaylist (BarApp_t *app) {
 
 /*	start new player thread
  */
-static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
+void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 	assert (app != NULL);
 	assert (playerThread != NULL);
 
@@ -383,11 +384,22 @@ static void BarMainLoop (BarApp_t *app) {
 		return;
 	}
 
+	#ifdef WEBSOCKET_ENABLED
+	/* Start playback manager for WebSocket modes BEFORE initial station prompt */
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
+		if (!BarPlaybackManagerStart(app)) {
+			return;
+		}
+	}
+	#endif
+
 	BarMainGetInitialStation (app);
 
 	player_t * const player = &app->player;
 
 	while (!app->doQuit) {
+		#ifndef WEBSOCKET_ENABLED
+		/* Original playback state machine for non-WebSocket builds */
 		/* song finished playing, clean up things/scrobble song */
 		if (BarPlayerGetMode (player) == PLAYER_FINISHED) {
 			if (player->interrupted != 0) {
@@ -422,71 +434,38 @@ static void BarMainLoop (BarApp_t *app) {
 				BarMainStartPlayback (app, &playerThread);
 			}
 		}
+		#else
+		/* WebSocket enabled: playback manager handles state machine */
+		/* Web-only mode: just sleep, no CLI needed */
+		if (app->settings.uiMode == BAR_UI_MODE_WEB) {
+			sleep(1);
+			continue;
+		}
+		/* In BOTH mode: CLI just handles input, playback manager runs independently */
+		#endif
 
-		#ifdef WEBSOCKET_ENABLED
-		/* Process WebSocket commands from web clients (queued by WS thread) */
-		if (app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
-			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-			BarWsMessage_t *msg;
-			
-			/* Process all queued commands from WebSocket clients */
-			while ((msg = BarWsQueuePop(&ctx->commandQueue, 0)) != NULL) {
-				if (msg->type == MSG_TYPE_COMMAND_ACTION && msg->data) {
-				/* msg->data contains single-letter command (e.g., "n", "+", "q") 
-				 * or multi-character command with parameter (e.g., "%75" for volume.set) */
-				const char *command = (const char *)msg->data;
-				
-				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Processing command '%s'\n", command);
-				
-				/* Handle multi-character commands with parameters */
-				if (command[0] == '%' && strlen(command) > 1) {
-				/* Volume set command: "%<db>" */
-				int volume = atoi(&command[1]);
-				/* Clamp to valid range: -40 dB to +20 dB */
-				if (volume < -40) volume = -40;
-				if (volume > 20) volume = 20;
-				
-				app->settings.volume = volume;
-				BarPlayerSetVolume(&app->player);
-				
-			/* Broadcast to all clients */
-			BarSocketIoEmitVolume(app, volume);
-			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %ddB\n", volume);
-			} else {
-				/* Dispatch single-letter command through pianobar's UI system */
-				BarUiDispatch(app, command[0], BarStateGetCurrentStation(app), 
-				             BarStateGetPlaylist(app), false, 
-				             BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
-				
-				/* Emit updated state for commands that change song state */
-				if (command[0] == '+' || command[0] == '-') {
-					/* Love or ban - emit updated song info with new rating */
-					if (BarStateGetPlaylist(app)) {
-						BarSocketIoEmitStart(app);
-					}
-				}
-			}
-			}
-				BarWsMessageFree(msg);
-			}
-			
-		BarWsBroadcastProgress(app);
+		if (!BarShouldSkipCliOutput(app)) {
+			BarMainHandleUserInput (app);
+		}
+
+		/* show time */
+		if (!BarShouldSkipCliOutput(app) && BarPlayerGetMode (player) == PLAYER_PLAYING) {
+			BarMainPrintTime (app);
+		}
+	}
+
+	#ifdef WEBSOCKET_ENABLED
+	/* Stop playback manager */
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
+		BarPlaybackManagerStop(app);
 	}
 	#endif
 
-	if (!BarShouldSkipCliOutput(app)) {
-		BarMainHandleUserInput (app);
-	}
-
-	/* show time */
-	if (!BarShouldSkipCliOutput(app) && BarPlayerGetMode (player) == PLAYER_PLAYING) {
-		BarMainPrintTime (app);
-	}
-	}
-
+	#ifndef WEBSOCKET_ENABLED
 	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
 		pthread_join (playerThread, NULL);
 	}
+	#endif
 }
 
 sig_atomic_t *interrupted = NULL;

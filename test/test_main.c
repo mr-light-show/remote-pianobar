@@ -23,9 +23,24 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <check.h>
 #include <signal.h>
+#include <pthread.h>
+
+#include "../src/main.h"
 
 /* Global interrupted variable stub for tests */
 sig_atomic_t *interrupted = NULL;
+
+/* Stub implementations for playback_manager dependencies */
+void BarMainGetPlaylist(BarApp_t *app) {
+	(void)app;
+	/* Stub for tests - playback manager not actually tested */
+}
+
+void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
+	(void)app;
+	(void)playerThread;
+	/* Stub for tests - playback manager not actually tested */
+}
 
 /* Test suite declarations */
 Suite *websocket_suite(void);

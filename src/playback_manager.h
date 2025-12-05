@@ -23,37 +23,16 @@ THE SOFTWARE.
 
 #pragma once
 
-#include <curl/curl.h>
+#include "main.h"
+#include <stdbool.h>
 
-#include <piano.h>
+/* Start playback manager thread (WebSocket modes only)
+ * Returns false on failure to create thread
+ */
+bool BarPlaybackManagerStart(BarApp_t *app);
 
-#include "player.h"
-#include "settings.h"
-#include "ui_readline.h"
-
-typedef struct {
-	PianoHandle_t ph;
-	CURL *http;
-	player_t player;
-	BarSettings_t settings;
-	/* first item is current song */
-	PianoSong_t *playlist;
-	PianoSong_t *songHistory;
-	/* station of current song and station used to fetch songs from if playlist
-	 * is empty */
-	PianoStation_t *curStation, *nextStation;
-	sig_atomic_t doQuit;
-	BarReadlineFds_t input;
-	unsigned int playerErrors;
-	
-	/* WebSocket support (conditional compilation) */
-	#ifdef WEBSOCKET_ENABLED
-	void *wsContext;  /* BarWsContext_t */
-	pthread_t playbackThread;  /* Playback manager thread */
-	pthread_mutex_t stateMutex;  /* Protects playlist, curStation, nextStation, ph.stations */
-	#endif
-} BarApp_t;
-
-#include <signal.h>
-extern sig_atomic_t *interrupted;
+/* Stop playback manager thread
+ * Waits for thread to complete
+ */
+void BarPlaybackManagerStop(BarApp_t *app);
 
