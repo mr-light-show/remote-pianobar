@@ -1,0 +1,16 @@
+    CC  src/main.c
+    CC  src/debug.c
+    CC  src/player.c
+    CC  src/settings.c
+    CC  src/terminal.c
+    CC  src/ui_act.c
+    CC  src/ui.c
+    CC  src/ui_readline.c
+    CC  src/ui_dispatch.c
+    CC  src/websocket_bridge.c
+    CC  src/libpiano/crypt.c
+    CC  src/libpiano/piano.c
+    CC  src/libpiano/request.c
+    CC  src/libpiano/response.c
+    CC  src/libpiano/list.c
+  LINK  pianobar

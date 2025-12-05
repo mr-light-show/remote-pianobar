@@ -49,6 +49,7 @@ typedef struct {
 	/* WebSocket support (conditional compilation) */
 	#ifdef WEBSOCKET_ENABLED
 	void *wsContext;  /* BarWsContext_t */
+	pthread_mutex_t stateMutex;  /* Protects playlist, curStation, nextStation, ph.stations */
 	#endif
 } BarApp_t;
 

@@ -42,6 +42,7 @@ THE SOFTWARE.
 #include "ui.h"
 #include "debug.h"
 #include "ui_readline.h"
+#include "bar_state.h"
 
 typedef int (*BarSortFunc_t) (const void *, const void *);
 
@@ -807,15 +808,15 @@ size_t BarUiListSongs (const BarApp_t * const app,
 				(filter != NULL && (BarStrCaseStr (song->artist, filter) != NULL ||
 				BarStrCaseStr (song->title, filter) != NULL))) {
 			const char * const deleted = "(deleted)", * const empty = "";
-			const char *stationName = empty;
+		const char *stationName = empty;
 
-			const PianoStation_t * const station =
-					PianoFindStationById (app->ph.stations, song->stationId);
-			if (station != NULL && station != app->curStation) {
-				stationName = station->name;
-			} else if (station == NULL && song->stationId != NULL) {
-				stationName = deleted;
-			}
+		const PianoStation_t * const station =
+				BarStateFindStationById(app, song->stationId);
+		if (station != NULL && station != BarStateGetCurrentStation(app)) {
+			stationName = station->name;
+		} else if (station == NULL && song->stationId != NULL) {
+			stationName = deleted;
+		}
 
 		char outstr[512], digits[8], duration[16] = "??:??";
 		const char *vals[] = {digits, song->artist, song->title,

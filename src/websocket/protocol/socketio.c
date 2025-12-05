@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "../../debug.h"
 #include "../../ui.h"
 #include "../../ui_dispatch.h"
+#include "../../bar_state.h"
 #include "socketio.h"
 #include "../core/websocket.h"
 
@@ -385,12 +386,11 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 void BarSocketIoEmitStart(BarApp_t *app) {
 	json_object *data;
 	PianoStation_t *songStation;
+	PianoSong_t *song = BarStateGetPlaylist(app);
 	
-	if (!app || !app->playlist) {
+	if (!app || !song) {
 		return;
 	}
-	
-	PianoSong_t *song = app->playlist;
 	
 	data = json_object_new_object();
 	json_object_object_add(data, "artist", 
@@ -408,16 +408,17 @@ void BarSocketIoEmitStart(BarApp_t *app) {
 	json_object_object_add(data, "trackToken", 
 	                       json_object_new_string(song->trackToken ? song->trackToken : ""));
 	
-	if (app->curStation) {
+	PianoStation_t *curStation = BarStateGetCurrentStation(app);
+	if (curStation) {
 		json_object_object_add(data, "station", 
-		                       json_object_new_string(app->curStation->name));
+		                       json_object_new_string(curStation->name));
 		json_object_object_add(data, "stationId",
-		                       json_object_new_string(app->curStation->id));
+		                       json_object_new_string(curStation->id));
 	}
 	
 	/* Station the song came from (important in QuickMix) */
 	if (song->stationId) {
-		songStation = PianoFindStationById(app->ph.stations, song->stationId);
+		songStation = BarStateFindStationById(app, song->stationId);
 		if (songStation) {
 			json_object_object_add(data, "songStationName",
 			                       json_object_new_string(songStation->name));
@@ -470,7 +471,8 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 	}
 	
 	/* Check if stations are available */
-	if (!app->ph.stations) {
+	PianoStation_t *stationList = BarStateGetStationList(app);
+	if (!stationList) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: No stations available yet\n");
 		/* Send empty stations array */
 		stations = json_object_new_array();
@@ -480,7 +482,7 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 	}
 	
 	/* Sort stations using configured sort order */
-	sortedStations = BarSortedStations(app->ph.stations, &stationCount,
+	sortedStations = BarSortedStations(stationList, &stationCount,
 	                                   app->settings.sortOrder);
 	if (!sortedStations) {
 		return;
@@ -523,8 +525,9 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess starting\n");
 	
 	data = json_object_new_object();
+	PianoSong_t *playlist = BarStateGetPlaylist(app);
 	json_object_object_add(data, "playing", 
-	                       json_object_new_boolean(app->playlist != NULL));
+	                       json_object_new_boolean(playlist != NULL));
 	
 	/* Include current volume */
 	json_object_object_add(data, "volume", 
@@ -535,11 +538,12 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	                       json_object_new_int(app->settings.maxGain));
 	
 	/* Always include station fields, even if NULL */
-	if (app->curStation) {
+	PianoStation_t *curStation = BarStateGetCurrentStation(app);
+	if (curStation) {
 		json_object_object_add(data, "station", 
-		                       json_object_new_string(app->curStation->name));
+		                       json_object_new_string(curStation->name));
 		json_object_object_add(data, "stationId",
-		                       json_object_new_string(app->curStation->id));
+		                       json_object_new_string(curStation->id));
 	} else {
 		json_object_object_add(data, "station", 
 		                       json_object_new_string(""));
@@ -547,28 +551,28 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 		                       json_object_new_string(""));
 	}
 	
-	if (app->playlist) {
+	if (playlist) {
 		PianoStation_t *songStation;
 		
 		song = json_object_new_object();
 		json_object_object_add(song, "title", 
-		                       json_object_new_string(app->playlist->title));
+		                       json_object_new_string(playlist->title));
 		json_object_object_add(song, "artist", 
-		                       json_object_new_string(app->playlist->artist));
+		                       json_object_new_string(playlist->artist));
 		json_object_object_add(song, "album", 
-		                       json_object_new_string(app->playlist->album));
+		                       json_object_new_string(playlist->album));
 		json_object_object_add(song, "coverArt", 
-		                       json_object_new_string(app->playlist->coverArt));
+		                       json_object_new_string(playlist->coverArt));
 		json_object_object_add(song, "rating", 
-		                       json_object_new_int(app->playlist->rating));
+		                       json_object_new_int(playlist->rating));
 		json_object_object_add(song, "duration", 
-		                       json_object_new_int(app->playlist->length));
+		                       json_object_new_int(playlist->length));
 		json_object_object_add(song, "trackToken", 
-		                       json_object_new_string(app->playlist->trackToken ? app->playlist->trackToken : ""));
+		                       json_object_new_string(playlist->trackToken ? playlist->trackToken : ""));
 		
 		/* Station the song came from (important in QuickMix) */
-		if (app->playlist->stationId) {
-			songStation = PianoFindStationById(app->ph.stations, app->playlist->stationId);
+		if (playlist->stationId) {
+			songStation = BarStateFindStationById(app, playlist->stationId);
 			if (songStation) {
 				json_object_object_add(song, "songStationName",
 				                       json_object_new_string(songStation->name));
@@ -634,7 +638,7 @@ void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs
 		
 		/* Add station name the song came from */
 		if (song->stationId) {
-			songStation = PianoFindStationById(app->ph.stations, song->stationId);
+			songStation = BarStateFindStationById(app, song->stationId);
 			if (songStation) {
 				json_object_object_add(songObj, "stationName",
 				                       json_object_new_string(songStation->name));
@@ -798,7 +802,7 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	}
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - station not found\n");
 		return;
@@ -854,7 +858,7 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	}
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - station not found\n");
 		return;
@@ -909,7 +913,7 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
 	}
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - station not found\n");
 		return;
@@ -990,7 +994,7 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	modeId = json_object_get_int(modeIdObj);
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - station not found\n");
 		return;
@@ -1033,7 +1037,7 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
 	stationId = json_object_get_string(stationIdObj);
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
 		return;
@@ -1147,7 +1151,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	stationId = json_object_get_string(stationIdObj);
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - station not found\n");
 		return;
@@ -1232,7 +1236,7 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	stationId = json_object_get_string(stationIdObj);
 	
 	/* Find the station */
-	station = PianoFindStationById(app->ph.stations, stationId);
+	station = BarStateFindStationById(app, stationId);
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - station not found\n");
 		return;
@@ -1389,7 +1393,7 @@ static PianoStation_t *BarSocketIoFindStation(BarApp_t *app, const char *nameOrI
 		return NULL;
 	}
 	
-	station = app->ph.stations;
+	station = BarStateGetStationList(app);
 	while (station != NULL) {
 		if (strcmp(station->name, nameOrId) == 0 ||
 		    strcmp(station->id, nameOrId) == 0) {
@@ -1496,7 +1500,7 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Setting QuickMix stations...\n");
 	
 	/* First, set all stations to NOT be in QuickMix */
-	station = app->ph.stations;
+	station = BarStateGetStationList(app);
 	PianoListForeachP (station) {
 		station->useQuickMix = false;
 	}
@@ -1509,7 +1513,7 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 			const char *stationId = json_object_get_string(stationIdObj);
 			
 			/* Find station by ID */
-			station = app->ph.stations;
+			station = BarStateGetStationList(app);
 			PianoListForeachP (station) {
 				if (strcmp(station->id, stationId) == 0) {
 					station->useQuickMix = true;
@@ -1581,7 +1585,7 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting station: %s\n", station->name);
 	
 	/* Check if this is the currently playing station */
-	wasCurrentStation = (station == app->curStation);
+	wasCurrentStation = (station == BarStateGetCurrentStation(app));
 	
 	/* Delete the station */
 	if (BarUiPianoCall(app, PIANO_REQUEST_DELETE_STATION, station, &pRet, &wRet)) {
@@ -1590,7 +1594,7 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 		/* If we deleted the current station, switch to QuickMix */
 		if (wasCurrentStation) {
 			PianoStation_t *quickMixStation = NULL;
-			PianoStation_t *curStation = app->ph.stations;
+			PianoStation_t *curStation = BarStateGetStationList(app);
 			
 			/* Find QuickMix station */
 			while (curStation != NULL) {
@@ -1607,7 +1611,7 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 			}
 			
 			/* Clear curStation as the struct was destroyed */
-			app->curStation = NULL;
+			BarStateSetCurrentStation(app, NULL);
 		}
 		
 		/* Emit updated station list to all clients */

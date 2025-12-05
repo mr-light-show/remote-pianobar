@@ -55,6 +55,7 @@ THE SOFTWARE.
 #include "terminal.h"
 #include "ui.h"
 #include "ui_dispatch.h"
+#include "bar_state.h"
 
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
@@ -180,7 +181,7 @@ static bool BarMainGetStations (BarApp_t *app) {
 	BarUiMsg (&app->settings, MSG_INFO, "Get stations... ");
 	ret = BarUiPianoCall (app, PIANO_REQUEST_GET_STATIONS, NULL, &pRet, &wRet);
 	BarUiStartEventCmd (&app->settings, "usergetstations", NULL, NULL, &app->player,
-			app->ph.stations, pRet, wRet);
+			BarStateGetStationList(app), pRet, wRet);
 	return ret;
 }
 
@@ -189,25 +190,27 @@ static bool BarMainGetStations (BarApp_t *app) {
 static void BarMainGetInitialStation (BarApp_t *app) {
 	/* try to get autostart station */
 	if (app->settings.autostartStation != NULL) {
-		app->nextStation = PianoFindStationById (app->ph.stations,
+		PianoStation_t *station = BarStateFindStationById(app,
 				app->settings.autostartStation);
-		if (app->nextStation == NULL) {
+		BarStateSetNextStation(app, station);
+		if (station == NULL) {
 			BarUiMsg (&app->settings, MSG_ERR,
 					"Error: Autostart station not found.\n");
 		}
 	}
 	
 	/* In web-only mode, don't prompt for station - let the web UI handle it */
-	if (BarIsWebOnlyMode(app) && app->nextStation == NULL) {
+	if (BarIsWebOnlyMode(app) && BarStateGetNextStation(app) == NULL) {
 		BarUiMsg (&app->settings, MSG_INFO,
 				"Waiting for station selection via web interface...\n");
 		return;
 	}
 	
 	/* no autostart? ask the user */
-	if (app->nextStation == NULL) {
-		app->nextStation = BarUiSelectStation (app, app->ph.stations,
+	if (BarStateGetNextStation(app) == NULL) {
+		PianoStation_t *station = BarUiSelectStation (app, BarStateGetStationList(app),
 				"Select station: ", NULL, app->settings.autoselect);
+		BarStateSetNextStation(app, station);
 	}
 }
 
@@ -217,8 +220,8 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 	char buf[2];
 	if (BarReadline (buf, sizeof (buf), NULL, &app->input,
 			BAR_RL_FULLRETURN | BAR_RL_NOECHO | BAR_RL_NOINT, 1) > 0) {
-		BarUiDispatch (app, buf[0], app->curStation, app->playlist, true,
-				BAR_DC_GLOBAL);
+		BarUiDispatch (app, buf[0], BarStateGetCurrentStation(app), 
+				BarStateGetPlaylist(app), true, BAR_DC_GLOBAL);
 	}
 }
 
@@ -228,24 +231,25 @@ static void BarMainGetPlaylist (BarApp_t *app) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataGetPlaylist_t reqData;
-	reqData.station = app->nextStation;
+	reqData.station = BarStateGetNextStation(app);
 	reqData.quality = app->settings.audioQuality;
 
 	BarUiMsg (&app->settings, MSG_INFO, "Receiving new playlist... ");
 	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
 			&reqData, &pRet, &wRet)) {
-		app->nextStation = NULL;
+		BarStateSetNextStation(app, NULL);
 	} else {
-		app->playlist = reqData.retPlaylist;
-		if (app->playlist == NULL) {
+		BarStateSetPlaylist(app, reqData.retPlaylist);
+		if (BarStateGetPlaylist(app) == NULL) {
 			BarUiMsg (&app->settings, MSG_INFO, "No tracks left.\n");
-			app->nextStation = NULL;
+			BarStateSetNextStation(app, NULL);
 		}
 	}
-	app->curStation = app->nextStation;
+	PianoStation_t *nextStation = BarStateGetNextStation(app);
+	BarStateSetCurrentStation(app, nextStation);
 	BarUiStartEventCmd (&app->settings, "stationfetchplaylist",
-			app->curStation, app->playlist, &app->player, app->ph.stations,
-			pRet, wRet);
+			BarStateGetCurrentStation(app), BarStateGetPlaylist(app), &app->player, 
+			BarStateGetStationList(app), pRet, wRet);
 }
 
 /*	start new player thread
@@ -254,12 +258,12 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 	assert (app != NULL);
 	assert (playerThread != NULL);
 
-	const PianoSong_t * const curSong = app->playlist;
+	const PianoSong_t * const curSong = BarStateGetPlaylist(app);
 	assert (curSong != NULL);
 
-	BarUiPrintSong (&app->settings, curSong, app->curStation->isQuickMix ?
-			PianoFindStationById (app->ph.stations,
-			curSong->stationId) : NULL);
+	PianoStation_t *curStation = BarStateGetCurrentStation(app);
+	BarUiPrintSong (&app->settings, curSong, curStation->isQuickMix ?
+			BarStateFindStationById(app, curSong->stationId) : NULL);
 
 	static const char httpPrefix[] = "http://";
 	/* avoid playing local files */
@@ -279,7 +283,7 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 
 	/* throw event */
 	BarUiStartEventCmd (&app->settings, "songstart",
-			app->curStation, curSong, &app->player, app->ph.stations,
+			curStation, curSong, &app->player, BarStateGetStationList(app),
 			PIANO_RET_OK, CURLE_OK);
 
 	BarWsBroadcastSongStart(app);
@@ -298,9 +302,9 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 	void *threadRet;
 
-	BarUiStartEventCmd (&app->settings, "songfinish", app->curStation,
-			app->playlist, &app->player, app->ph.stations, PIANO_RET_OK,
-			CURLE_OK);
+	BarUiStartEventCmd (&app->settings, "songfinish", BarStateGetCurrentStation(app),
+			BarStateGetPlaylist(app), &app->player, BarStateGetStationList(app), 
+			PIANO_RET_OK, CURLE_OK);
 
 	BarWsBroadcastSongStop(app);
 
@@ -314,10 +318,10 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 		++app->playerErrors;
 		if (app->playerErrors >= app->settings.maxRetry) {
 			/* don't continue playback if thread reports too many error */
-			app->nextStation = NULL;
+			BarStateSetNextStation(app, NULL);
 		}
 	} else {
-		app->nextStation = NULL;
+		BarStateSetNextStation(app, NULL);
 	}
 
 	assert (interrupted == &app->player.interrupted);
@@ -396,20 +400,25 @@ static void BarMainLoop (BarApp_t *app) {
 		 * song */
 		if (BarPlayerGetMode (player) == PLAYER_DEAD) {
 			/* what's next? */
-			if (app->playlist != NULL) {
-				PianoSong_t *histsong = app->playlist;
-				app->playlist = PianoListNextP (app->playlist);
+			PianoSong_t *playlist = BarStateGetPlaylist(app);
+			if (playlist != NULL) {
+				PianoSong_t *histsong = playlist;
+				BarStateSetPlaylist(app, PianoListNextP (playlist));
 				histsong->head.next = NULL;
 				BarUiHistoryPrepend (app, histsong);
 			}
-			if (app->playlist == NULL && app->nextStation != NULL && !app->doQuit) {
-				if (app->nextStation != app->curStation) {
-					BarUiPrintStation (&app->settings, app->nextStation);
+			playlist = BarStateGetPlaylist(app);
+			PianoStation_t *nextStation = BarStateGetNextStation(app);
+			if (playlist == NULL && nextStation != NULL && !app->doQuit) {
+				PianoStation_t *curStation = BarStateGetCurrentStation(app);
+				if (nextStation != curStation) {
+					BarUiPrintStation (&app->settings, nextStation);
 				}
 				BarMainGetPlaylist (app);
 			}
 			/* song ready to play */
-			if (app->playlist != NULL) {
+			playlist = BarStateGetPlaylist(app);
+			if (playlist != NULL) {
 				BarMainStartPlayback (app, &playerThread);
 			}
 		}
@@ -440,23 +449,24 @@ static void BarMainLoop (BarApp_t *app) {
 				app->settings.volume = volume;
 				BarPlayerSetVolume(&app->player);
 				
-				/* Broadcast to all clients */
-				BarSocketIoEmitVolume(app, volume);
-				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %ddB\n", volume);
-				} else {
-					/* Dispatch single-letter command through pianobar's UI system */
-					BarUiDispatch(app, command[0], app->curStation, app->playlist,
-					             false, BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
-					
-					/* Emit updated state for commands that change song state */
-					if (command[0] == '+' || command[0] == '-') {
-						/* Love or ban - emit updated song info with new rating */
-						if (app->playlist) {
-							BarSocketIoEmitStart(app);
-						}
+			/* Broadcast to all clients */
+			BarSocketIoEmitVolume(app, volume);
+			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Set volume to %ddB\n", volume);
+			} else {
+				/* Dispatch single-letter command through pianobar's UI system */
+				BarUiDispatch(app, command[0], BarStateGetCurrentStation(app), 
+				             BarStateGetPlaylist(app), false, 
+				             BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
+				
+				/* Emit updated state for commands that change song state */
+				if (command[0] == '+' || command[0] == '-') {
+					/* Love or ban - emit updated song info with new rating */
+					if (BarStateGetPlaylist(app)) {
+						BarSocketIoEmitStart(app);
 					}
 				}
-				}
+			}
+			}
 				BarWsMessageFree(msg);
 			}
 			
@@ -514,6 +524,7 @@ int main (int argc, char **argv) {
 	gcry_control (GCRYCTL_DISABLE_SECMEM, 0);
 	gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
 	BarPlayerInit (&app.player, &app.settings);
+	BarStateInit (&app);
 
 	BarSettingsInit (&app.settings);
 	BarSettingsRead (&app.settings);
@@ -620,6 +631,7 @@ int main (int argc, char **argv) {
 	/* Remove PID file if we created one */
 	BarWsRemovePidFile(&app);
 	
+	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 
 	/* restore terminal attributes, zsh doesn't need this, bash does... */

@@ -35,11 +35,12 @@ THE SOFTWARE.
 #include "ui_readline.h"
 #include "ui_dispatch.h"
 #include "websocket_bridge.h"
+#include "bar_state.h"
 
 /*	standard eventcmd call
  */
 #define BarUiActDefaultEventcmd(name) BarUiStartEventCmd (&app->settings, \
-		name, selStation, selSong, &app->player, app->ph.stations, \
+		name, selStation, selSong, &app->player, BarStateGetStationList(app), \
 		pRet, wRet)
 
 /*	standard piano call
@@ -136,8 +137,7 @@ BarUiActCallback(BarUiActBanSong) {
 	assert (selSong != NULL);
 	assert (selSong->stationId != NULL);
 
-	if ((realStation = PianoFindStationById (app->ph.stations,
-			selSong->stationId)) == NULL) {
+	if ((realStation = BarStateFindStationById(app, selSong->stationId)) == NULL) {
 		assert (0);
 		return;
 	}
@@ -151,7 +151,7 @@ BarUiActCallback(BarUiActBanSong) {
 
 	BarUiMsg (&app->settings, MSG_INFO, "Banning song... ");
 	if (BarUiActDefaultPianoCall (PIANO_REQUEST_RATE_SONG, &reqData) &&
-			selSong == app->playlist) {
+			selSong == BarStateGetPlaylist(app)) {
 		BarUiDoSkipSong (&app->player);
 	}
 	BarUiActDefaultEventcmd ("songban");
@@ -227,10 +227,12 @@ BarUiActCallback(BarUiActAddSharedStation) {
 
 static void drainPlaylist (BarApp_t * const app) {
 	BarUiDoSkipSong (&app->player);
-	if (app->playlist != NULL) {
+	PianoSong_t *playlist = BarStateGetPlaylist(app);
+	if (playlist != NULL) {
 		/* drain playlist */
-		PianoDestroyPlaylist (PianoListNextP (app->playlist));
-		app->playlist->head.next = NULL;
+		PianoDestroyPlaylist (PianoListNextP (playlist));
+		playlist->head.next = NULL;
+		BarStateSetPlaylist(app, playlist);
 	}
 }
 
@@ -240,7 +242,7 @@ void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station) {
 	assert (app != NULL);
 	assert (station != NULL);
 	
-	app->nextStation = station;
+	BarStateSetNextStation(app, station);
 	drainPlaylist (app);
 }
 
@@ -257,12 +259,12 @@ BarUiActCallback(BarUiActDeleteStation) {
 	if (BarReadlineYesNo (false, &app->input)) {
 		BarUiMsg (&app->settings, MSG_INFO, "Deleting station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_DELETE_STATION,
-				selStation) && selStation == app->curStation) {
+				selStation) && selStation == BarStateGetCurrentStation(app)) {
 			drainPlaylist (app);
-			app->nextStation = NULL;
-			/* XXX: usually we shoudn’t touch cur*, but DELETE_STATION destroys
+			BarStateSetNextStation(app, NULL);
+			/* XXX: usually we shoudn't touch cur*, but DELETE_STATION destroys
 			 * station struct */
-			app->curStation = NULL;
+			BarStateSetCurrentStation(app, NULL);
 			selStation = NULL;
 		}
 		BarUiActDefaultEventcmd ("stationdelete");
@@ -368,7 +370,7 @@ BarUiActCallback(BarUiActSongInfo) {
 	/* print real station if quickmix */
 	BarUiPrintSong (&app->settings, selSong,
 			selStation->isQuickMix ?
-			PianoFindStationById (app->ph.stations, selSong->stationId) :
+			BarStateFindStationById(app, selSong->stationId) :
 			NULL);
 }
 
@@ -416,8 +418,7 @@ BarUiActCallback(BarUiActLoveSong) {
 	assert (selSong != NULL);
 	assert (selSong->stationId != NULL);
 
-	if ((realStation = PianoFindStationById (app->ph.stations,
-			selSong->stationId)) == NULL) {
+	if ((realStation = BarStateFindStationById(app, selSong->stationId)) == NULL) {
 		assert (0);
 		return;
 	}
@@ -495,10 +496,10 @@ BarUiActCallback(BarUiActRenameStation) {
 /*	play another station
  */
 BarUiActCallback(BarUiActSelectStation) {
-	PianoStation_t *newStation = BarUiSelectStation (app, app->ph.stations,
+	PianoStation_t *newStation = BarUiSelectStation (app, BarStateGetStationList(app),
 			"Select station: ", NULL, app->settings.autoselect);
 	if (newStation != NULL) {
-		app->nextStation = newStation;
+		BarStateSetNextStation(app, newStation);
 		drainPlaylist (app);
 	}
 }
@@ -513,7 +514,7 @@ BarUiActCallback(BarUiActTempBanSong) {
 
 	BarUiMsg (&app->settings, MSG_INFO, "Putting song on shelf... ");
 	if (BarUiActDefaultPianoCall (PIANO_REQUEST_ADD_TIRED_SONG, selSong) &&
-			selSong == app->playlist) {
+			selSong == BarStateGetPlaylist(app)) {
 		BarUiDoSkipSong (&app->player);
 	}
 	BarUiActDefaultEventcmd ("songshelf");
@@ -535,7 +536,7 @@ BarUiActCallback(BarUiActPrintUpcoming) {
  *	all/none
  */
 static void BarUiActQuickmixCallback (BarApp_t *app, char *buf) {
-	PianoStation_t *curStation = app->ph.stations;
+	PianoStation_t *curStation = BarStateGetStationList(app);
 
 	/* do nothing if buf is empty/contains more than one character */
 	if (buf[0] == '\0' || buf[1] != '\0') {
@@ -580,7 +581,7 @@ BarUiActCallback(BarUiActSelectQuickMix) {
 
 	if (selStation->isQuickMix) {
 		PianoStation_t *toggleStation;
-		while ((toggleStation = BarUiSelectStation (app, app->ph.stations,
+		while ((toggleStation = BarUiSelectStation (app, BarStateGetStationList(app),
 				"Toggle QuickMix for station: ",
 				BarUiActQuickmixCallback, false)) != NULL) {
 			toggleStation->useQuickMix = !toggleStation->useQuickMix;
@@ -611,7 +612,7 @@ BarUiActCallback(BarUiActHistory) {
 				&app->input);
 		if (histSong != NULL) {
 			BarKeyShortcutId_t action;
-			PianoStation_t *songStation = PianoFindStationById (app->ph.stations,
+			PianoStation_t *songStation = BarStateFindStationById(app, 
 					histSong->stationId);
 
 			if (songStation == NULL) {
