@@ -13,7 +13,6 @@ import './components/quickmix-modal';
 import './components/create-station-modal';
 import './components/play-station-modal';
 import './components/select-station-modal';
-import './components/genre-modal';
 import './components/add-music-modal';
 import './components/rename-station-modal';
 import './components/station-mode-modal';
@@ -48,7 +47,6 @@ export class PianobarApp extends LitElement {
   @state() private playNewStationModalOpen = false;
   @state() private newStationName = '';
   @state() private selectStationModalOpen = false;
-  @state() private genreModalOpen = false;
   @state() private genreCategories: any[] = [];
   @state() private genreLoading = false;
   @state() private searchResults: any = { categories: [] };
@@ -510,6 +508,11 @@ export class PianobarApp extends LitElement {
     this.showToast('Adding shared station...');
   }
   
+  handleBrowseGenres() {
+    this.genreLoading = true;
+    this.socket.emit('station.getGenres', {});
+  }
+  
   handlePlayNewStation() {
     if (this.newStationId) {
       this.socket.emit('station.change', this.newStationId);
@@ -541,25 +544,15 @@ export class PianobarApp extends LitElement {
     this.selectStationModalOpen = false;
   }
   
-  handleInfoAddGenre() {
-    this.genreModalOpen = true;
-    this.genreLoading = true;
-    this.socket.emit('station.getGenres');
-  }
-  
   handleGenreCreate(e: CustomEvent) {
     const { musicId } = e.detail;
     this.socket.emit('station.addGenre', { musicId });
     this.creatingStationFrom = 'genre';
-    this.genreModalOpen = false;
+    this.createStationModalOpen = false;
     this.genreCategories = [];
     this.genreLoading = false;
-  }
-  
-  handleGenreCancel() {
-    this.genreModalOpen = false;
-    this.genreCategories = [];
-    this.genreLoading = false;
+    this.searchResults = { categories: [] };
+    this.searchLoading = false;
   }
   
   handleInfoAddMusic() {
@@ -607,7 +600,7 @@ export class PianobarApp extends LitElement {
       // Fetch modes immediately when opening modal
       this.handleGetStationModes();
     } else {
-      this.showToast('No station currently playing', 'error');
+      this.showToast('No station currently playing');
     }
   }
   
@@ -639,7 +632,7 @@ export class PianobarApp extends LitElement {
       // Fetch station info immediately when opening modal
       this.handleGetStationInfo();
     } else {
-      this.showToast('No station currently playing', 'error');
+      this.showToast('No station currently playing');
     }
   }
   
@@ -750,7 +743,6 @@ export class PianobarApp extends LitElement {
               @info-rename-station=${this.handleInfoRenameStation}
               @info-station-mode=${this.handleInfoStationMode}
               @info-station-seeds=${this.handleInfoStationSeeds}
-              @info-add-genre=${this.handleInfoAddGenre}
               @info-delete-station=${this.handleInfoDeleteStation}
             ></info-menu>
           </div>
@@ -831,7 +823,6 @@ export class PianobarApp extends LitElement {
           @info-rename-station=${this.handleInfoRenameStation}
           @info-station-mode=${this.handleInfoStationMode}
           @info-station-seeds=${this.handleInfoStationSeeds}
-          @info-add-genre=${this.handleInfoAddGenre}
           @info-delete-station=${this.handleInfoDeleteStation}
         ></bottom-toolbar>
         
@@ -846,6 +837,8 @@ export class PianobarApp extends LitElement {
           ?open="${this.createStationModalOpen}"
           ?loading="${this.searchLoading}"
           .searchResults="${this.searchResults}"
+          .genreCategories="${this.genreCategories}"
+          .genreLoading="${this.genreLoading}"
           .currentSongName="${this.songTitle}"
           .currentArtistName="${this.artistName}"
           .currentTrackToken="${this.currentTrackToken}"
@@ -854,6 +847,8 @@ export class PianobarApp extends LitElement {
           @search=${this.handleCreateStationQuery}
           @create=${this.handleCreateStationFromSearch}
           @shared-station-submit=${this.handleSharedStationSubmit}
+          @browse-genres=${this.handleBrowseGenres}
+          @genre-create=${this.handleGenreCreate}
           @cancel=${this.handleCreateStationCancel}
         ></create-station-modal>
         
@@ -873,14 +868,6 @@ export class PianobarApp extends LitElement {
           @station-select=${this.handleStationSelectedForDelete}
           @cancel=${this.handleCancelSelectStation}
         ></select-station-modal>
-        
-        <genre-modal
-          ?open="${this.genreModalOpen}"
-          ?loading="${this.genreLoading}"
-          .categories="${this.genreCategories}"
-          @create=${this.handleGenreCreate}
-          @cancel=${this.handleGenreCancel}
-        ></genre-modal>
         
         <add-music-modal
           ?open="${this.addMusicModalOpen}"

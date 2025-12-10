@@ -159,11 +159,6 @@ export class InfoMenu extends LitElement {
     this.closeMenu();
   }
   
-  handleAddGenre() {
-    this.dispatchEvent(new CustomEvent('info-add-genre'));
-    this.closeMenu();
-  }
-  
   render() {
     return html`
       <div class="menu-popup ${this.menuOpen ? '' : 'hidden'}">
@@ -193,10 +188,6 @@ export class InfoMenu extends LitElement {
         <button class="action-button" @click=${this.handleCreateStation}>
           <span class="material-icons">add_circle</span>
           <span>Create station</span>
-        </button>
-        <button class="action-button" @click=${this.handleAddGenre}>
-          <span class="material-icons">library_music</span>
-          <span>Create genre station</span>
         </button>
         <button class="action-button" @click=${this.handleAddMusic}>
           <span class="material-icons">library_add</span>
