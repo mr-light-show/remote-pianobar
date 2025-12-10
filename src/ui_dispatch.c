@@ -69,3 +69,44 @@ BarKeyShortcutId_t BarUiDispatch (BarApp_t *app, const char key, PianoStation_t 
 	return BAR_KS_COUNT;
 }
 
+/*	Execute action directly by ID (for Web UI and programmatic calls)
+ *	Does not check keybindings, always executes if context allows
+ *	@return actionId if action was performed or BAR_KS_COUNT on error
+ */
+BarKeyShortcutId_t BarUiDispatchById (BarApp_t *app, BarKeyShortcutId_t actionId,
+		PianoStation_t *selStation, PianoSong_t *selSong,
+		const bool verbose, BarUiDispatchContext_t context) {
+	assert (app != NULL);
+	
+	/* Validate action ID */
+	if (actionId >= BAR_KS_COUNT) {
+		return BAR_KS_COUNT;
+	}
+
+	if (selStation != NULL) {
+		context |= BAR_DC_STATION;
+	}
+	if (selSong != NULL) {
+		context |= BAR_DC_SONG;
+	}
+
+	/* Check if required context is available */
+	if ((dispatchActions[actionId].context & context) == dispatchActions[actionId].context) {
+		assert (dispatchActions[actionId].function != NULL);
+		
+		dispatchActions[actionId].function (app, selStation, selSong, context);
+		return actionId;
+	} else if (verbose) {
+		if (dispatchActions[actionId].context & BAR_DC_SONG) {
+			BarUiMsg (&app->settings, MSG_ERR, "No song playing.\n");
+		} else if (dispatchActions[actionId].context & BAR_DC_STATION) {
+			BarUiMsg (&app->settings, MSG_ERR, "No station selected.\n");
+		} else {
+			assert (0);
+		}
+		return BAR_KS_COUNT;
+	}
+	
+	return BAR_KS_COUNT;
+}
+

@@ -141,7 +141,7 @@ START_TEST(test_socketio_emit_volume) {
 }
 END_TEST
 
-/* Test: Command translation - playback commands */
+/* Test: Action dispatch - playback commands */
 START_TEST(test_socketio_translate_playback_commands) {
 	BarApp_t app;
 	BarSettings_t settings;
@@ -158,7 +158,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 	memset(&ctx, 0, sizeof(ctx));
 	app.wsContext = &ctx;
 	
-	/* Test playback.next - commands now execute directly via BarUiDispatch */
+	/* Test playback.next - commands now execute directly via BarUiDispatchById */
 	/* Just verify it doesn't crash */
 	BarSocketIoHandleAction(&app, "playback.next", NULL);
 	
@@ -173,7 +173,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 }
 END_TEST
 
-/* Test: Command translation - song commands */
+/* Test: Action dispatch - song commands */
 START_TEST(test_socketio_translate_song_commands) {
 	BarApp_t app;
 	BarSettings_t settings;
@@ -189,7 +189,7 @@ START_TEST(test_socketio_translate_song_commands) {
 	memset(&ctx, 0, sizeof(ctx));
 	app.wsContext = &ctx;
 	
-	/* Test song.love - commands now execute directly via BarUiDispatch */
+	/* Test song.love - commands now execute directly via BarUiDispatchById */
 	BarSocketIoHandleAction(&app, "song.love", NULL);
 	
 	/* Test song.ban */
@@ -226,7 +226,7 @@ START_TEST(test_socketio_translate_volume_commands) {
 	memset(&ctx, 0, sizeof(ctx));
 	app.wsContext = &ctx;
 	
-	/* Test volume.up - commands now execute directly via BarUiDispatch */
+	/* Test volume.up - commands now execute directly via BarUiDispatchById */
 	BarSocketIoHandleAction(&app, "volume.up", NULL);
 	
 	/* Test volume.down */
@@ -241,7 +241,7 @@ START_TEST(test_socketio_translate_volume_commands) {
 }
 END_TEST
 
-/* Test: Command translation - reject invalid commands */
+/* Test: Action dispatch - reject invalid commands */
 START_TEST(test_socketio_reject_invalid_command) {
 	BarApp_t app;
 	BarSettings_t settings;
@@ -268,7 +268,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 }
 END_TEST
 
-/* Test: Command translation - reject single-letter commands */
+/* Test: Action dispatch - reject single-letter commands */
 START_TEST(test_socketio_reject_single_letter) {
 	BarApp_t app;
 	BarSettings_t settings;
@@ -374,7 +374,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	clearBroadcastMock();
 	
 	/* Simulate love command - should emit start event */
-	song.rating = PIANO_RATE_LOVE;  /* Simulate what BarUiDispatch does */
+	song.rating = PIANO_RATE_LOVE;  /* Simulate what BarUiDispatchById does */
 	BarSocketIoEmitStart(&app);
 	
 	/* Verify "start" event was emitted with rating */
@@ -408,8 +408,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_emit, test_socketio_emit_volume);
 	suite_add_tcase(s, tc_emit);
 	
-	/* Command translation tests */
-	tc_translate = tcase_create("Command Translation");
+	/* Action dispatch tests */
+	tc_translate = tcase_create("Action Dispatch");
 	tcase_add_test(tc_translate, test_socketio_translate_playback_commands);
 	tcase_add_test(tc_translate, test_socketio_translate_song_commands);
 	tcase_add_test(tc_translate, test_socketio_translate_volume_commands);

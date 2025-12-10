@@ -58,77 +58,72 @@ static int sliderToDb(int sliderPercent, int maxGain) {
 	}
 }
 
-/* Command mapping: descriptive → single-letter */
+/* Action mapping: descriptive command name → action ID */
 typedef struct {
 	const char *descriptive;
-	const char *singleLetter;
-} BarCommandMapping_t;
+	BarKeyShortcutId_t actionId;
+} BarActionMapping_t;
 
-static const BarCommandMapping_t commandMappings[] = {
+static const BarActionMapping_t actionMappings[] = {
 	/* Playback */
-	{"playback.next", "n"},
-	{"playback.toggle", "p"},
-	{"playback.play", "P"},
-	{"playback.pause", "S"},
+	{"playback.next", BAR_KS_SKIP},
+	{"playback.toggle", BAR_KS_PLAYPAUSE},
+	{"playback.play", BAR_KS_PLAY},
+	{"playback.pause", BAR_KS_PAUSE},
 	
 	/* Volume */
-	{"volume.up", ")"},
-	{"volume.down", "("},
-	{"volume.reset", "^"},
-	{"volume.set", "%"},
+	{"volume.up", BAR_KS_VOLUP},
+	{"volume.down", BAR_KS_VOLDOWN},
+	{"volume.reset", BAR_KS_VOLRESET},
+	/* volume.set handled specially in BarSocketIoHandleAction */
 	
 	/* Song */
-	{"song.love", "+"},
-	{"song.ban", "-"},
-	{"song.tired", "t"},
-	{"song.bookmark", "b"},
-	{"song.explain", "e"},
-	{"song.info", "i"},
-	{"song.createStationFrom", "v"},
+	{"song.love", BAR_KS_LOVE},
+	{"song.ban", BAR_KS_BAN},
+	{"song.tired", BAR_KS_TIRED},
+	{"song.bookmark", BAR_KS_BOOKMARK}, // Not implemented in websocekts - Pandora discontinued this feature in August 2022
+	{"song.explain", BAR_KS_EXPLAIN},
+	{"song.info", BAR_KS_INFO},
+	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG},
 	
 	/* Station */
-	{"station.change", "s"},
-	{"station.create", "c"},
-	{"station.delete", "d"},
-	{"station.rename", "r"},
-	{"station.addMusic", "a"},
-	{"station.addGenre", "g"},
-	{"station.addShared", "j"},
-	{"station.selectQuickMix", "x"},
-	{"station.mode", "M"},
-	{"station.seeds", "F"},
-	
-	/* Music Search */
-	{"music.search", "C"},
+	{"station.change", BAR_KS_SELECTSTATION},
+	{"station.create", BAR_KS_CREATESTATION},
+	{"station.delete", BAR_KS_DELETESTATION},
+	{"station.rename", BAR_KS_RENAMESTATION},
+	{"station.addMusic", BAR_KS_ADDMUSIC},
+	{"station.addGenre", BAR_KS_GENRESTATION},
+	{"station.addShared", BAR_KS_ADDSHARED},
+	{"station.selectQuickMix", BAR_KS_SELECTQUICKMIX},
+	/* station.mode, station.seeds, music.search, query.stations handled by dedicated events */
 	
 	/* Query */
-	{"query.history", "h"},
-	{"query.upcoming", "u"},
-	{"query.stations", "s"}, /* Special: handled differently */
+	{"query.history", BAR_KS_HISTORY},  // TODO: Implement this
+	{"query.upcoming", BAR_KS_UPCOMING},
 	
 	/* App */
-	{"app.quit", "q"},
-	{"app.settings", "!"},
+	{"app.quit", BAR_KS_QUIT},
+	{"app.settings", BAR_KS_SETTINGS}, // Not implemented in websocekts - Changes don't persist, and are only temporary session changes
 	
-	{NULL, NULL} /* terminator */
+	{NULL, (BarKeyShortcutId_t)-1} /* terminator */
 };
 
-/* Translate descriptive command to single-letter command 
- * Returns NULL if command not found (no backward compatibility) */
-static const char *BarSocketIoTranslateCommand(const char *command) {
+/* Translate descriptive command to action ID
+ * Returns (BarKeyShortcutId_t)-1 if command not found */
+static BarKeyShortcutId_t BarSocketIoTranslateAction(const char *command) {
 	if (!command) {
-		return NULL;
+		return (BarKeyShortcutId_t)-1;
 	}
 	
 	/* Look up descriptive command in mapping table */
-	for (size_t i = 0; commandMappings[i].descriptive != NULL; i++) {
-		if (strcmp(command, commandMappings[i].descriptive) == 0) {
-			return commandMappings[i].singleLetter;
+	for (size_t i = 0; actionMappings[i].descriptive != NULL; i++) {
+		if (strcmp(command, actionMappings[i].descriptive) == 0) {
+			return actionMappings[i].actionId;
 		}
 	}
 	
-	/* Not found - reject single-letter and unknown commands */
-	return NULL;
+	/* Not found */
+	return (BarKeyShortcutId_t)-1;
 }
 
 /* Parse Socket.IO protocol message format */
@@ -272,6 +267,9 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	} else if (strcmp(eventName, "station.addMusic") == 0) {
 		/* Add music to station */
 		BarSocketIoHandleAddMusic(app, data);
+	} else if (strcmp(eventName, "station.addShared") == 0) {
+		/* Add shared station by ID */
+		BarSocketIoHandleAddShared(app, data);
 	} else if (strcmp(eventName, "station.rename") == 0) {
 		/* Rename station */
 		BarSocketIoHandleRenameStation(app, data);
@@ -769,6 +767,57 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
 		BarSocketIoEmitStations(app);
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to create genre station\n");
+	}
+}
+
+/* Handle 'station.addShared' event from client */
+void BarSocketIoHandleAddShared(BarApp_t *app, json_object *data) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataCreateStation_t reqData;
+	json_object *stationIdObj;
+	const char *stationId;
+	
+	if (!app || !data) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - invalid parameters\n");
+		return;
+	}
+	
+	/* Extract stationId from data */
+	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - missing stationId\n");
+		return;
+	}
+	
+	stationId = json_object_get_string(stationIdObj);
+	
+	if (!stationId) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - invalid stationId\n");
+		return;
+	}
+	
+	/* Validate stationId contains only digits */
+	for (const char *p = stationId; *p != '\0'; p++) {
+		if (*p < '0' || *p > '9') {
+			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - stationId must contain only digits: %s\n", stationId);
+			return;
+		}
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Adding shared station with ID: %s\n", stationId);
+	
+	/* Set up request data */
+	reqData.token = (char *)stationId;
+	reqData.type = PIANO_MUSICTYPE_INVALID;
+	
+	/* Create the station */
+	if (BarUiPianoCall(app, PIANO_REQUEST_CREATE_STATION, &reqData, &pRet, &wRet)) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Shared station added successfully\n");
+		
+		/* Emit updated station list to all clients */
+		BarSocketIoEmitStations(app);
+	} else {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to add shared station\n");
 	}
 }
 
@@ -1407,18 +1456,9 @@ static PianoStation_t *BarSocketIoFindStation(BarApp_t *app, const char *nameOrI
 
 /* Handle 'action' event from client */
 void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *data) {
-	const char *translated;
+	BarKeyShortcutId_t actionId;
 	
 	if (!app || !action || !app->wsContext) {
-		return;
-	}
-	
-	/* Translate descriptive command to single-letter */
-	translated = BarSocketIoTranslateCommand(action);
-	
-	if (!translated) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown or unsupported action: %s\n", action);
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Use descriptive commands (e.g., playback.next, song.love)\n");
 		return;
 	}
 	
@@ -1445,16 +1485,25 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		}
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → '%s' (executing directly)\n", 
-	           action, translated);
+	/* Translate descriptive command to action ID */
+	actionId = BarSocketIoTranslateAction(action);
 	
-	/* Execute command directly in WebSocket thread */
-	BarUiDispatch(app, translated[0], BarStateGetCurrentStation(app), 
-	              BarStateGetPlaylist(app), false, 
-	              BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
+	if (actionId == (BarKeyShortcutId_t)-1) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown or unsupported action: %s\n", action);
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Use descriptive commands (e.g., playback.next, song.love)\n");
+		return;
+	}
+	
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → ID %d (executing directly)\n", 
+	           action, actionId);
+	
+	/* Execute action directly by ID in WebSocket thread */
+	BarUiDispatchById(app, actionId, BarStateGetCurrentStation(app), 
+	                  BarStateGetPlaylist(app), false, 
+	                  BAR_DC_GLOBAL | BAR_DC_STATION | BAR_DC_SONG);
 	
 	/* Emit updated state for commands that change song state */
-	if (translated[0] == '+' || translated[0] == '-') {
+	if (actionId == BAR_KS_LOVE || actionId == BAR_KS_BAN) {
 		/* Love or ban - emit updated song info with new rating */
 		if (BarStateGetPlaylist(app)) {
 			BarSocketIoEmitStart(app);

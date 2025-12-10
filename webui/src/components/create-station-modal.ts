@@ -18,6 +18,16 @@ interface SearchResults {
   categories: SearchCategory[];
 }
 
+interface Genre {
+  name: string;
+  musicId: string;
+}
+
+interface GenreCategory {
+  name: string;
+  genres: Genre[];
+}
+
 @customElement('create-station-modal')
 export class CreateStationModal extends ModalBase {
   @property({ type: String }) currentSongName = '';
@@ -25,12 +35,15 @@ export class CreateStationModal extends ModalBase {
   @property({ type: String }) currentTrackToken = '';
   @property({ type: Boolean }) loading = false;
   @property({ type: Object }) searchResults: SearchResults = { categories: [] };
+  @property({ type: Array }) genreCategories: GenreCategory[] = [];
+  @property({ type: Boolean }) genreLoading = false;
   
-  @state() private mode: 'select' | 'search-results' = 'select';
+  @state() private mode: 'select' | 'search-results' | 'browse-genres' = 'select';
   @state() private searchQuery: string = '';
   @state() private expandedCategories: Set<string> = new Set();
   @state() private selectedMusicId: string | null = null;
-  @state() private selectedSource: 'song' | 'artist' | 'search' | null = null;
+  @state() private selectedSource: 'song' | 'artist' | 'search' | 'genre' | null = null;
+  @state() private sharedStationId: string = '';
   
   constructor() {
     super();
@@ -94,12 +107,67 @@ export class CreateStationModal extends ModalBase {
     }
   }
   
+  handleSharedStationInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    // Only allow digits
+    const value = input.value.replace(/[^0-9]/g, '');
+    this.sharedStationId = value;
+    input.value = value;
+  }
+  
+  handleSharedStationKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && this.sharedStationId.trim()) {
+      this.handleAddSharedStation();
+    }
+  }
+  
+  handleAddSharedStation() {
+    if (!this.sharedStationId.trim()) {
+      return;
+    }
+    
+    this.dispatchEvent(new CustomEvent('shared-station-submit', {
+      detail: { stationId: this.sharedStationId.trim() }
+    }));
+  }
+  
+  handleBrowseGenres() {
+    this.mode = 'browse-genres';
+    this.selectedMusicId = null;
+    this.expandedCategories.clear();
+    
+    this.dispatchEvent(new CustomEvent('browse-genres'));
+  }
+  
+  handleGenreSelect(musicId: string) {
+    this.selectedMusicId = musicId;
+    this.selectedSource = 'genre';
+  }
+  
+  handleGenreCreate() {
+    if (!this.selectedMusicId) {
+      return;
+    }
+    
+    this.dispatchEvent(new CustomEvent('genre-create', {
+      detail: { musicId: this.selectedMusicId }
+    }));
+  }
+  
+  handleBackToSelect() {
+    this.mode = 'select';
+    this.selectedMusicId = null;
+    this.selectedSource = null;
+    this.expandedCategories.clear();
+  }
+  
   protected onCancel() {
     this.mode = 'select';
     this.selectedMusicId = null;
     this.selectedSource = null;
     this.expandedCategories.clear();
     this.searchQuery = '';
+    this.sharedStationId = '';
   }
   
   static styles = [
@@ -166,6 +234,10 @@ export class CreateStationModal extends ModalBase {
     
     .search-section {
       margin-top: 16px;
+    }
+    
+    .search-section .button-confirm {
+      width: 90px;
     }
     
     .search-label {
@@ -294,6 +366,24 @@ export class CreateStationModal extends ModalBase {
             Search
           </button>
         </div>
+        
+        <div class="search-input-container" style="margin-top: 12px;">
+          <input
+            type="text"
+            class="search-input"
+            placeholder="Enter shared station ID (digits only)"
+            .value=${this.sharedStationId}
+            @input=${this.handleSharedStationInput}
+            @keydown=${this.handleSharedStationKeyDown}
+          >
+          <button 
+            class="button-confirm" 
+            @click=${this.handleAddSharedStation}
+            ?disabled=${!this.sharedStationId.trim()}
+          >
+            Add
+          </button>
+        </div>
       </div>
       
       <div class="divider"></div>
@@ -319,6 +409,14 @@ export class CreateStationModal extends ModalBase {
           ${this.currentSongName ? html`
             <div class="option-detail">${this.currentSongName}</div>
           ` : ''}
+        </button>
+        
+        <button class="option-button" @click=${this.handleBrowseGenres}>
+          <div class="option-main">
+            <span class="material-icons">library_music</span>
+            <span>Genre</span>
+          </div>
+          <div class="option-detail">Select a genre</div>
         </button>
       </div>
     `;
@@ -407,9 +505,74 @@ export class CreateStationModal extends ModalBase {
     return this.renderModal(body, footer);
   }
   
+  renderBrowseGenresMode() {
+    let content;
+    
+    if (this.genreLoading) {
+      content = this.renderLoading('Loading genres...');
+    } else if (!this.genreCategories || this.genreCategories.length === 0) {
+      content = html`<div class="no-results">No genres available</div>`;
+    } else {
+      content = html`
+        <div class="category-list">
+          ${this.genreCategories.map(category => html`
+            <div>
+              <div class="category-header" @click=${() => this.toggleCategory(category.name)}>
+                <span class="material-icons chevron ${this.expandedCategories.has(category.name) ? 'expanded' : ''}">
+                  chevron_right
+                </span>
+                <span class="category-name">${category.name}</span>
+                <span class="category-count">(${category.genres.length})</span>
+              </div>
+              ${this.expandedCategories.has(category.name) ? html`
+                <div class="results-list">
+                  ${category.genres.map(genre => html`
+                    <div class="list-item">
+                      <label>
+                        <input
+                          type="radio"
+                          name="genre-select"
+                          .value=${genre.musicId}
+                          .checked=${this.selectedMusicId === genre.musicId}
+                          @change=${() => this.handleGenreSelect(genre.musicId)}
+                        >
+                        <span class="result-item-name">${genre.name}</span>
+                      </label>
+                    </div>
+                  `)}
+                </div>
+              ` : ''}
+            </div>
+          `)}
+        </div>
+      `;
+    }
+    
+    const body = html`${content}`;
+    
+    const footer = html`
+      <div class="modal-footer">
+        <button class="button-cancel" @click=${this.handleBackToSelect}>
+          Back
+        </button>
+        <button 
+          class="button-confirm"
+          ?disabled=${!this.selectedMusicId || this.genreLoading}
+          @click=${this.handleGenreCreate}
+        >
+          Create Station
+        </button>
+      </div>
+    `;
+    
+    return this.renderModal(body, footer);
+  }
+  
   render() {
     if (this.mode === 'select') {
       return this.renderSelectMode();
+    } else if (this.mode === 'browse-genres') {
+      return this.renderBrowseGenresMode();
     } else {
       return this.renderSearchResultsMode();
     }

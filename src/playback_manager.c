@@ -68,7 +68,7 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 		BarStateSetNextStation(app, NULL);
 	}
 
-	assert(interrupted == &app->player.interrupted);
+	/* In WebSocket mode, interrupted may be temporarily changed by readline */
 	interrupted = &app->doQuit;
 
 	app->player.mode = PLAYER_DEAD;

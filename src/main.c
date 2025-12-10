@@ -464,14 +464,21 @@ static void BarMainLoop (BarApp_t *app) {
 			BarMainHandleUserInput (app);
 		}
 
-		/* show time */
-		if (!BarShouldSkipCliOutput(app) && BarPlayerGetMode (player) == PLAYER_PLAYING) {
-			BarMainPrintTime (app);
-		}
+	/* show time */
+	if (!BarShouldSkipCliOutput(app) && BarPlayerGetMode (player) == PLAYER_PLAYING) {
+		BarMainPrintTime (app);
 	}
 
 	#ifdef WEBSOCKET_ENABLED
-	/* Stop playback manager */
+	/* Broadcast progress to web clients in WEB and BOTH modes */
+	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
+		BarWsBroadcastProgress(app);
+	}
+	#endif
+}
+
+#ifdef WEBSOCKET_ENABLED
+/* Stop playback manager */
 	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
 		BarPlaybackManagerStop(app);
 	}

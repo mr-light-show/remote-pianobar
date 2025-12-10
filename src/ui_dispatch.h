@@ -113,3 +113,6 @@ static const BarUiDispatchAction_t dispatchActions[BAR_KS_COUNT] = {
 BarKeyShortcutId_t BarUiDispatch (BarApp_t *, const char, PianoStation_t *, PianoSong_t *,
 		const bool, BarUiDispatchContext_t);
 
+BarKeyShortcutId_t BarUiDispatchById (BarApp_t *, BarKeyShortcutId_t, PianoStation_t *, 
+		PianoSong_t *, const bool, BarUiDispatchContext_t);
+
