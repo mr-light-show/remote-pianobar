@@ -209,12 +209,3 @@ int BarHttpServeIndex(struct lws *wsi, const char *webui_path) {
 	return BarHttpServeFile(wsi, filepath);
 }
 
-/* HTTP callback handler */
-int BarHttpCallback(struct lws *wsi, int reason,
-                    void *user, void *in, size_t len) {
-	/* TODO: Implement full HTTP callback handling */
-	/* This is called by libwebsockets for HTTP protocol */
-	/* For now, this is a stub - will be implemented when integrating */
-	return 0;
-}
-

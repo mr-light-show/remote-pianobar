@@ -45,8 +45,15 @@ typedef enum {
 /* Set broadcast callback (called by WebSocket core) */
 void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t));
 
+/* Unicast support - for sending to specific client only */
+void BarSocketIoSetUnicastTarget(void *wsi);
+void *BarSocketIoGetUnicastTarget(void);
+
+/* Emit 'process' event to specific client only (unicast) */
+void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi);
+
 /* Handle incoming Socket.IO message */
-void BarSocketIoHandleMessage(BarApp_t *app, const char *message);
+void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi);
 
 /* Emit event to all connected clients */
 void BarSocketIoEmit(const char *event, struct json_object *data);
@@ -80,7 +87,7 @@ void BarSocketIoEmitUpcoming(BarApp_t *app, struct PianoSong *firstSong, int max
 void BarSocketIoHandleAction(BarApp_t *app, const char *action, struct json_object *data);
 
 /* Handle 'changeStation' event from client */
-void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationName);
+void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId);
 
 /* Handle 'station.setQuickMix' event from client */
 void BarSocketIoHandleSetQuickMix(BarApp_t *app, struct json_object *data);
@@ -91,8 +98,8 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, struct json_object *data);
 /* Handle 'station.createFrom' event from client */
 void BarSocketIoHandleCreateStationFrom(BarApp_t *app, struct json_object *data);
 
-/* Handle 'query' event from client */
-void BarSocketIoHandleQuery(BarApp_t *app);
+/* Handle 'query' event from client (unicast response to requesting client) */
+void BarSocketIoHandleQuery(BarApp_t *app, void *wsi);
 
 /* Fetch genres and emit to client */
 void BarSocketIoHandleGetGenres(BarApp_t *app);

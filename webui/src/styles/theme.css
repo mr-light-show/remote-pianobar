@@ -1,5 +1,6 @@
 :root {
   /* Light theme (Material You inspired) */
+  --primary: #6750A4;
   --primary-color: #6750A4;
   --primary-dark: #4F378B;
   --primary-container: #EADDFF;
@@ -10,27 +11,32 @@
   --on-background: #1C1B1F;
   --surface: #FFFBFE;
   --surface-variant: #E7E0EC;
+  --surface-container: #F3EDF7;
+    --surface-container-high: #ECE6F0;
+    --surface-container-highest: #E6E0E9;
   --on-surface: #1C1B1F;
   --on-surface-variant: #49454F;
   --outline: #79747E;
   
+  --tertiary: #7D5260;
   --error: #b3261e;
   --error-dark: #8c1d18;
+  --error-container: #F9DEDC;
   --on-error: #ffffff;
+  --on-error-container: #410E0B;
   
   /* Success (for love button) */
   --success: #2e7d32;
-  --success-dark: #1b5e20;
   --on-success: #ffffff;
   
   /* Warning (for tired button) */
   --warning: #f57c00;
-  --warning-dark: #e65100;
   --on-warning: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
+    --primary: #D0BCFF;
     --primary-color: #D0BCFF;
     --primary-dark: #B8A0E8;
     --primary-container: #4F378B;
@@ -41,22 +47,26 @@
     --on-background: #E6E1E5;
     --surface: #1C1B1F;
     --surface-variant: #49454F;
+    --surface-container: #211F26;
+      --surface-container-high: #2B2930;
+      --surface-container-highest: #36343B;
     --on-surface: #E6E1E5;
     --on-surface-variant: #CAC4D0;
     --outline: #938F99;
     
+    --tertiary: #EFB8C8;
     --error: #f2b8b5;
     --error-dark: #dc9c99;
+    --error-container: #8C1D18;
     --on-error: #601410;
+    --on-error-container: #F9DEDC;
     
     /* Success (for love button) */
     --success: #66bb6a;
-    --success-dark: #4caf50;
     --on-success: #000000;
     
     /* Warning (for tired button) */
     --warning: #ffa726;
-    --warning-dark: #ff9800;
     --on-warning: #000000;
   }
 }

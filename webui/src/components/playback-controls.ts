@@ -4,6 +4,7 @@ import { customElement, property } from 'lit/decorators.js';
 @customElement('playback-controls')
 export class PlaybackControls extends LitElement {
   @property({ type: Boolean }) playing = false;
+  @property({ type: Boolean }) paused = false;
   @property({ type: Boolean }) disabled = false;
   
   static styles = css`
@@ -88,9 +89,9 @@ export class PlaybackControls extends LitElement {
         @click=${this.handlePlay} 
         class="primary" 
         ?disabled=${this.disabled}
-        title="${this.disabled ? 'Select a station first' : (this.playing ? 'Pause' : 'Play')}"
+        title="${this.disabled ? 'Select a station first' : (this.playing && !this.paused ? 'Pause' : 'Play')}"
       >
-        <span class="material-icons">${this.playing ? 'pause' : 'play_arrow'}</span>
+        <span class="material-icons">${this.playing && !this.paused ? 'pause' : 'play_arrow'}</span>
       </button>
       <button 
         @click=${this.handleNext} 

@@ -30,6 +30,7 @@ export class PianobarApp extends LitElement {
   @state() private albumName = '';
   @state() private artistName = '—';
   @state() private playing = false;
+  @state() private paused = false;
   @state() private currentTime = 0;
   @state() private totalTime = 0;
   @state() private volume = 0;
@@ -237,6 +238,7 @@ export class PianobarApp extends LitElement {
       this.artistName = data.artist;
       this.totalTime = data.duration;
       this.playing = true;
+      this.paused = false;  // Reset paused state when new song starts
       this.rating = data.rating || 0;
       this.songStationName = data.songStationName || '';
       this.currentTrackToken = data.trackToken || '';
@@ -255,6 +257,7 @@ export class PianobarApp extends LitElement {
       
       // Reset UI state
       this.playing = false;
+      this.paused = false;
       this.currentTime = 0;
       this.totalTime = 0;
       // Keep song info visible until next song starts
@@ -265,10 +268,21 @@ export class PianobarApp extends LitElement {
       this.totalTime = data.duration;
     });
     
-    // Volume control removed from UI
-    // this.socket.on('volume', (data) => {
-    //   this.volume = typeof data === 'number' ? data : data.volume || 100;
-    // });
+    // Play state change event (paused/resumed)
+    this.socket.on('playState', (data) => {
+      if (data.paused !== undefined) {
+        this.paused = data.paused;
+      }
+    });
+
+    // Volume event - update volume control when other clients change volume
+    this.socket.on('volume', (data) => {
+      const volumeDb = typeof data === 'number' ? data : data.volume;
+      const volumeControl = this.shadowRoot?.querySelector('volume-control');
+      if (volumeControl && volumeDb !== undefined) {
+        (volumeControl as any).updateFromDb(volumeDb);
+      }
+    });
     
     this.socket.on('stations', (data) => {
       // Backend sends stations pre-sorted according to user's sort setting
@@ -310,6 +324,11 @@ export class PianobarApp extends LitElement {
     this.socket.on('process', (data) => {
       console.log('Received process event:', data);
       
+      // Update pause state
+      if (data.paused !== undefined) {
+        this.paused = data.paused;
+      }
+
       // Update UI with current state
       if (data.song) {
         this.albumArt = data.song.coverArt || '';
@@ -321,6 +340,11 @@ export class PianobarApp extends LitElement {
         this.rating = data.song.rating || 0;
         this.songStationName = data.song.songStationName || '';
         this.currentTrackToken = data.song.trackToken || '';
+
+        // Update elapsed time if provided
+        if (data.elapsed !== undefined) {
+          this.currentTime = data.elapsed;
+        }
       } else {
         // No song playing
         this.albumArt = '';
@@ -330,6 +354,7 @@ export class PianobarApp extends LitElement {
         const hasStation = data.station && data.station !== '';
         this.artistName = hasStation ? '—' : 'Select a station to play';
         this.playing = false;
+        this.paused = false;
         this.currentTime = 0;
         this.totalTime = 0;
         this.rating = 0;
@@ -792,6 +817,7 @@ export class PianobarApp extends LitElement {
             
             <playback-controls 
               ?playing="${this.playing}"
+              ?paused="${this.paused}"
               ?disabled="${!this.currentStationId}"
               @play=${this.handlePlayPause}
               @next=${this.handleNext}

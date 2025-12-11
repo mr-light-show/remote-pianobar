@@ -44,6 +44,53 @@ extern int BarTransformIfShared(BarApp_t *app, PianoStation_t *station);
 #include <math.h>
 #include <json-c/json.h>
 
+/* Helper: Create JSON object for a song with common fields
+ * includeTrackToken: whether to include trackToken field
+ * stationFieldName: optional field name for station ("songStationName" or "stationName"), NULL to skip */
+static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song, 
+                                                bool includeTrackToken, 
+                                                const char *stationFieldName) {
+	json_object *songObj;
+	PianoStation_t *songStation;
+	
+	if (!song) {
+		return NULL;
+	}
+	
+	songObj = json_object_new_object();
+	
+	/* Core song fields - use empty string as fallback for safety */
+	json_object_object_add(songObj, "title", 
+	                       json_object_new_string(song->title ? song->title : ""));
+	json_object_object_add(songObj, "artist", 
+	                       json_object_new_string(song->artist ? song->artist : ""));
+	json_object_object_add(songObj, "album", 
+	                       json_object_new_string(song->album ? song->album : ""));
+	json_object_object_add(songObj, "coverArt", 
+	                       json_object_new_string(song->coverArt ? song->coverArt : ""));
+	json_object_object_add(songObj, "rating", 
+	                       json_object_new_int(song->rating));
+	json_object_object_add(songObj, "duration", 
+	                       json_object_new_int(song->length));
+	
+	/* Optional: track token */
+	if (includeTrackToken) {
+		json_object_object_add(songObj, "trackToken", 
+		                       json_object_new_string(song->trackToken ? song->trackToken : ""));
+	}
+	
+	/* Optional: station name the song came from */
+	if (stationFieldName && song->stationId && app) {
+		songStation = BarStateFindStationById(app, song->stationId);
+		if (songStation) {
+			json_object_object_add(songObj, stationFieldName,
+			                       json_object_new_string(songStation->name));
+		}
+	}
+	
+	return songObj;
+}
+
 /* Convert slider percentage (0-100) to decibels (-40 to maxGain)
  * Uses perceptual curve: squared for bottom half, linear for top half */
 static int sliderToDb(int sliderPercent, int maxGain) {
@@ -174,7 +221,7 @@ static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName,
 }
 
 /* Handle incoming Socket.IO message */
-void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
+void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	BarSocketIoType_t type;
 	char *eventName = NULL;
 	json_object *data = NULL;
@@ -195,8 +242,8 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	
 	if (type == SOCKETIO_CONNECT) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
-		/* Send initial state on connect */
-		BarSocketIoHandleQuery(app);
+		/* Send initial state on connect (unicast to requesting client) */
+		BarSocketIoHandleQuery(app, wsi);
 		goto cleanup;
 	}
 	
@@ -227,21 +274,22 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message) {
 	           strcmp(eventName, "changeStation") == 0) {
 		/* Support both new (station.change) and old (changeStation) names */
 		if (data && json_object_is_type(data, json_type_string)) {
-			const char *station = json_object_get_string(data);
-			BarSocketIoHandleChangeStation(app, station);
+			const char *stationId = json_object_get_string(data);
+			BarSocketIoHandleChangeStation(app, stationId);
 		} else if (data && json_object_is_type(data, json_type_object)) {
-			json_object *stationObj;
-			if (json_object_object_get_ex(data, "station", &stationObj)) {
-				const char *station = json_object_get_string(stationObj);
-				if (station) {
-					BarSocketIoHandleChangeStation(app, station);
+			json_object *idObj;
+			/* Extract station ID from object */
+			if (json_object_object_get_ex(data, "id", &idObj)) {
+				const char *stationId = json_object_get_string(idObj);
+				if (stationId) {
+					BarSocketIoHandleChangeStation(app, stationId);
 				}
 			}
 		}
 	} else if (strcmp(eventName, "query") == 0 || 
 	           strcmp(eventName, "query.state") == 0) {
-		/* query or query.state = full state */
-		BarSocketIoHandleQuery(app);
+		/* query or query.state = full state (unicast to requesting client) */
+		BarSocketIoHandleQuery(app, wsi);
 	} else if (strcmp(eventName, "query.stations") == 0) {
 		/* query.stations = just stations list */
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
@@ -302,9 +350,22 @@ cleanup:
 /* Global broadcast callback (set by WebSocket core) */
 static void (*g_broadcastCallback)(const char *message, size_t len) = NULL;
 
+/* Unicast target - when set, broadcasts go to this client only */
+static void *g_unicastTarget = NULL;
+
 /* Set broadcast callback */
 void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t)) {
 	g_broadcastCallback = callback;
+}
+
+/* Set unicast target (NULL for broadcast mode) */
+void BarSocketIoSetUnicastTarget(void *wsi) {
+	g_unicastTarget = wsi;
+}
+
+/* Get unicast target (for websocket.c to check) */
+void *BarSocketIoGetUnicastTarget(void) {
+	return g_unicastTarget;
 }
 
 /* Format Socket.IO event message */
@@ -382,45 +443,29 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 
 /* Emit 'start' event (song started) */
 void BarSocketIoEmitStart(BarApp_t *app) {
-	json_object *data;
-	PianoStation_t *songStation;
+	json_object *data, *songData;
 	PianoSong_t *song = BarStateGetPlaylist(app);
 	
 	if (!app || !song) {
 		return;
 	}
 	
-	data = json_object_new_object();
-	json_object_object_add(data, "artist", 
-	                       json_object_new_string(song->artist));
-	json_object_object_add(data, "title", 
-	                       json_object_new_string(song->title));
-	json_object_object_add(data, "album", 
-	                       json_object_new_string(song->album));
-	json_object_object_add(data, "coverArt", 
-	                       json_object_new_string(song->coverArt));
-	json_object_object_add(data, "rating", 
-	                       json_object_new_int(song->rating));
-	json_object_object_add(data, "duration", 
-	                       json_object_new_int(song->length));
-	json_object_object_add(data, "trackToken", 
-	                       json_object_new_string(song->trackToken ? song->trackToken : ""));
+	/* Create song JSON with all fields including trackToken and songStationName */
+	songData = BarSocketIoCreateSongJson(app, song, true, "songStationName");
+	if (!songData) {
+		return;
+	}
 	
+	/* Copy all song fields to root level for 'start' event */
+	data = json_object_get(songData);  /* Increment ref count */
+	
+	/* Add current station info */
 	PianoStation_t *curStation = BarStateGetCurrentStation(app);
 	if (curStation) {
 		json_object_object_add(data, "station", 
 		                       json_object_new_string(curStation->name));
 		json_object_object_add(data, "stationId",
 		                       json_object_new_string(curStation->id));
-	}
-	
-	/* Station the song came from (important in QuickMix) */
-	if (song->stationId) {
-		songStation = BarStateFindStationById(app, song->stationId);
-		if (songStation) {
-			json_object_object_add(data, "songStationName",
-			                       json_object_new_string(songStation->name));
-		}
 	}
 	
 	BarSocketIoEmit("start", data);
@@ -527,6 +572,12 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	json_object_object_add(data, "playing", 
 	                       json_object_new_boolean(playlist != NULL));
 	
+	/* Include pause state */
+	pthread_mutex_lock(&app->player.lock);
+	bool paused = app->player.doPause;
+	pthread_mutex_unlock(&app->player.lock);
+	json_object_object_add(data, "paused", json_object_new_boolean(paused));
+	
 	/* Include current volume */
 	json_object_object_add(data, "volume", 
 	                       json_object_new_int(app->settings.volume));
@@ -550,34 +601,15 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	}
 	
 	if (playlist) {
-		PianoStation_t *songStation;
-		
-		song = json_object_new_object();
-		json_object_object_add(song, "title", 
-		                       json_object_new_string(playlist->title));
-		json_object_object_add(song, "artist", 
-		                       json_object_new_string(playlist->artist));
-		json_object_object_add(song, "album", 
-		                       json_object_new_string(playlist->album));
-		json_object_object_add(song, "coverArt", 
-		                       json_object_new_string(playlist->coverArt));
-		json_object_object_add(song, "rating", 
-		                       json_object_new_int(playlist->rating));
-		json_object_object_add(song, "duration", 
-		                       json_object_new_int(playlist->length));
-		json_object_object_add(song, "trackToken", 
-		                       json_object_new_string(playlist->trackToken ? playlist->trackToken : ""));
-		
-		/* Station the song came from (important in QuickMix) */
-		if (playlist->stationId) {
-			songStation = BarStateFindStationById(app, playlist->stationId);
-			if (songStation) {
-				json_object_object_add(song, "songStationName",
-				                       json_object_new_string(songStation->name));
-			}
+		/* Create song JSON with all fields including trackToken and songStationName */
+		song = BarSocketIoCreateSongJson(app, playlist, true, "songStationName");
+		if (song) {
+			json_object_object_add(data, "song", song);
 		}
 		
-		json_object_object_add(data, "song", song);
+		/* Include current elapsed time */
+		unsigned int elapsed = BarWebsocketGetElapsed(app);
+		json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
 	}
 	
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
@@ -585,6 +617,15 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
 	json_object_put(data);
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
+}
+
+/* Emit 'process' event to specific client only (unicast) */
+void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi) {
+	/* Set unicast target before emitting */
+	BarSocketIoSetUnicastTarget(wsi);
+	BarSocketIoEmitProcess(app);
+	/* Clear unicast target to return to broadcast mode */
+	BarSocketIoSetUnicastTarget(NULL);
 }
 
 /* Emit 'song.explanation' event (explanation text) */
@@ -607,7 +648,6 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs) {
 	json_object *songs, *songObj;
 	PianoSong_t *song;
-	PianoStation_t *songStation;
 	int count = 0;
 	
 	if (!app) {
@@ -619,31 +659,11 @@ void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs
 	/* Iterate through upcoming songs (limited to maxSongs) */
 	song = firstSong;
 	while (song && count < maxSongs) {
-		songObj = json_object_new_object();
-		
-		json_object_object_add(songObj, "title", 
-		                       json_object_new_string(song->title ? song->title : ""));
-		json_object_object_add(songObj, "artist", 
-		                       json_object_new_string(song->artist ? song->artist : ""));
-		json_object_object_add(songObj, "album", 
-		                       json_object_new_string(song->album ? song->album : ""));
-		json_object_object_add(songObj, "coverArt", 
-		                       json_object_new_string(song->coverArt ? song->coverArt : ""));
-		json_object_object_add(songObj, "duration", 
-		                       json_object_new_int(song->length));
-		json_object_object_add(songObj, "rating", 
-		                       json_object_new_int(song->rating));
-		
-		/* Add station name the song came from */
-		if (song->stationId) {
-			songStation = BarStateFindStationById(app, song->stationId);
-			if (songStation) {
-				json_object_object_add(songObj, "stationName",
-				                       json_object_new_string(songStation->name));
-			}
+		/* Create song JSON without trackToken, but with stationName */
+		songObj = BarSocketIoCreateSongJson(app, song, false, "stationName");
+		if (songObj) {
+			json_object_array_add(songs, songObj);
 		}
-		
-		json_object_array_add(songs, songObj);
 		
 		song = (PianoSong_t *)song->head.next;
 		count++;
@@ -1434,26 +1454,6 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
 	}
 }
 
-/* Helper: Find station by name or ID */
-static PianoStation_t *BarSocketIoFindStation(BarApp_t *app, const char *nameOrId) {
-	PianoStation_t *station;
-	
-	if (!app || !nameOrId) {
-		return NULL;
-	}
-	
-	station = BarStateGetStationList(app);
-	while (station != NULL) {
-		if (strcmp(station->name, nameOrId) == 0 ||
-		    strcmp(station->id, nameOrId) == 0) {
-			return station;
-		}
-		station = (PianoStation_t *)station->head.next;
-	}
-	
-	return NULL;
-}
-
 /* Handle 'action' event from client */
 void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *data) {
 	BarKeyShortcutId_t actionId;
@@ -1509,20 +1509,32 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			BarSocketIoEmitStart(app);
 		}
 	}
+	
+	/* Broadcast state changes for playback control */
+	if (actionId == BAR_KS_PLAY || actionId == BAR_KS_PAUSE || actionId == BAR_KS_PLAYPAUSE) {
+		/* Create state change event with just paused status */
+		json_object *stateData = json_object_new_object();
+		pthread_mutex_lock(&app->player.lock);
+		json_object_object_add(stateData, "paused", 
+		                       json_object_new_boolean(app->player.doPause));
+		pthread_mutex_unlock(&app->player.lock);
+		BarSocketIoEmit("playState", stateData);
+		json_object_put(stateData);
+	}
 }
 
 /* Handle 'changeStation' event from client */
-void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationName) {
+void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 	PianoStation_t *station;
 	
-	if (!app || !stationName) {
+	if (!app || !stationId) {
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Change station request: %s\n", stationName);
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Change station request: %s\n", stationId);
 	
-	/* Find station by name or ID */
-	station = BarSocketIoFindStation(app, stationName);
+	/* Find station by ID */
+	station = BarStateFindStationById(app, stationId);
 	
 	if (station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Switching to station: %s\n", station->name);
@@ -1530,7 +1542,7 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationName) {
 		BarUiSwitchStation(app, station);
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationName);
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
 	}
 }
 
@@ -1628,8 +1640,8 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 	
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Delete station request: %s\n", stationId);
 	
-	/* Find station by ID or name */
-	station = BarSocketIoFindStation(app, stationId);
+	/* Find station by ID */
+	station = BarStateFindStationById(app, stationId);
 	
 	if (!station) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
@@ -1729,16 +1741,18 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	}
 }
 
-/* Handle 'query' event from client */
-void BarSocketIoHandleQuery(BarApp_t *app) {
+/* Handle 'query' event from client (unicast response to requesting client) */
+void BarSocketIoHandleQuery(BarApp_t *app, void *wsi) {
 	if (!app) {
 		return;
 	}
 	
 	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Query received\n");
 	
-	/* Send full state to client */
+	/* Send full state to requesting client only (unicast) */
+	BarSocketIoSetUnicastTarget(wsi);
 	BarSocketIoEmitProcess(app);
 	BarSocketIoEmitStations(app);
+	BarSocketIoSetUnicastTarget(NULL);
 }
 

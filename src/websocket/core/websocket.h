@@ -94,12 +94,6 @@ bool BarWebsocketInit(BarApp_t *app);
 /* Destroy WebSocket server */
 void BarWebsocketDestroy(BarApp_t *app);
 
-/* Service WebSocket connections (call in main loop) */
-void BarWebsocketService(BarApp_t *app, int timeout_ms);
-
-/* Broadcast state to all connected clients */
-void BarWebsocketBroadcastState(BarApp_t *app);
-
 /* Broadcast song start event */
 void BarWebsocketBroadcastSongStart(BarApp_t *app);
 
@@ -117,7 +111,7 @@ unsigned int BarWebsocketGetElapsed(BarApp_t *app);
 
 /* Handle incoming WebSocket message */
 void BarWebsocketHandleMessage(BarApp_t *app, const char *message, 
-                               size_t len, const char *protocol);
+                               size_t len, const char *protocol, void *wsi);
 
 #endif /* _WEBSOCKET_H */
 

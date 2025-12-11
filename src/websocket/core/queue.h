@@ -24,10 +24,8 @@ THE SOFTWARE.
 #define _WEBSOCKET_QUEUE_H
 
 #include <stddef.h>
-#include <stdbool.h>
-#include <pthread.h>
 
-/* Message types for queue communication */
+/* Message types for bucket communication */
 typedef enum {
 	/* Broadcast messages (Main → WebSocket thread) */
 	MSG_TYPE_BROADCAST_START,      /* Song started */
@@ -45,50 +43,15 @@ typedef enum {
 	MSG_TYPE_SHUTDOWN              /* Shutdown signal */
 } BarWsMsgType_t;
 
-/* Message structure for queue */
+/* Message structure for buckets */
 typedef struct BarWsMessage {
 	BarWsMsgType_t type;           /* Message type */
 	void *data;                    /* Message payload (owned by message) */
 	size_t dataLen;                /* Payload length */
-	struct BarWsMessage *next;     /* Next message in queue */
+	struct BarWsMessage *next;     /* Next message in linked list */
 } BarWsMessage_t;
-
-/* Thread-safe message queue */
-typedef struct {
-	BarWsMessage_t *head;          /* First message */
-	BarWsMessage_t *tail;          /* Last message */
-	pthread_mutex_t mutex;         /* Protects queue */
-	pthread_cond_t cond;           /* Signals when not empty */
-	size_t count;                  /* Current number of messages */
-	size_t maxSize;                /* Maximum queue size */
-	bool closed;                   /* Queue is closed */
-	void *lwsContext;              /* libwebsockets context for lws_cancel_service() */
-} BarWsQueue_t;
-
-/* Initialize queue */
-void BarWsQueueInit(BarWsQueue_t *queue, size_t maxSize, void *lwsContext);
-
-/* Destroy queue and free all messages */
-void BarWsQueueDestroy(BarWsQueue_t *queue);
-
-/* Push message to queue (copies data)
- * Returns false if queue is full or closed */
-bool BarWsQueuePush(BarWsQueue_t *queue, BarWsMsgType_t type, 
-                     const void *data, size_t dataLen);
-
-/* Pop message from queue (blocks if empty, returns NULL on timeout or closed)
- * timeout_ms: -1 = block forever, 0 = non-blocking, >0 = timeout in ms
- * Caller must free returned message with BarWsMessageFree() */
-BarWsMessage_t* BarWsQueuePop(BarWsQueue_t *queue, int timeout_ms);
-
-/* Get queue size (thread-safe) */
-size_t BarWsQueueSize(BarWsQueue_t *queue);
-
-/* Close queue (prevents new pushes, wakes up all waiters) */
-void BarWsQueueClose(BarWsQueue_t *queue);
 
 /* Free message (frees data and message itself) */
 void BarWsMessageFree(BarWsMessage_t *msg);
 
 #endif /* _WEBSOCKET_QUEUE_H */
-

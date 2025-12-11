@@ -39,9 +39,5 @@ int BarHttpServeFile(struct lws *wsi, const char *filepath);
 /* Serve directory index */
 int BarHttpServeIndex(struct lws *wsi, const char *webui_path);
 
-/* HTTP callback handler */
-int BarHttpCallback(struct lws *wsi, int reason,
-                    void *user, void *in, size_t len);
-
 #endif /* _HTTP_SERVER_H */
 

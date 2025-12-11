@@ -277,8 +277,8 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 					debugPrint(DEBUG_WEBSOCKET, "WebSocket: Client tracked (slot %zu, total %zu)\n", 
 					           i, ctx->numConnections);
 					
-					/* Send current state to new client */
-					BarSocketIoEmitProcess(app);
+					/* Send current state to new client only (unicast) */
+					BarSocketIoEmitProcessUnicast(app, wsi);
 					break;
 				}
 			}
@@ -315,7 +315,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 				if (message) {
 					memcpy(message, in, len);
 					message[len] = '\0';
-					BarWebsocketHandleMessage(app, message, len, "socketio");
+					BarWebsocketHandleMessage(app, message, len, "socketio", wsi);
 					free(message);
 				}
 			}
@@ -367,11 +367,12 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 			/* TODO: Extract song data from msg->data and emit */
 			break;
 			
-		case MSG_TYPE_BROADCAST_STOP:
-			/* Song stopped */
-			ctx->progress.isPlaying = false;
-			/* TODO: Emit stop event */
-			break;
+	case MSG_TYPE_BROADCAST_STOP:
+		/* Song stopped */
+		ctx->progress.isPlaying = false;
+		/* Emit stop event via Socket.IO */
+		BarSocketIoEmit("stop", NULL);
+		break;
 			
 	case MSG_TYPE_BROADCAST_PROGRESS: {
 		/* Progress update - data contains elapsed time (unsigned int) */
@@ -403,17 +404,21 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 		break;
 	}
 			
-		case MSG_TYPE_BROADCAST_VOLUME: {
-			/* Volume changed - data contains volume (int) */
-			if (msg->data && msg->dataLen >= sizeof(int)) {
-				/* ARM64 FIX: Use memcpy to avoid unaligned access */
-				int volume;
-				memcpy(&volume, msg->data, sizeof(volume));
-				debugPrint(DEBUG_WEBSOCKET, "WebSocket: Volume broadcast - volume=%d\n", volume);
-				/* TODO: Emit volume event */
-			}
-			break;
+	case MSG_TYPE_BROADCAST_VOLUME: {
+		/* Volume changed - data contains volume (int) */
+		if (msg->data && msg->dataLen >= sizeof(int)) {
+			/* ARM64 FIX: Use memcpy to avoid unaligned access */
+			int volume;
+			memcpy(&volume, msg->data, sizeof(volume));
+			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Volume broadcast - volume=%d\n", volume);
+			
+			/* Emit volume event via Socket.IO */
+			json_object *data = json_object_new_int(volume);
+			BarSocketIoEmit("volume", data);
+			json_object_put(data);
 		}
+		break;
+	}
 			
 		case MSG_TYPE_BROADCAST_STATIONS:
 			/* Station list changed */
@@ -609,19 +614,6 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	fprintf(stderr, "WebSocket: Server stopped\n");
 }
 
-/* Service WebSocket connections */
-void BarWebsocketService(BarApp_t *app, int timeout_ms) {
-	if (!app || !app->wsContext) {
-		return;
-	}
-	
-	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	if (ctx->context) {
-		lws_service(ctx->context, timeout_ms);
-	}
-}
-
 /* Get current elapsed time */
 unsigned int BarWebsocketGetElapsed(BarApp_t *app) {
 	if (!app || !app->wsContext) {
@@ -643,16 +635,6 @@ unsigned int BarWebsocketGetElapsed(BarApp_t *app) {
 	}
 	
 	return elapsed;
-}
-
-/* Broadcast state to all connected clients */
-void BarWebsocketBroadcastState(BarApp_t *app) {
-	if (!app || !app->wsContext) {
-		return;
-	}
-	
-	/* TODO: Implement state broadcasting */
-	/* This will be implemented in socketio.c and ha_bridge.c */
 }
 
 /* Broadcast song start event */
@@ -809,10 +791,18 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 	debugPrint(dbgFlag, "WebSocket: Broadcasting to %zu clients (%zu bytes): %.100s%s\n", 
 	           ctx->numConnections, len, message, len > 100 ? "..." : "");
 	
+	/* Check for unicast mode - if set, only send to target client */
+	void *unicastTarget = BarSocketIoGetUnicastTarget();
+	
 	/* Iterate through all connected clients */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
 		if (ctx->connections[i].wsi != NULL) {
 			struct lws *wsi = (struct lws *)ctx->connections[i].wsi;
+			
+			/* Skip if in unicast mode and this isn't the target */
+			if (unicastTarget != NULL && wsi != unicastTarget) {
+				continue;
+			}
 			
 			debugPrint(dbgFlag, "WebSocket: Sending to client %zu (wsi=%p)\n", i, wsi);
 			
@@ -846,7 +836,7 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 
 /* Handle incoming WebSocket message */
 void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
-                               size_t len, const char *protocol) {
+                               size_t len, const char *protocol, void *wsi) {
 	if (!app || !message || len == 0) {
 		return;
 	}
@@ -857,7 +847,7 @@ void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
 		debugPrint(DEBUG_WEBSOCKET, "WebSocket: HA message received (not yet implemented)\n");
 	} else {
 		/* Default to Socket.IO */
-		BarSocketIoHandleMessage(app, message);
+		BarSocketIoHandleMessage(app, message, wsi);
 	}
 }
 

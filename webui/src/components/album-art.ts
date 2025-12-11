@@ -26,8 +26,8 @@ export class AlbumArt extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--surface-color);
-      color: var(--on-surface-color);
+      background: var(--surface);
+      color: var(--on-surface);
     }
     
     .material-icons {
