@@ -36,8 +36,7 @@ export class StationsPopup extends LitElement {
   
   static styles = css`
     :host {
-      position: relative;
-      display: inline-block;
+      display: contents;
     }
     
     .menu-popup {

@@ -23,10 +23,10 @@ export class BottomToolbar extends LitElement {
       right: 0;
       background: var(--surface);
       border-top: 1px solid var(--outline);
-      padding: 12px 16px;
+      padding: clamp(4px, 1.5vw, 8px) clamp(8px, 3vw, 16px);
       display: flex;
       justify-content: center;
-      gap: 16px;
+      gap: clamp(8px, 3vw, 16px);
       z-index: 50;
       box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
     }
@@ -34,15 +34,15 @@ export class BottomToolbar extends LitElement {
     button {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 20px;
+      gap: clamp(4px, 1vw, 8px);
+      padding: clamp(5px, 1.5vw, 10px) clamp(10px, 3vw, 20px);
       border: none;
-      border-radius: 20px;
+      border-radius: clamp(10px, 3vw, 20px);
       background: var(--surface-variant);
       color: var(--on-surface);
       cursor: pointer;
       transition: all 0.2s;
-      font-size: 14px;
+      font-size: clamp(7px, 2vw, 14px);
       font-weight: 500;
     }
     
@@ -62,14 +62,14 @@ export class BottomToolbar extends LitElement {
     
     .button-group {
       position: relative;
-      display: inline-block;
+      display: flex;
     }
     
     .material-icons,
     .material-icons-outlined {
       font-weight: normal;
       font-style: normal;
-      font-size: 20px;
+      font-size: clamp(10px, 3vw, 20px);
       line-height: 1;
       letter-spacing: normal;
       text-transform: none;
