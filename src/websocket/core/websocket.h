@@ -82,6 +82,13 @@ typedef struct {
 	/* Progress tracking (WS thread only) */
 	BarWsProgress_t progress;
 	
+	/* Delayed volume broadcast (for debouncing) */
+	struct {
+		time_t scheduleTime;    /* When to broadcast (epoch ms) */
+		bool pending;           /* Whether broadcast is pending */
+	} delayedVolumeBroadcast;
+	pthread_mutex_t volumeBroadcastMutex;
+	
 	/* Connections (WS thread only) */
 	BarWsConnection_t *connections;
 	size_t numConnections;
@@ -112,6 +119,9 @@ unsigned int BarWebsocketGetElapsed(BarApp_t *app);
 /* Handle incoming WebSocket message */
 void BarWebsocketHandleMessage(BarApp_t *app, const char *message, 
                                size_t len, const char *protocol, void *wsi);
+
+/* Schedule delayed volume broadcast (for debouncing) */
+void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs);
 
 #endif /* _WEBSOCKET_H */
 

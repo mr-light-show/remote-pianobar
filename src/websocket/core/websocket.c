@@ -45,6 +45,7 @@ static BarWsContext_t *g_wsContext = NULL;
 static void BarWebsocketBroadcast(const char *message, size_t len);
 static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *msg);
 static void* BarWebsocketThread(void *arg);
+static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
 /*	Bucket Pattern for WebSocket Broadcasts
  *
@@ -430,6 +431,68 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 	}
 }
 
+/* Schedule/reschedule delayed volume broadcast */
+void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs) {
+	if (!ctx) {
+		return;
+	}
+	
+	pthread_mutex_lock(&ctx->volumeBroadcastMutex);
+	
+	/* Get current time in milliseconds */
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	time_t nowMs = (ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
+	
+	ctx->delayedVolumeBroadcast.scheduleTime = nowMs + delayMs;
+	ctx->delayedVolumeBroadcast.pending = true;
+	
+	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Scheduled volume broadcast in %dms (will use current volume at broadcast time)\n", 
+	           delayMs);
+	
+	pthread_mutex_unlock(&ctx->volumeBroadcastMutex);
+	
+	/* Wake websocket thread to update sleep timeout */
+	if (ctx->context) {
+		lws_cancel_service((struct lws_context *)ctx->context);
+	}
+}
+
+/* Check and execute pending volume broadcast if timer expired */
+static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
+	if (!ctx || !app) {
+		return;
+	}
+	
+	pthread_mutex_lock(&ctx->volumeBroadcastMutex);
+	
+	if (!ctx->delayedVolumeBroadcast.pending) {
+		pthread_mutex_unlock(&ctx->volumeBroadcastMutex);
+		return;
+	}
+	
+	/* Check if timer has expired */
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	time_t nowMs = (ts.tv_sec * 1000) + (ts.tv_nsec / 1000000);
+	
+	if (nowMs >= ctx->delayedVolumeBroadcast.scheduleTime) {
+		ctx->delayedVolumeBroadcast.pending = false;
+		pthread_mutex_unlock(&ctx->volumeBroadcastMutex);
+		
+		/* Read CURRENT volume from settings (not stored value) */
+		int currentVolume = app->settings.volume;
+		
+		debugPrint(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %ddB (current volume)\n", 
+		           currentVolume);
+		
+		/* Broadcast to all clients */
+		BarSocketIoEmitVolume(app, currentVolume);
+	} else {
+		pthread_mutex_unlock(&ctx->volumeBroadcastMutex);
+	}
+}
+
 /* WebSocket service thread - runs lws_service() loop */
 static void* BarWebsocketThread(void *arg) {
 	BarApp_t *app = (BarApp_t *)arg;
@@ -483,6 +546,9 @@ static void* BarWebsocketThread(void *arg) {
 				didWork = true;
 			}
 		}
+		
+		/* Process delayed volume broadcast (debouncing) */
+		BarWsProcessVolumeBroadcast(ctx, app);
 		
 		/* NOTE: Progress broadcasting now handled by playback_manager thread
 		 * This ensures timing is independent of WebSocket servicing delays
@@ -548,6 +614,10 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Initialize mutex */
 	pthread_mutex_init(&ctx->stateMutex, NULL);
 	
+	/* Initialize delayed volume broadcast */
+	ctx->delayedVolumeBroadcast.pending = false;
+	pthread_mutex_init(&ctx->volumeBroadcastMutex, NULL);
+	
 	/* Set up Socket.IO broadcast callback */
 	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);
 	
@@ -607,6 +677,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	BarWsBucketsDestroy(ctx);
 	
 	pthread_mutex_destroy(&ctx->stateMutex);
+	pthread_mutex_destroy(&ctx->volumeBroadcastMutex);
 	
 	if (ctx->connections) {
 		free(ctx->connections);

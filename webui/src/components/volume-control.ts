@@ -23,7 +23,7 @@ function sliderToDb(sliderPercent: number, maxGain: number = 10): number {
 function dbToSlider(db: number, maxGain: number = 10): number {
   if (db <= 0) {
     // Bottom half: -40 to 0 dB maps to 0-50%
-    const normalized = Math.sqrt(1 - (db / -40));
+    const normalized = 1 - Math.sqrt(db / -40);
     return normalized * 50;
   } else {
     // Top half: 0 to maxGain dB maps to 50-100%

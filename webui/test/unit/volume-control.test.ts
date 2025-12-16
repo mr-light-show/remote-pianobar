@@ -322,5 +322,129 @@ describe('VolumeControl', () => {
       expect(valueDisplay!.textContent).toContain('+5dB');
     });
   });
+
+  describe('conversion roundtrip accuracy', () => {
+    // Test that converting from percent → dB → percent results in the same (or very close) value
+    // This ensures the dbToSlider() function correctly inverts sliderToDb()
+    
+    const testCases = [
+      { percent: 0, expectedDb: -40, description: 'minimum volume' },
+      { percent: 5, expectedDb: -32, description: 'very low volume' },
+      { percent: 10, expectedDb: -26, description: 'low volume' },
+      { percent: 15, expectedDb: -20, description: 'low-medium volume' },
+      { percent: 20, expectedDb: -14, description: 'medium-low volume' },
+      { percent: 25, expectedDb: -10, description: 'medium volume (bottom half)' },
+      { percent: 30, expectedDb: -6, description: 'medium-high volume (bottom half)' },
+      { percent: 40, expectedDb: -2, description: 'high volume (bottom half)' },
+      { percent: 50, expectedDb: 0, description: 'unity gain (0dB)' },
+      { percent: 60, expectedDb: 2, description: 'boosted volume (top half)' },
+      { percent: 70, expectedDb: 4, description: 'high boost' },
+      { percent: 75, expectedDb: 5, description: 'mid-range boost' },
+      { percent: 80, expectedDb: 6, description: 'higher boost' },
+      { percent: 90, expectedDb: 8, description: 'near-maximum boost' },
+      { percent: 100, expectedDb: 10, description: 'maximum volume' },
+    ];
+
+    testCases.forEach(({ percent, expectedDb, description }) => {
+      it(`${percent}% (${description}) converts correctly: ${percent}% → ${expectedDb}dB → ~${percent}%`, async () => {
+        const element: VolumeControl = await fixture(html`
+          <volume-control volume="${percent}"></volume-control>
+        `);
+
+        // Step 1: Convert percent to dB (via display)
+        const valueDisplay = element.shadowRoot!.querySelector('.volume-value');
+        const displayText = valueDisplay!.textContent || '';
+        
+        // Extract dB value from display (format: "XX% (+Y dB)" or "XX% (-Y dB)")
+        const dbMatch = displayText.match(/([+-]?\d+)dB/);
+        expect(dbMatch).toBeTruthy();
+        const actualDb = parseInt(dbMatch![1]);
+        expect(actualDb).toBe(expectedDb);
+
+        // Step 2: Convert dB back to percent using updateFromDb
+        element.updateFromDb(expectedDb);
+        await element.updateComplete;
+
+        // Step 3: Verify roundtrip accuracy (allow 1% difference due to integer rounding)
+        const roundtripPercent = element.volume;
+        const diff = Math.abs(percent - roundtripPercent);
+        expect(diff).toBeLessThanOrEqual(1);
+      });
+    });
+
+    it('handles multiple roundtrips without drift', async () => {
+      const element: VolumeControl = await fixture(html`
+        <volume-control volume="25"></volume-control>
+      `);
+
+      // Get initial dB value
+      const valueDisplay = element.shadowRoot!.querySelector('.volume-value');
+      const displayText = valueDisplay!.textContent || '';
+      const dbMatch = displayText.match(/([+-]?\d+)dB/);
+      const db = parseInt(dbMatch![1]);
+
+      // Perform multiple roundtrips: percent → dB → percent → dB → percent
+      for (let i = 0; i < 5; i++) {
+        element.updateFromDb(db);
+        await element.updateComplete;
+      }
+
+      // Should still be at or very close to original value
+      expect(Math.abs(25 - element.volume)).toBeLessThanOrEqual(1);
+    });
+
+    it('roundtrip with custom maxGain', async () => {
+      const element: VolumeControl = await fixture(html`
+        <volume-control volume="75" maxGain="20"></volume-control>
+      `);
+
+      // With maxGain=20, 75% should be +10dB
+      const valueDisplay = element.shadowRoot!.querySelector('.volume-value');
+      const displayText = valueDisplay!.textContent || '';
+      const dbMatch = displayText.match(/([+-]?\d+)dB/);
+      const db = parseInt(dbMatch![1]);
+      expect(db).toBe(10);
+
+      // Convert back with same maxGain
+      element.updateFromDb(10);
+      await element.updateComplete;
+
+      // Should return to 75%
+      expect(element.volume).toBe(75);
+    });
+
+    it('handles edge case: -40dB (minimum)', async () => {
+      const element: VolumeControl = await fixture(html`
+        <volume-control volume="50"></volume-control>
+      `);
+
+      element.updateFromDb(-40);
+      await element.updateComplete;
+
+      expect(element.volume).toBe(0);
+    });
+
+    it('handles edge case: 0dB (unity)', async () => {
+      const element: VolumeControl = await fixture(html`
+        <volume-control volume="25"></volume-control>
+      `);
+
+      element.updateFromDb(0);
+      await element.updateComplete;
+
+      expect(element.volume).toBe(50);
+    });
+
+    it('handles edge case: +maxGain dB (maximum)', async () => {
+      const element: VolumeControl = await fixture(html`
+        <volume-control volume="50" maxGain="10"></volume-control>
+      `);
+
+      element.updateFromDb(10);
+      await element.updateComplete;
+
+      expect(element.volume).toBe(100);
+    });
+  });
 });
 
