@@ -499,6 +499,42 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
 	}
 }
 
+/* Poll system volume for external changes (keyboard keys, other apps)
+ * Called from WebSocket thread, checks every 1 second */
+static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
+	if (!ctx || !app) {
+		return;
+	}
+	
+	/* Only poll in system volume mode */
+	if (app->settings.volumeMode != BAR_VOLUME_MODE_SYSTEM) {
+		return;
+	}
+	
+	/* Check if 1 second has elapsed since last poll */
+	time_t now = time(NULL);
+	if (now - ctx->lastVolumePollTime < 1) {
+		return;  /* Too soon, skip this poll */
+	}
+	ctx->lastVolumePollTime = now;
+	
+	/* Read current system volume */
+	int currentVolume = BarSystemVolumeGet();
+	if (currentVolume < 0) {
+		return;  /* Error reading volume */
+	}
+	
+	/* Check if volume changed from last known value */
+	if (currentVolume != ctx->lastPolledVolume) {
+		debugPrint(DEBUG_WEBSOCKET, "WebSocket: System volume changed externally: %d%% → %d%%\n",
+		           ctx->lastPolledVolume, currentVolume);
+		ctx->lastPolledVolume = currentVolume;
+		
+		/* Broadcast to all clients */
+		BarSocketIoEmitVolume(app, currentVolume);
+	}
+}
+
 /* WebSocket service thread - runs lws_service() loop */
 static void* BarWebsocketThread(void *arg) {
 	BarApp_t *app = (BarApp_t *)arg;
@@ -555,6 +591,9 @@ static void* BarWebsocketThread(void *arg) {
 		
 		/* Process delayed volume broadcast (debouncing) */
 		BarWsProcessVolumeBroadcast(ctx, app);
+		
+		/* Poll system volume for external changes (every 1s) */
+		BarWsPollSystemVolume(ctx, app);
 		
 		/* NOTE: Progress broadcasting now handled by playback_manager thread
 		 * This ensures timing is independent of WebSocket servicing delays
@@ -620,6 +659,10 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Initialize delayed volume broadcast */
 	ctx->delayedVolumeBroadcast.pending = false;
 	pthread_mutex_init(&ctx->volumeBroadcastMutex, NULL);
+	
+	/* Initialize system volume polling state */
+	ctx->lastPolledVolume = -1;  /* Unknown until first poll */
+	ctx->lastVolumePollTime = 0; /* Force immediate first poll */
 	
 	/* Set up Socket.IO broadcast callback */
 	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);

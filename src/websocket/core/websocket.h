@@ -83,6 +83,10 @@ typedef struct {
 	} delayedVolumeBroadcast;
 	pthread_mutex_t volumeBroadcastMutex;
 	
+	/* System volume polling (for detecting external changes) */
+	int lastPolledVolume;         /* Last known system volume (-1 = unknown) */
+	time_t lastVolumePollTime;    /* Last poll timestamp (seconds) */
+	
 	/* Connections (WS thread only) */
 	BarWsConnection_t *connections;
 	size_t numConnections;
