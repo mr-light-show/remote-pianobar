@@ -533,10 +533,13 @@ int main (int argc, char **argv) {
 	/* Initialize system volume control if configured */
 	if (app.settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		if (BarSystemVolumeInit()) {
+			/* Always get volume from system, ignore config/state file value */
 			int sysVol = BarSystemVolumeGet();
 			if (sysVol >= 0) {
-				/* Store current system volume as percentage for display purposes */
 				app.settings.volume = sysVol;
+			} else {
+				/* If we can't read system volume, use a sensible default */
+				app.settings.volume = 50;
 			}
 		} else {
 			/* Fall back to player volume if system volume unavailable */
