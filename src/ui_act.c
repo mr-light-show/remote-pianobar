@@ -742,7 +742,7 @@ BarUiActCallback(BarUiActVolDown) {
 BarUiActCallback(BarUiActVolUp) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		int currentVol = BarSystemVolumeGet();
-		if (currentVol < 100) {
+		if (currentVol >= 0 && currentVol < 100) {
 			int newVol = currentVol + 5;  /* 5% step for system volume */
 			if (newVol > 100) newVol = 100;
 			BarSystemVolumeSet(newVol);
