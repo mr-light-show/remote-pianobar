@@ -91,10 +91,14 @@ typedef enum {
 } BarUiMode_t;
 #endif
 
+/* Volume control mode - defined outside WEBSOCKET_ENABLED since it's independent */
+#include "system_volume.h"
+
 typedef struct {
 	bool autoselect;
 	unsigned int history, maxRetry, timeout, bufferSecs;
 	int volume;
+	BarVolumeModeType volumeMode;
 	float gainMul;
 	int maxGain;
 	BarStationSorting_t sortOrder;

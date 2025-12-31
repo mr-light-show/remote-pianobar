@@ -57,6 +57,7 @@ THE SOFTWARE.
 #include "ui_dispatch.h"
 #include "bar_state.h"
 #include "playback_manager.h"
+#include "system_volume.h"
 
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
@@ -529,6 +530,21 @@ int main (int argc, char **argv) {
 	BarSettingsInit (&app.settings);
 	BarSettingsRead (&app.settings);
 
+	/* Initialize system volume control if configured */
+	if (app.settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
+		if (BarSystemVolumeInit()) {
+			int sysVol = BarSystemVolumeGet();
+			if (sysVol >= 0) {
+				/* Store current system volume as percentage for display purposes */
+				app.settings.volume = sysVol;
+			}
+		} else {
+			/* Fall back to player volume if system volume unavailable */
+			fprintf(stderr, "Warning: System volume control unavailable, falling back to player volume\n");
+			app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+		}
+	}
+
 	/* Daemonize EARLY if running in web-only mode - before any terminal/stdin setup */
 	if (!BarWsDaemonize(&app)) {
 		fprintf(stderr, "Failed to daemonize\n");
@@ -630,6 +646,9 @@ int main (int argc, char **argv) {
 	
 	/* Remove PID file if we created one */
 	BarWsRemovePidFile(&app);
+	
+	/* Cleanup system volume control */
+	BarSystemVolumeDestroy();
 	
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);

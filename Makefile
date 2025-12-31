@@ -35,7 +35,8 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/ui.c \
 		${PIANOBAR_DIR}/ui_readline.c \
 		${PIANOBAR_DIR}/ui_dispatch.c \
-		${PIANOBAR_DIR}/websocket_bridge.c
+		${PIANOBAR_DIR}/websocket_bridge.c \
+		${PIANOBAR_DIR}/system_volume.c
 
 # WebSocket support (conditional compilation)
 WEBSOCKET?=0
@@ -78,6 +79,20 @@ LIBJSONC_LDFLAGS:=$(shell $(PKG_CONFIG) --libs json-c 2>/dev/null || $(PKG_CONFI
 LIBAO_CFLAGS:=$(shell $(PKG_CONFIG) --cflags ao)
 LIBAO_LDFLAGS:=$(shell $(PKG_CONFIG) --libs ao)
 
+# System volume control - platform-specific
+OS := $(shell uname)
+ifeq (${OS},Darwin)
+	# macOS - CoreAudio is always available
+	SYSVOLUME_LDFLAGS:=-framework CoreAudio -framework AudioToolbox
+else ifeq (${OS},Linux)
+	# Linux - try PulseAudio library, fallback to CLI tools at runtime
+	HAVE_PULSEAUDIO:=$(shell $(PKG_CONFIG) --exists libpulse && echo yes)
+	ifeq (${HAVE_PULSEAUDIO},yes)
+		SYSVOLUME_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libpulse) -DHAVE_PULSEAUDIO
+		SYSVOLUME_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libpulse)
+	endif
+endif
+
 # WebSocket library flags (if enabled)
 ifeq ($(WEBSOCKET),1)
 	CFLAGS+=-DWEBSOCKET_ENABLED
@@ -91,11 +106,11 @@ endif
 ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
 			${LIBAV_CFLAGS} ${LIBCURL_CFLAGS} \
 			${LIBGCRYPT_CFLAGS} ${LIBJSONC_CFLAGS} \
-			${LIBAO_CFLAGS}
+			${LIBAO_CFLAGS} ${SYSVOLUME_CFLAGS}
 ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 			${LIBAV_LDFLAGS} ${LIBCURL_LDFLAGS} \
 			${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
-			${LIBAO_LDFLAGS}
+			${LIBAO_LDFLAGS} ${SYSVOLUME_LDFLAGS}
 
 # Add WebSocket flags if enabled
 ifeq ($(WEBSOCKET),1)
@@ -208,9 +223,9 @@ TEST_OBJ:=${TEST_SRC:.c=.o}
 TEST_BIN:=pianobar_test
 
 # Build test suite (only link the modules being tested)
-${TEST_BIN}: ${TEST_OBJ} src/debug.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
+${TEST_BIN}: ${TEST_OBJ} src/debug.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/debug.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/debug.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}

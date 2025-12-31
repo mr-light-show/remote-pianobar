@@ -30,6 +30,7 @@ THE SOFTWARE.
 #include "../../ui.h"
 #include "../../ui_dispatch.h"
 #include "../../bar_state.h"
+#include "../../system_volume.h"
 #include "socketio.h"
 #include "error_messages.h"
 #include "../core/websocket.h"
@@ -1573,21 +1574,30 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			if (volumePercent < 0) volumePercent = 0;
 			if (volumePercent > 100) volumePercent = 100;
 			
-		/* Convert percentage to dB using perceptual curve */
-		int volumeDb = sliderToDb(volumePercent, app->settings.maxGain);
-		
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%ddB (%d%%)\n", 
-		           action, volumeDb, volumePercent);
-		
-		/* Apply volume immediately (for audio playback) */
-		app->settings.volume = volumeDb;
-		BarPlayerSetVolume(&app->player);
-		
-		/* Schedule debounced broadcast (will read current volume at broadcast time) */
-		BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-		BarWsScheduleVolumeBroadcast(ctx, 500);  /* 500ms debounce */
-		
-		return;
+			if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
+				/* System volume mode - set directly as percentage */
+				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → system volume=%d%%\n", 
+				           action, volumePercent);
+				
+				BarSystemVolumeSet(volumePercent);
+				app->settings.volume = volumePercent;
+			} else {
+				/* Player volume mode - convert percentage to dB using perceptual curve */
+				int volumeDb = sliderToDb(volumePercent, app->settings.maxGain);
+				
+				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%ddB (%d%%)\n", 
+				           action, volumeDb, volumePercent);
+				
+				/* Apply volume immediately (for audio playback) */
+				app->settings.volume = volumeDb;
+				BarPlayerSetVolume(&app->player);
+			}
+			
+			/* Schedule debounced broadcast (will read current volume at broadcast time) */
+			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+			BarWsScheduleVolumeBroadcast(ctx, 500);  /* 500ms debounce */
+			
+			return;
 		}
 	}
 	

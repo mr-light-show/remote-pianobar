@@ -390,6 +390,12 @@ void BarSettingsRead (BarSettings_t *settings) {
 				settings->atIcon = strdup (val);
 			} else if (streq ("volume", key)) {
 				settings->volume = atoi (val);
+			} else if (streq ("volume_mode", key)) {
+				if (streq (val, "system")) {
+					settings->volumeMode = BAR_VOLUME_MODE_SYSTEM;
+				} else {
+					settings->volumeMode = BAR_VOLUME_MODE_PLAYER;
+				}
 			} else if (streq ("gain_mul", key)) {
 				settings->gainMul = atof (val);
 			} else if (streq ("max_gain", key)) {

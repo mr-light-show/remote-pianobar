@@ -37,6 +37,7 @@ THE SOFTWARE.
 #include "websocket_bridge.h"
 #include "bar_state.h"
 #include "debug.h"
+#include "system_volume.h"
 
 /*	standard eventcmd call
  */
@@ -721,24 +722,49 @@ BarUiActCallback(BarUiActBookmark) {
 /*	decrease volume
  */
 BarUiActCallback(BarUiActVolDown) {
-	--app->settings.volume;
-	BarPlayerSetVolume (&app->player);
+	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
+		int currentVol = BarSystemVolumeGet();
+		if (currentVol > 0) {
+			int newVol = currentVol - 5;  /* 5% step for system volume */
+			if (newVol < 0) newVol = 0;
+			BarSystemVolumeSet(newVol);
+			app->settings.volume = newVol;
+		}
+	} else {
+		--app->settings.volume;
+		BarPlayerSetVolume (&app->player);
+	}
 	BarWsBroadcastVolume(app);
 }
 
 /*	increase volume
  */
 BarUiActCallback(BarUiActVolUp) {
-	++app->settings.volume;
-	BarPlayerSetVolume (&app->player);
+	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
+		int currentVol = BarSystemVolumeGet();
+		if (currentVol < 100) {
+			int newVol = currentVol + 5;  /* 5% step for system volume */
+			if (newVol > 100) newVol = 100;
+			BarSystemVolumeSet(newVol);
+			app->settings.volume = newVol;
+		}
+	} else {
+		++app->settings.volume;
+		BarPlayerSetVolume (&app->player);
+	}
 	BarWsBroadcastVolume(app);
 }
 
 /*	reset volume
  */
 BarUiActCallback(BarUiActVolReset) {
-	app->settings.volume = 0;
-	BarPlayerSetVolume (&app->player);
+	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
+		BarSystemVolumeSet(50);  /* Reset to 50% for system volume */
+		app->settings.volume = 50;
+	} else {
+		app->settings.volume = 0;
+		BarPlayerSetVolume (&app->player);
+	}
 	BarWsBroadcastVolume(app);
 }
 
