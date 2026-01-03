@@ -24,12 +24,19 @@ THE SOFTWARE.
 #pragma once
 
 /* Enable POSIX functions on Linux (not needed on macOS/BSD)
- * MUST be defined before ANY includes */
-#if !defined(_POSIX_C_SOURCE) && !defined(__APPLE__) && !defined(__FreeBSD__)
-#define _POSIX_C_SOURCE 200809L  /* Enable fileno() and other POSIX functions */
+ * MUST be defined before ANY includes
+ * Force definition to ensure we get fileno() and other POSIX functions */
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
 #endif
-#if !defined(_XOPEN_SOURCE) && !defined(__APPLE__) && !defined(__FreeBSD__)
-#define _XOPEN_SOURCE 600         /* Enable additional POSIX functions */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 600
+#endif
+/* Also ensure _DEFAULT_SOURCE for glibc to get everything */
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
 #endif
 
 #include "config.h"
