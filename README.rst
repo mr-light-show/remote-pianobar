@@ -186,13 +186,47 @@ You need the following software to build pianobar:
 - ffmpeg ≤ 5.1 [2]_
 - UTF-8 console/locale
 
+**Linux-specific:**
+
+- libasound2 (ALSA library for system volume control)
+
+**For WebSocket/Remote API builds (``make WEBSOCKET=1``):**
+
+- libwebsockets ≥ 4.0
+- openssl
+- Node.js and npm (for building the web UI)
+
 .. [1] with blowfish cipher enabled
 .. [2] required: demuxer mov, decoder aac, protocol http and filters volume,
         aformat, aresample
 
+**Package installation examples:**
+
+On Debian/Ubuntu::
+
+	sudo apt-get install build-essential libao-dev libcurl4-openssl-dev \
+	  libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev \
+	  libavutil-dev libavfilter-dev libswresample-dev libasound2-dev
+
+For WebSocket builds, also install::
+
+	sudo apt-get install libwebsockets-dev nodejs npm
+
+On macOS (via Homebrew)::
+
+	brew install libao curl libgcrypt json-c ffmpeg
+
+For WebSocket builds, also install::
+
+	brew install libwebsockets node
+
 Then type::
 
 	gmake clean && gmake
+
+Or for WebSocket/Remote API support::
+
+	make WEBSOCKET=1 clean && make WEBSOCKET=1
 
 You can run the client directly from the source directory now::
 
