@@ -663,6 +663,7 @@ BarUiActCallback(BarUiActSelectQuickMix) {
 /*	quit
  */
 BarUiActCallback(BarUiActQuit) {
+	BarUiMsg(&app->settings, MSG_INFO, "Exiting...\n");
 	app->doQuit = true;
 	BarUiDoSkipSong (&app->player);
 }
