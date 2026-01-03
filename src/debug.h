@@ -23,9 +23,12 @@ THE SOFTWARE.
 
 #pragma once
 
-/* Enable POSIX functions on Linux (not needed on macOS/BSD) */
-#if !defined(_XOPEN_SOURCE) && !defined(__APPLE__) && !defined(__FreeBSD__)
+/* Enable POSIX functions on Linux (not needed on macOS/BSD)
+ * MUST be defined before ANY includes */
+#if !defined(_POSIX_C_SOURCE) && !defined(__APPLE__) && !defined(__FreeBSD__)
 #define _POSIX_C_SOURCE 200809L  /* Enable fileno() and other POSIX functions */
+#endif
+#if !defined(_XOPEN_SOURCE) && !defined(__APPLE__) && !defined(__FreeBSD__)
 #define _XOPEN_SOURCE 600         /* Enable additional POSIX functions */
 #endif
 
