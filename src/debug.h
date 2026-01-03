@@ -25,7 +25,8 @@ THE SOFTWARE.
 
 /* Enable POSIX functions on Linux (not needed on macOS/BSD) */
 #if !defined(_XOPEN_SOURCE) && !defined(__APPLE__) && !defined(__FreeBSD__)
-#define _XOPEN_SOURCE 600  /* Enable fileno() and POSIX functions */
+#define _POSIX_C_SOURCE 200809L  /* Enable fileno() and other POSIX functions */
+#define _XOPEN_SOURCE 600         /* Enable additional POSIX functions */
 #endif
 
 #include "config.h"
