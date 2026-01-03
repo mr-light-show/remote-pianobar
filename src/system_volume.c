@@ -392,7 +392,7 @@ static int alsaGetVolume(void) {
 /* ALSA fallback: Set volume */
 static bool alsaSetVolume(int percent) {
 	char cmd[128];
-	snprintf(cmd, sizeof(cmd), "amixer sset Master %d%% 2>/dev/null", percent);
+	snprintf(cmd, sizeof(cmd), "amixer sset Master %d%% >/dev/null 2>&1", percent);
 	return system(cmd) == 0;
 }
 
