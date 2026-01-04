@@ -36,6 +36,74 @@ THE SOFTWARE.
 #include "main.h"
 #include <piano.h>
 
+/* Debug assertions for lock state (enabled with -DDEBUG) */
+#ifdef DEBUG
+#include <pthread.h>
+#include <errno.h>
+
+/* Assert that stateMutex is currently held by calling thread.
+ * Only works in BOTH mode (when mutex is actually initialized).
+ * In CLI-only mode or without WEBSOCKET_ENABLED, this is a no-op. */
+#ifdef WEBSOCKET_ENABLED
+#define ASSERT_STATE_LOCK_HELD(app) \
+	do { \
+		if ((app)->settings.uiMode == BAR_UI_MODE_BOTH) { \
+			int _trylock_result = pthread_mutex_trylock(&(app)->stateMutex); \
+			if (_trylock_result == 0) { \
+				pthread_mutex_unlock(&(app)->stateMutex); \
+				assert(0 && "stateMutex is NOT held (expected to be held)"); \
+			} else { \
+				assert(_trylock_result == EBUSY && "stateMutex should be held"); \
+			} \
+		} \
+	} while (0)
+
+/* Assert that stateMutex is NOT currently held by calling thread */
+#define ASSERT_STATE_LOCK_NOT_HELD(app) \
+	do { \
+		if ((app)->settings.uiMode == BAR_UI_MODE_BOTH) { \
+			int _trylock_result = pthread_mutex_trylock(&(app)->stateMutex); \
+			assert(_trylock_result == 0 && "stateMutex is held (expected to be free)"); \
+			if (_trylock_result == 0) { \
+				pthread_mutex_unlock(&(app)->stateMutex); \
+			} \
+		} \
+	} while (0)
+#else
+#define ASSERT_STATE_LOCK_HELD(app) ((void)0)
+#define ASSERT_STATE_LOCK_NOT_HELD(app) ((void)0)
+#endif
+
+/* Assert that player.lock is currently held */
+#define ASSERT_PLAYER_LOCK_HELD(player) \
+	do { \
+		int _trylock_result = pthread_mutex_trylock(&(player)->lock); \
+		if (_trylock_result == 0) { \
+			pthread_mutex_unlock(&(player)->lock); \
+			assert(0 && "player.lock is NOT held (expected to be held)"); \
+		} else { \
+			assert(_trylock_result == EBUSY && "player.lock should be held"); \
+		} \
+	} while (0)
+
+/* Assert that player.lock is NOT currently held */
+#define ASSERT_PLAYER_LOCK_NOT_HELD(player) \
+	do { \
+		int _trylock_result = pthread_mutex_trylock(&(player)->lock); \
+		assert(_trylock_result == 0 && "player.lock is held (expected to be free)"); \
+		if (_trylock_result == 0) { \
+			pthread_mutex_unlock(&(player)->lock); \
+		} \
+	} while (0)
+
+#else
+/* Release builds: assertions are no-ops */
+#define ASSERT_STATE_LOCK_HELD(app) ((void)0)
+#define ASSERT_STATE_LOCK_NOT_HELD(app) ((void)0)
+#define ASSERT_PLAYER_LOCK_HELD(player) ((void)0)
+#define ASSERT_PLAYER_LOCK_NOT_HELD(player) ((void)0)
+#endif
+
 /* Initialize/destroy state mutex */
 void BarStateInit(BarApp_t *app);
 void BarStateDestroy(BarApp_t *app);

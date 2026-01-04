@@ -487,6 +487,11 @@ BarUiActCallback(BarUiActSkipSong) {
 /*	play
  */
 BarUiActCallback(BarUiActPlay) {
+	/* LOCK HIERARCHY: player.lock is Lock #2 in the hierarchy
+	 * PROTECTS: player.doPause, player.pauseStartTime
+	 * DURATION: Held for microseconds (just to set flags)
+	 * BROADCAST: BarWsBroadcastPlayState() called AFTER lock is released
+	 * See src/THREAD_SAFETY.md for details */
 	pthread_mutex_lock (&app->player.lock);
 	app->player.doPause = false;
 	app->player.pauseStartTime = 0;  /* Clear pause timer */
@@ -500,6 +505,9 @@ BarUiActCallback(BarUiActPlay) {
 /*	pause
  */
 BarUiActCallback(BarUiActPause) {
+	/* LOCK HIERARCHY: player.lock is Lock #2 in the hierarchy
+	 * PROTECTS: player.doPause, player.pauseStartTime
+	 * See src/THREAD_SAFETY.md for details */
 	pthread_mutex_lock (&app->player.lock);
 	app->player.doPause = true;
 	app->player.pauseStartTime = time(NULL);  /* Start pause timer */
@@ -513,6 +521,9 @@ BarUiActCallback(BarUiActPause) {
 /*	toggle pause
  */
 BarUiActCallback(BarUiActTogglePause) {
+	/* LOCK HIERARCHY: player.lock is Lock #2 in the hierarchy
+	 * PROTECTS: player.doPause, player.pauseStartTime
+	 * See src/THREAD_SAFETY.md for details */
 	pthread_mutex_lock (&app->player.lock);
 	app->player.doPause = !app->player.doPause;
 	/* Update pause timer */

@@ -1651,7 +1651,15 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		BarSocketIoSetUnicastTarget(wsi);
 	}
 	
-	/* Execute action directly by ID in WebSocket thread */
+	/* Execute action directly by ID in WebSocket thread
+	 * 
+	 * THREAD SAFETY: This call may trigger state lock acquisition via:
+	 * - BarStateGetCurrentStation() acquires/releases stateMutex
+	 * - BarStateGetPlaylist() acquires/releases stateMutex
+	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
+	 * 
+	 * Lock ordering is safe: stateMutex (if needed) → player.lock (if needed)
+	 * See src/THREAD_SAFETY.md for details */
 	BarUiDispatchById(app, actionId, BarStateGetCurrentStation(app), 
 	                  BarStateGetPlaylist(app), false, context);
 	
@@ -1668,17 +1676,9 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		}
 	}
 	
-	/* Broadcast state changes for playback control */
-	if (actionId == BAR_KS_PLAY || actionId == BAR_KS_PAUSE || actionId == BAR_KS_PLAYPAUSE) {
-		/* Create state change event with just paused status */
-		json_object *stateData = json_object_new_object();
-		pthread_mutex_lock(&app->player.lock);
-		json_object_object_add(stateData, "paused", 
-		                       json_object_new_boolean(app->player.doPause));
-		pthread_mutex_unlock(&app->player.lock);
-		BarSocketIoEmit("playState", stateData);
-		json_object_put(stateData);
-	}
+	/* Note: Play/pause/toggle actions already broadcast state via BarWsBroadcastPlayState()
+	 * in their respective action callbacks (BarUiActPlay/Pause/TogglePause in ui_act.c).
+	 * No need to duplicate the broadcast here - it would cause redundant lock acquisition. */
 }
 
 /* Handle 'changeStation' event from client */

@@ -31,6 +31,15 @@ THE SOFTWARE.
 #include <stdarg.h>
 
 /*	Lock state mutex with logging (only in BOTH mode when WebSocket enabled)
+ *
+ *	LOCK HIERARCHY: This is Lock #1 in the hierarchy
+ *	Must be acquired BEFORE player.lock if both are needed
+ *	
+ *	PROTECTS: Pandora state (stations, playlist, curStation, nextStation, ph)
+ *	DURATION: Should be held for microseconds, not milliseconds
+ *	NO I/O: Never hold this lock during network calls, disk I/O, or console output
+ *	
+ *	See src/THREAD_SAFETY.md for complete documentation
  */
 static void state_mutex_lock_internal(const BarApp_t *app, const char *operation) {
 	#ifdef WEBSOCKET_ENABLED
