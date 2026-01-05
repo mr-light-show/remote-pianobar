@@ -656,17 +656,25 @@ void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi) {
 /* Emit 'song.explanation' event (explanation text) */
 void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 	json_object *data;
+	char *explanation_copy;
 	
 	if (!app || !explanation) {
 		return;
 	}
 	
+	/* Make a defensive copy since caller may free the original immediately */
+	explanation_copy = strdup(explanation);
+	if (!explanation_copy) {
+		return;
+	}
+	
 	data = json_object_new_object();
 	json_object_object_add(data, "explanation", 
-	                       json_object_new_string(explanation));
+	                       json_object_new_string(explanation_copy));
 	
 	BarSocketIoEmit("song.explanation", data);
 	json_object_put(data);
+	free(explanation_copy);
 }
 
 /* Emit 'error' event (error notification) */

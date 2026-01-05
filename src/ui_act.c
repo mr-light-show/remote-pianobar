@@ -328,6 +328,7 @@ BarUiActCallback(BarUiActExplain) {
 	assert (selSong != NULL);
 
 	reqData.song = selSong;
+	reqData.retExplain = NULL; /* Initialize to NULL to avoid freeing garbage */
 
 	BarUiMsg (&app->settings, MSG_INFO, "Receiving explanation... ");
 	if (BarUiActDefaultPianoCall (PIANO_REQUEST_EXPLAIN, &reqData)) {
