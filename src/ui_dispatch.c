@@ -110,3 +110,14 @@ BarKeyShortcutId_t BarUiDispatchById (BarApp_t *app, BarKeyShortcutId_t actionId
 	return BAR_KS_COUNT;
 }
 
+/*	Look up dispatcher action by ID
+ *	@return pointer to action or NULL if not found
+ */
+const BarUiDispatchAction_t *BarUiDispatchLookupById(BarKeyShortcutId_t id) {
+	if (id >= BAR_KS_COUNT) {
+		return NULL;
+	}
+	return &dispatchActions[id];
+}
+
+

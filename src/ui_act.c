@@ -341,10 +341,26 @@ BarUiActCallback(BarUiActExplain) {
 	bool isWebSocketRequest = false;
 	#endif
 
+	bool callSuccess;
+
 	if (!isWebSocketRequest) {
 		BarUiMsg (&app->settings, MSG_INFO, "Receiving explanation... ");
+		callSuccess = BarUiActDefaultPianoCall(PIANO_REQUEST_EXPLAIN, &reqData);
+	} else {
+		/* WebSocket request - use silent API call */
+		#ifdef WEBSOCKET_ENABLED
+		char *errorMsg = NULL;
+		callSuccess = BarWsPianoCall(app, PIANO_REQUEST_EXPLAIN, &reqData, &pRet, &wRet, &errorMsg);
+		if (!callSuccess && errorMsg) {
+			BarSocketIoEmitError("song.explain", errorMsg);
+			free(errorMsg);
+		}
+		#else
+		callSuccess = false;
+		#endif
 	}
-	if (BarUiActDefaultPianoCall (PIANO_REQUEST_EXPLAIN, &reqData)) {
+
+	if (callSuccess) {
 		if (reqData.retExplain == NULL) {
 			if (!isWebSocketRequest) {
 				BarUiMsg (&app->settings, MSG_ERR, "No explanation provided.\n");
