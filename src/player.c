@@ -40,12 +40,8 @@ THE SOFTWARE.
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
-#include <fcntl.h>
-#include <limits.h>
 #include <assert.h>
 #include <inttypes.h>
-#include <arpa/inet.h>
-#include <sys/stat.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>

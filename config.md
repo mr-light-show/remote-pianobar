@@ -304,5 +304,4 @@ For a complete example with all available options, see `contrib/config-example`.
 - `README.rst` - General usage and installation
 - `contrib/config-example` - Example configuration file
 - `contrib/eventcmd-examples/` - Example event command scripts
-- `WEBSOCKET_WEB_INTERFACE_PLAN.md` - Web UI feature documentation
 

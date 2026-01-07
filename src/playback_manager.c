@@ -36,9 +36,7 @@ THE SOFTWARE.
 #include "debug.h"
 #include "websocket_bridge.h"
 
-#include <unistd.h>
 #include <assert.h>
-#include <signal.h>
 #include <time.h>
 #include <errno.h>
 #include <sys/time.h>
@@ -119,7 +117,9 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 	/* In WebSocket mode, interrupted may be temporarily changed by readline */
 	interrupted = &app->doQuit;
 
+	pthread_mutex_lock(&app->player.lock);
 	app->player.mode = PLAYER_DEAD;
+	pthread_mutex_unlock(&app->player.lock);
 }
 
 /*	Playback manager thread - runs the playback state machine
@@ -140,9 +140,10 @@ static void *BarPlaybackManagerThread(void *data) {
 		pthread_mutex_lock(&app->player.lock);
 		/* Wait for mode change or timeout (whichever comes first) */
 		pthread_cond_timedwait(&app->player.cond, &app->player.lock, &timeout);
+		/* Cache mode and pause state while holding lock */
+		BarPlayerMode mode = app->player.mode;
+		bool isPaused = app->player.doPause;
 		pthread_mutex_unlock(&app->player.lock);
-		
-		BarPlayerMode mode = BarPlayerGetMode(&app->player);
 		
 		/* Broadcast progress updates every ~1 second while playing (and not paused) */
 		{
@@ -151,7 +152,7 @@ static void *BarPlaybackManagerThread(void *data) {
 				lastProgressBroadcast = now;
 				
 				/* Check if playing AND not paused */
-				if (mode == PLAYER_PLAYING && !BarPlayerIsPaused(&app->player)) {
+				if (mode == PLAYER_PLAYING && !isPaused) {
 					BarWsBroadcastProgress(app);
 				}
 			}
@@ -159,9 +160,6 @@ static void *BarPlaybackManagerThread(void *data) {
 		
 		/* Check for pause timeout (auto-stop after configured minutes of pause) */
 		if (app->settings.pauseTimeout > 0) {
-			/* Check pause state efficiently */
-			bool isPaused = BarPlayerIsPaused(&app->player);
-			
 			/* Only need to check pauseStartTime if actually paused */
 			time_t pauseStart = 0;
 			if (isPaused) {
