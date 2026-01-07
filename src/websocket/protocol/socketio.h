@@ -67,9 +67,6 @@ void BarSocketIoEmitStop(BarApp_t *app);
 /* Emit 'volume' event (volume should be 0-100 percentage) */
 void BarSocketIoEmitVolume(BarApp_t *app, int volume);
 
-/* Convert decibels to slider percentage (for player mode volume) */
-int BarSocketIoDbToSlider(int db, int maxGain);
-
 /* Emit 'progress' event */
 void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
                               unsigned int duration);

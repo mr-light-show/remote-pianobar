@@ -586,10 +586,11 @@ int main (int argc, char **argv) {
 	/* Initialize system volume control if configured - AFTER daemonization */
 	if (app.settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		if (BarSystemVolumeInit()) {
-			/* In system mode, keep player volume at 0dB (neutral).
+			/* In system mode, set player to configured initial gain.
+			 * Default 75% leaves headroom for ReplayGain boosts.
 			 * The OS mixer controls actual volume, not the player's gain stage.
 			 * System volume is read directly when needed for display/broadcast. */
-			app.settings.volume = 0;  /* 0dB = no gain adjustment */
+			app.settings.volume = app.settings.systemVolumePlayerGain;
 		} else {
 			/* Fall back to player volume if system volume unavailable */
 			fprintf(stderr, "Warning: System volume control unavailable, falling back to player volume\n");

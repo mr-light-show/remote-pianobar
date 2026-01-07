@@ -171,7 +171,8 @@ void BarSettingsRead (BarSettings_t *settings) {
 	settings->audioQuality = PIANO_AQ_HIGH;
 	settings->autoselect = true;
 	settings->history = 5;
-	settings->volume = 0;
+	settings->volume = 50;  /* 50% default (linear 0-100 scale) */
+	settings->systemVolumePlayerGain = 75;  /* 75% default for system volume mode */
 	settings->timeout = 30; /* seconds */
 	settings->pauseTimeout = 30; /* minutes, 0 = disabled */
 	settings->gainMul = 1.0;
@@ -393,6 +394,8 @@ void BarSettingsRead (BarSettings_t *settings) {
 				settings->atIcon = strdup (val);
 			} else if (streq ("volume", key)) {
 				settings->volume = atoi (val);
+			} else if (streq ("system_volume_player_gain", key)) {
+				settings->systemVolumePlayerGain = atoi (val);
 			} else if (streq ("volume_mode", key)) {
 				if (streq (val, "system")) {
 					settings->volumeMode = BAR_VOLUME_MODE_SYSTEM;

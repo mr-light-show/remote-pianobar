@@ -37,9 +37,9 @@ See `contrib/config-example` for a template configuration file.
 |--------|---------|-------------|
 | `audio_quality` | `high` | Audio quality: `low`, `medium`, or `high` |
 | `audio_backend` | `auto` | Audio backend: `auto`, `pulseaudio`, `alsa`, `jack`, `coreaudio` (macOS), `wasapi` (Windows). Auto-detection recommended. |
-| `volume` | `0` (dB) | Initial volume (-40 to +20 dB) |
-| `gain_mul` | `1.0` | Volume gain multiplier |
-| `max_gain` | `10` (dB) | Maximum gain for volume slider at 100%. Recommended values: 10 (safe), 15 (more headroom), 20 (maximum) |
+| `volume` | `50` | Initial volume (0-100 linear scale) |
+| `system_volume_player_gain` | `75` | Player gain for system volume mode (0-100). Lower values leave more headroom for ReplayGain boosts. |
+| `gain_mul` | `1.0` | ReplayGain multiplier (scales the track's ReplayGain value) -- Reduce if clipping occurs on some songs|
 | `sample_rate` | `0` (stream default) | Force specific sample rate (Hz) |
 | `buffer_seconds` | `5` | Audio buffer size in seconds |
 | `audio_pipe` | (none) | Path to audio output pipe |
@@ -61,11 +61,11 @@ The `auto` setting is recommended for most users. Miniaudio will automatically d
 
 ### Volume Control
 
-The volume system uses a perceptual curve for smoother control:
-- Range: -40 dB (minimum) to +`max_gain` dB (maximum)
-- 0 dB at 50% slider position
-- Lower half (-40 to 0 dB) uses squared curve for finer control
-- Upper half (0 to +max_gain dB) uses linear curve
+The volume system uses a simple linear 0-100 scale:
+- **Player mode** (`volume_mode = player`): Volume slider controls digital gain (0-100%)
+- **System mode** (`volume_mode = system`): Volume slider controls OS mixer; player uses `initial_player_gain`
+
+ReplayGain is applied on top of the volume setting. The default `system_volume_player_gain` of 75% leaves headroom for ReplayGain to boost quiet tracks without clipping.
 
 ## Interface/Display
 
@@ -286,9 +286,8 @@ audio_quality = high
 # Prevent auto-play - wait for station selection (overrides state file)
 autostart_station = 
 
-# Volume (0 dB is unchanged, negative is quieter, positive is louder)
-volume = 0
-max_gain = 10
+# Volume (0-100 linear scale, 50 = default)
+volume = 50
 
 # WebSocket/Web UI (optional)
 ui_mode = both

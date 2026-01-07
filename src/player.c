@@ -400,9 +400,9 @@ void BarPlayerReset(player_t * const p) {
 	/* Clean up sound from previous song */
 	if (p->soundInitialized) {
 		ma_sound_uninit(&p->sound);
-		p->soundInitialized = false;
 		debugPrint(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
 	}
+	p->soundInitialized = false;
 	
 	/* Free any buffered frame in the data source before zeroing */
 	if (p->dataSource.bufferedFrame != NULL) {
@@ -417,7 +417,6 @@ void BarPlayerReset(player_t * const p) {
 	p->songDuration = 0;
 	p->songPlayed = 0;
 	p->mode = PLAYER_DEAD;
-	p->fvolume = NULL;
 	p->fgraph = NULL;
 	p->fctx = NULL;
 	p->st = NULL;
@@ -440,25 +439,18 @@ void BarPlayerReset(player_t * const p) {
 void BarPlayerSetVolume(player_t * const player) {
 	assert(player != NULL);
 
-	if (player->mode != PLAYER_PLAYING) {
+	if (!player->soundInitialized) {
 		return;
 	}
 
-	int ret;
-#ifdef HAVE_AVFILTER_GRAPH_SEND_COMMAND
-	char strbuf[16];
-	snprintf(strbuf, sizeof(strbuf), "%fdB",
-			player->settings->volume + (player->gain * player->settings->gainMul));
-	assert(player->fgraph != NULL);
-	if ((ret = avfilter_graph_send_command(player->fgraph, "volume", "volume",
-					strbuf, NULL, 0, 0)) < 0) {
-#else
-	const double volume = pow(10, (player->settings->volume + (player->gain * player->settings->gainMul)) / 20);
-	assert(player->fvolume != NULL);
-	if ((ret = av_opt_set_double(player->fvolume->priv, "volume", volume, 0)) != 0) {
-#endif
-		printError(player->settings, "Cannot set volume", ret);
-	}
+	/* User volume: 0-100 linear scale -> 0.0-1.0 */
+	float userVolume = (float)player->settings->volume / 100.0f;
+	
+	/* ReplayGain: convert dB to linear multiplier */
+	float replayGain = powf(10.0f, (player->gain * player->settings->gainMul) / 20.0f);
+	
+	/* Apply combined volume to miniaudio sound */
+	ma_sound_set_volume(&player->sound, userVolume * replayGain);
 }
 
 /*
@@ -575,6 +567,7 @@ static bool openFilter(player_t * const player) {
 
 	AVRational time_base = player->st->time_base;
 
+	/* Create abuffer (source) filter */
 	char channelLayout[128];
 	av_channel_layout_describe(&player->cctx->ch_layout, channelLayout, sizeof(channelLayout));
 	snprintf(strbuf, sizeof(strbuf),
@@ -588,12 +581,7 @@ static bool openFilter(player_t * const player) {
 		softfail("create_filter abuffer");
 	}
 
-	if ((ret = avfilter_graph_create_filter(&player->fvolume,
-			avfilter_get_by_name("volume"), "volume", "0dB", NULL,
-			player->fgraph)) < 0) {
-		softfail("create_filter volume");
-	}
-
+	/* Create aformat filter (sample format conversion) */
 	AVFilterContext *fafmt = NULL;
 	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d",
 			av_get_sample_fmt_name(avformat), getSampleRate(player));
@@ -603,14 +591,16 @@ static bool openFilter(player_t * const player) {
 		softfail("create_filter aformat");
 	}
 
+	/* Create abuffersink (sink) filter */
 	if ((ret = avfilter_graph_create_filter(&player->fbufsink,
 			avfilter_get_by_name("abuffersink"), "sink", NULL, NULL,
 			player->fgraph)) < 0) {
 		softfail("create_filter abuffersink");
 	}
 
-	if (avfilter_link(player->fabuf, 0, player->fvolume, 0) != 0 ||
-			avfilter_link(player->fvolume, 0, fafmt, 0) != 0 ||
+	/* Link filters: abuffer -> aformat -> abuffersink
+	 * (volume control is handled by miniaudio, not FFmpeg) */
+	if (avfilter_link(player->fabuf, 0, fafmt, 0) != 0 ||
 			avfilter_link(fafmt, 0, player->fbufsink, 0) != 0) {
 		softfail("filter_link");
 	}

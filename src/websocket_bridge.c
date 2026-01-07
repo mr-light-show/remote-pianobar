@@ -48,8 +48,8 @@ void BarWsBroadcastVolume(BarApp_t *app) {
 			volumePercent = BarSystemVolumeGet();
 			if (volumePercent < 0) volumePercent = 50;  /* Fallback */
 		} else {
-			/* Player mode - convert dB to percentage for frontend */
-			volumePercent = BarSocketIoDbToSlider(app->settings.volume, app->settings.maxGain);
+			/* Player mode - volume is already 0-100 linear */
+			volumePercent = app->settings.volume;
 		}
 		BarSocketIoEmitVolume(app, volumePercent);
 	}

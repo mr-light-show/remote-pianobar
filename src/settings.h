@@ -111,6 +111,7 @@ typedef struct {
 	unsigned int history, maxRetry, timeout, bufferSecs;
 	unsigned int pauseTimeout;  /* minutes before auto-stop when paused, 0 = disabled */
 	int volume;
+	int systemVolumePlayerGain;  /* 0-100, player gain for system volume mode */
 	BarVolumeModeType volumeMode;
 	BarAudioBackendType audioBackend;
 	float gainMul;

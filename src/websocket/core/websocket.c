@@ -499,10 +499,10 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
 			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %d%% (system volume)\n", 
 			           volumePercent);
 		} else {
-			/* Player mode: convert dB to percentage for frontend */
-			volumePercent = BarSocketIoDbToSlider(app->settings.volume, app->settings.maxGain);
-			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %ddB → %d%% (player volume)\n", 
-			           app->settings.volume, volumePercent);
+			/* Player mode: volume is already 0-100 linear */
+			volumePercent = app->settings.volume;
+			debugPrint(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %d%% (player volume)\n", 
+			           volumePercent);
 		}
 		
 		/* Broadcast to all clients */

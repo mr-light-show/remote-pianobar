@@ -86,7 +86,6 @@ struct player {
 	/* private attributes _not_ protected by mutex */
 
 	/* libav - decoder and filter chain */
-	AVFilterContext *fvolume;
 	AVFilterGraph *fgraph;
 	AVFormatContext *fctx;
 	AVStream *st;

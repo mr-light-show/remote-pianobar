@@ -892,9 +892,8 @@ BarUiActCallback(BarUiActVolUp) {
 BarUiActCallback(BarUiActVolReset) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		BarSystemVolumeSet(50);  /* Reset to 50% for system volume */
-		/* Don't modify settings.volume - it stays at 0dB for player */
 	} else {
-		app->settings.volume = 0;
+		app->settings.volume = 50;  /* Reset to 50% (linear 0-100 scale) */
 		BarPlayerSetVolume (&app->player);
 	}
 	BarWsBroadcastVolume(app);

@@ -93,34 +93,6 @@ static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song,
 	return songObj;
 }
 
-/* Convert slider percentage (0-100) to decibels (-40 to maxGain)
- * Uses perceptual curve: squared for bottom half, linear for top half */
-static int sliderToDb(int sliderPercent, int maxGain) {
-	if (sliderPercent <= 50) {
-		/* Bottom half: -40 to 0 dB */
-		double normalized = sliderPercent / 50.0;
-		return (int)(-40.0 * pow(1.0 - normalized, 2.0));
-	} else {
-		/* Top half: 0 to maxGain dB */
-		double normalized = (sliderPercent - 50) / 50.0;
-		return (int)(maxGain * normalized);
-	}
-}
-
-/* Convert decibels (-40 to maxGain) to slider percentage (0-100)
- * Inverse of sliderToDb - used when sending volume to frontend */
-int BarSocketIoDbToSlider(int db, int maxGain) {
-	if (db <= 0) {
-		/* Bottom half: -40 to 0 dB maps to 0-50% */
-		double normalized = 1.0 - sqrt((double)db / -40.0);
-		return (int)(normalized * 50.0);
-	} else {
-		/* Top half: 0 to maxGain dB maps to 50-100% */
-		double normalized = (double)db / (double)maxGain;
-		return (int)(50.0 + normalized * 50.0);
-	}
-}
-
 /* Action mapping: descriptive command name → action ID */
 typedef struct {
 	const char *descriptive;
@@ -607,20 +579,16 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	pthread_mutex_unlock(&app->player.lock);
 	json_object_object_add(data, "paused", json_object_new_boolean(paused));
 	
-	/* Include current volume as 0-100 percentage (frontend always expects percentage) */
+	/* Include current volume as 0-100 percentage */
 	int volumePercent;
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		volumePercent = BarSystemVolumeGet();
 		if (volumePercent < 0) volumePercent = 50;  /* Fallback */
 	} else {
-		/* Player mode: convert dB to percentage for frontend */
-		volumePercent = BarSocketIoDbToSlider(app->settings.volume, app->settings.maxGain);
+		/* Player mode: volume is already 0-100 linear */
+		volumePercent = app->settings.volume;
 	}
 	json_object_object_add(data, "volume", json_object_new_int(volumePercent));
-	
-	/* Include max gain configuration (only relevant for player mode) */
-	json_object_object_add(data, "maxGain", 
-	                       json_object_new_int(app->settings.maxGain));
 	
 	/* Always include station fields, even if NULL */
 	PianoStation_t *curStation = BarStateGetCurrentStation(app);
@@ -1617,21 +1585,15 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			if (volumePercent > 100) volumePercent = 100;
 			
 			if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
-				/* System volume mode - set OS volume directly as percentage.
-				 * Don't modify settings.volume - it stays at 0dB for the player. */
+				/* System volume mode - set OS volume directly */
 				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → system volume=%d%%\n", 
 				           action, volumePercent);
-				
 				BarSystemVolumeSet(volumePercent);
 			} else {
-				/* Player volume mode - convert percentage to dB using perceptual curve */
-				int volumeDb = sliderToDb(volumePercent, app->settings.maxGain);
-				
-				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%ddB (%d%%)\n", 
-				           action, volumeDb, volumePercent);
-				
-				/* Apply volume immediately (for audio playback) */
-				app->settings.volume = volumeDb;
+				/* Player volume mode - use percentage directly (linear 0-100) */
+				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%d%%\n", 
+				           action, volumePercent);
+				app->settings.volume = volumePercent;
 				BarPlayerSetVolume(&app->player);
 			}
 			
