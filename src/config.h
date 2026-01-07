@@ -6,6 +6,9 @@
 #define VERSION "2024.12.21-dev"
 
 /* glibc feature test macros, define _before_ including other files */
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
