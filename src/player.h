@@ -50,10 +50,28 @@ typedef enum {
 	PLAYER_FINISHED,
 } BarPlayerMode;
 
+/* Forward declaration */
+typedef struct player player_t;
+
+/* Custom data source that wraps ffmpeg decoding for miniaudio */
 typedef struct {
+	ma_data_source_base base;      /* Must be first member */
+	player_t *player;              /* Reference back to player for ffmpeg state */
+	ma_uint64 cursor;              /* Current position in PCM frames */
+	ma_uint64 totalFrames;         /* Total length in PCM frames */
+	ma_uint32 sampleRate;          /* Sample rate for this stream */
+	ma_uint32 channels;            /* Number of channels */
+	bool reachedEnd;               /* Whether we've reached EOF from ffmpeg */
+	
+	/* Buffering for partial frame consumption */
+	AVFrame *bufferedFrame;        /* Current frame being consumed (NULL if none) */
+	int bufferedFrameOffset;       /* Offset into buffered frame in samples */
+} ffmpeg_data_source_t;
+
+struct player {
 	/* public attributes protected by mutex */
-	pthread_mutex_t lock, aoplayLock;
-	pthread_cond_t cond, aoplayCond; /* broadcast changes to doPause */
+	pthread_mutex_t lock;
+	pthread_cond_t cond;           /* broadcast mode changes */
 	bool doQuit, doPause;
 
 	/* measured in seconds */
@@ -67,7 +85,7 @@ typedef struct {
 
 	/* private attributes _not_ protected by mutex */
 
-	/* libav */
+	/* libav - decoder and filter chain */
 	AVFilterContext *fvolume;
 	AVFilterGraph *fgraph;
 	AVFormatContext *fctx;
@@ -78,32 +96,31 @@ typedef struct {
 	int64_t lastTimestamp;
 	sig_atomic_t interrupted;
 
-	ma_device maDevice;
-	bool deviceChanged;  /* Set when default device changes */
+	/* miniaudio - high-level engine and sound */
+	ma_engine engine;
+	ma_sound sound;
+	ffmpeg_data_source_t dataSource;
+	bool engineInitialized;
+	bool soundInitialized;
 
-	/* Ring buffer for producer-consumer audio pipeline */
-	int16_t *ringBuffer;
-	size_t ringSize;       /* Total size in samples */
-	size_t ringWritePos;   /* Producer write position */
-	size_t ringReadPos;    /* Consumer read position */
-	pthread_mutex_t ringLock;
-	pthread_cond_t ringCond;
-	pthread_t producerThread;
-	bool producerRunning;
+	/* Decoder thread synchronization */
+	pthread_mutex_t decoderLock;   /* Protects ffmpeg filter chain access */
+	pthread_cond_t decoderCond;    /* Signals when new data is available */
+	bool decodingFinished;         /* Set when decoder reaches EOF */
 
 	/* settings (must be set before starting the thread) */
 	double gain;
 	char *url;
 	const BarSettings_t *settings;
-} player_t;
+};
 
 enum {PLAYER_RET_OK = 0, PLAYER_RET_HARDFAIL = 1, PLAYER_RET_SOFTFAIL = 2};
 
 void *BarPlayerThread (void *data);
-void *BarAoPlayThread (void *data);
 void BarPlayerSetVolume (player_t * const player);
 void BarPlayerInit (player_t * const p, const BarSettings_t * const settings);
 void BarPlayerReset (player_t * const p);
 void BarPlayerDestroy (player_t * const p);
 BarPlayerMode BarPlayerGetMode (player_t * const player);
+bool BarPlayerIsPaused (player_t * const player);
 

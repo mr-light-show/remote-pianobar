@@ -122,9 +122,8 @@ export class BottomToolbar extends LitElement {
     return html`
       <div class="button-group">
         <button @click=${this.toggleStations} title="Select Station">
-          <span class="material-icons">radio</span>
+          <span class="material-icons">${isQuickMix ? 'shuffle' : 'radio'}</span>
           <span>${stationDisplayName}</span>
-          ${isQuickMix ? html`<span class="material-icons">shuffle</span>` : ''}
         </button>
         <stations-popup
           .stations="${this.stations}"

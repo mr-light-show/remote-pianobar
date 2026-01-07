@@ -28,7 +28,7 @@ describe('InfoMenu', () => {
       `);
 
       const actionButtons = element.shadowRoot!.querySelectorAll('.action-button');
-      expect(actionButtons.length).toBe(10); // All menu items
+      expect(actionButtons.length).toBe(9); // All menu items
     });
 
     it('renders explain action', async () => {
@@ -83,15 +83,6 @@ describe('InfoMenu', () => {
 
       const content = element.shadowRoot!.querySelector('.menu-popup');
       expect(content!.textContent).toContain('Create station');
-    });
-
-    it('renders add genre action', async () => {
-      const element: InfoMenu = await fixture(html`
-        <info-menu></info-menu>
-      `);
-
-      const content = element.shadowRoot!.querySelector('.menu-popup');
-      expect(content!.textContent).toContain('Create genre station');
     });
 
     it('renders add music action', async () => {
@@ -371,19 +362,6 @@ describe('InfoMenu', () => {
 
       let eventFired = false;
       element.addEventListener('info-delete-station', () => {
-        eventFired = true;
-      });
-
-      button.click();
-
-      expect(eventFired).toBe(true);
-    });
-
-    it('dispatches info-add-genre event', async () => {
-      const [element, button] = await openMenuAndGetButton('genre');
-
-      let eventFired = false;
-      element.addEventListener('info-add-genre', () => {
         eventFired = true;
       });
 

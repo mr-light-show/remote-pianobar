@@ -160,10 +160,10 @@ START_TEST(test_socketio_translate_playback_commands) {
 	
 	/* Test playback.next - commands now execute directly via BarUiDispatchById */
 	/* Just verify it doesn't crash */
-	BarSocketIoHandleAction(&app, "playback.next", NULL);
+	BarSocketIoHandleAction(&app, "playback.next", NULL, NULL);
 	
 	/* Test playback.toggle */
-	BarSocketIoHandleAction(&app, "playback.toggle", NULL);
+	BarSocketIoHandleAction(&app, "playback.toggle", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
 	pthread_mutex_destroy(&app.stateMutex);
@@ -190,13 +190,13 @@ START_TEST(test_socketio_translate_song_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test song.love - commands now execute directly via BarUiDispatchById */
-	BarSocketIoHandleAction(&app, "song.love", NULL);
+	BarSocketIoHandleAction(&app, "song.love", NULL, NULL);
 	
 	/* Test song.ban */
-	BarSocketIoHandleAction(&app, "song.ban", NULL);
+	BarSocketIoHandleAction(&app, "song.ban", NULL, NULL);
 	
 	/* Test song.tired */
-	BarSocketIoHandleAction(&app, "song.tired", NULL);
+	BarSocketIoHandleAction(&app, "song.tired", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
 	pthread_mutex_destroy(&app.stateMutex);
@@ -227,10 +227,10 @@ START_TEST(test_socketio_translate_volume_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test volume.up - commands now execute directly via BarUiDispatchById */
-	BarSocketIoHandleAction(&app, "volume.up", NULL);
+	BarSocketIoHandleAction(&app, "volume.up", NULL, NULL);
 	
 	/* Test volume.down */
-	BarSocketIoHandleAction(&app, "volume.down", NULL);
+	BarSocketIoHandleAction(&app, "volume.down", NULL, NULL);
 	
 	pthread_mutex_destroy(&app.player.lock);
 	#ifdef WEBSOCKET_ENABLED
@@ -258,7 +258,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 	app.wsContext = &ctx;
 	
 	/* Test invalid command - should be silently ignored (not crash) */
-	BarSocketIoHandleAction(&app, "invalid.command", NULL);
+	BarSocketIoHandleAction(&app, "invalid.command", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
 	pthread_mutex_destroy(&app.stateMutex);
@@ -285,7 +285,7 @@ START_TEST(test_socketio_reject_single_letter) {
 	app.wsContext = &ctx;
 	
 	/* Test single-letter command - should be silently ignored (not crash) */
-	BarSocketIoHandleAction(&app, "n", NULL);
+	BarSocketIoHandleAction(&app, "n", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
 	pthread_mutex_destroy(&app.stateMutex);
@@ -323,7 +323,7 @@ START_TEST(test_socketio_handle_query) {
 	clearBroadcastMock();
 	
 	/* Query should emit 'process' and 'stations' events */
-	BarSocketIoHandleQuery(&app);
+	BarSocketIoHandleQuery(&app, NULL);
 	
 	/* At least one message should be broadcast */
 	ck_assert_ptr_nonnull(lastBroadcastMessage);

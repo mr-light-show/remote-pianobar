@@ -41,14 +41,6 @@ START_TEST(test_websocket_destroy_null) {
 }
 END_TEST
 
-/* Test: WebSocket service with NULL app should not crash */
-START_TEST(test_websocket_service_null) {
-	BarWebsocketService(NULL, 100);
-	/* If we get here without crashing, test passes */
-	ck_assert(1);
-}
-END_TEST
-
 /* Test: Get elapsed time with NULL app should return 0 */
 START_TEST(test_websocket_elapsed_null) {
 	unsigned int elapsed = BarWebsocketGetElapsed(NULL);
@@ -58,7 +50,6 @@ END_TEST
 
 /* Test: Broadcast functions with NULL app should not crash */
 START_TEST(test_websocket_broadcast_null) {
-	BarWebsocketBroadcastState(NULL);
 	BarWebsocketBroadcastSongStart(NULL);
 	BarWebsocketBroadcastSongStop(NULL);
 	BarWebsocketBroadcastVolume(NULL, 50);
@@ -78,7 +69,6 @@ Suite *websocket_suite(void) {
 	
 	tcase_add_test(tc_core, test_websocket_init_null);
 	tcase_add_test(tc_core, test_websocket_destroy_null);
-	tcase_add_test(tc_core, test_websocket_service_null);
 	tcase_add_test(tc_core, test_websocket_elapsed_null);
 	tcase_add_test(tc_core, test_websocket_broadcast_null);
 	

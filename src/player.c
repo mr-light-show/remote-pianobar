@@ -21,20 +21,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-/* receive/play audio stream.
+/*
+ * Audio playback using miniaudio's custom data source API.
  *
- * There are two threads involved here:
- * BarPlayerThread
- * 		Sets up the stream and fetches the data into a ffmpeg buffersrc
- * miniaudio callback (maDataCallback)
- * 		Reads data from the filter chain's sink and passes it to miniaudio device
- * 
+ * Architecture:
+ * - BarPlayerThread: Opens stream, sets up ffmpeg decoder/filter, feeds filter chain
+ * - ffmpeg_data_source: Custom ma_data_source that pulls from ffmpeg filter output
+ * - ma_engine + ma_sound: miniaudio handles all playback, buffering, and timing
+ *
+ * Progress tracking via ma_sound_get_cursor_in_seconds()
+ * Completion detection via ma_sound_set_end_callback()
  */
 
 #include "config.h"
-
-/* miniaudio implementation - must be defined before including player.h */
-#define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
 #include <unistd.h>
@@ -54,7 +53,6 @@ THE SOFTWARE.
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #ifdef HAVE_LIBAVFILTER_AVCODEC_H
-/* required by ffmpeg1.2 for avfilter_copy_buf_props */
 #include <libavfilter/avcodec.h>
 #endif
 #include <libavutil/channel_layout.h>
@@ -65,64 +63,354 @@ THE SOFTWARE.
 #include "debug.h"
 #include "ui.h"
 #include "ui_types.h"
-#include "bar_state.h"  /* For lock assertions */
 
 /* default sample format */
 const enum AVSampleFormat avformat = AV_SAMPLE_FMT_S16;
 
-/* Forward declarations for callbacks and helper functions */
-static bool shouldQuit (player_t * const player);
-static void maDataCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
-static void maNotificationCallback(const ma_device_notification* pNotification);
-static void* BarAudioProducerThread(void* data);
+/* Forward declarations */
+static bool shouldQuit(player_t * const player);
 
-static void printError (const BarSettings_t * const settings,
+static void printError(const BarSettings_t * const settings,
 		const char * const msg, int ret) {
 	char avmsg[128];
-	av_strerror (ret, avmsg, sizeof (avmsg));
-	BarUiMsg (settings, MSG_ERR, "%s (%s)\n", msg, avmsg);
+	av_strerror(ret, avmsg, sizeof(avmsg));
+	BarUiMsg(settings, MSG_ERR, "%s (%s)\n", msg, avmsg);
 }
 
-/*	global initialization
+/*
+ * ============================================================================
+ * Custom FFmpeg Data Source for miniaudio
+ * ============================================================================
  */
-void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
-	/* miniaudio doesn't need global initialization */
-	av_log_set_level (AV_LOG_FATAL);
+
+/* Read PCM frames from ffmpeg filter chain with proper partial frame buffering */
+static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource, 
+		void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead) {
+	ffmpeg_data_source_t* pFFmpeg = (ffmpeg_data_source_t*)pDataSource;
+	player_t* player = pFFmpeg->player;
+	
+	if (pFramesRead != NULL) {
+		*pFramesRead = 0;
+	}
+	
+	if (pFFmpeg->reachedEnd) {
+		return MA_AT_END;
+	}
+	
+	/* Check if paused - output silence */
+	if (BarPlayerIsPaused(player)) {
+		memset(pFramesOut, 0, frameCount * pFFmpeg->channels * sizeof(int16_t));
+		if (pFramesRead != NULL) {
+			*pFramesRead = frameCount;
+		}
+		return MA_SUCCESS;
+	}
+	
+	int16_t* output = (int16_t*)pFramesOut;
+	ma_uint64 framesRead = 0;
+	
+	pthread_mutex_lock(&player->decoderLock);
+	
+	while (framesRead < frameCount) {
+		/* First, consume from any buffered frame */
+		if (pFFmpeg->bufferedFrame != NULL) {
+			const int numChannels = pFFmpeg->bufferedFrame->ch_layout.nb_channels;
+			const int totalSamples = pFFmpeg->bufferedFrame->nb_samples;
+			const int samplesRemaining = totalSamples - pFFmpeg->bufferedFrameOffset;
+			const int16_t* frameData = (const int16_t*)pFFmpeg->bufferedFrame->data[0];
+			
+			/* Calculate how many samples to copy from the buffered frame */
+			int samplesToCopy = samplesRemaining;
+			if ((ma_uint64)samplesToCopy > frameCount - framesRead) {
+				samplesToCopy = (int)(frameCount - framesRead);
+			}
+			
+			/* Copy from the offset position in the buffered frame */
+			memcpy(output + (framesRead * numChannels),
+			       frameData + (pFFmpeg->bufferedFrameOffset * numChannels),
+			       samplesToCopy * numChannels * sizeof(int16_t));
+			
+			framesRead += samplesToCopy;
+			pFFmpeg->cursor += samplesToCopy;
+			pFFmpeg->bufferedFrameOffset += samplesToCopy;
+			
+			/* Free the frame only when fully consumed */
+			if (pFFmpeg->bufferedFrameOffset >= totalSamples) {
+				av_frame_free(&pFFmpeg->bufferedFrame);
+				pFFmpeg->bufferedFrame = NULL;
+				pFFmpeg->bufferedFrameOffset = 0;
+			}
+			
+			continue;  /* Check if we need more data */
+		}
+		
+		/* No buffered frame - get a new one from the filter chain */
+		AVFrame* newFrame = av_frame_alloc();
+		if (!newFrame) {
+			pthread_mutex_unlock(&player->decoderLock);
+			return MA_OUT_OF_MEMORY;
+		}
+		
+		int ret = av_buffersink_get_frame(player->fbufsink, newFrame);
+		
+		if (ret == AVERROR_EOF) {
+			/* End of stream */
+			av_frame_free(&newFrame);
+			pFFmpeg->reachedEnd = true;
+			debugPrint(DEBUG_AUDIO, "FFmpeg data source reached EOF at frame %" PRIu64 "\n", 
+			           pFFmpeg->cursor);
+			break;
+		} else if (ret == AVERROR(EAGAIN)) {
+			/* No data available yet - wait for decoder to produce more */
+			av_frame_free(&newFrame);
+			
+			/* Check if decoding is finished but filter still draining */
+			if (player->decodingFinished) {
+				/* Decoder done, but filter returned EAGAIN - might need to flush */
+				break;
+			}
+			
+			/* Wait for decoder to signal new data */
+			pthread_cond_wait(&player->decoderCond, &player->decoderLock);
+			
+			/* Check for quit after waking */
+			if (shouldQuit(player)) {
+				break;
+			}
+			continue;
+		} else if (ret < 0) {
+			/* Error */
+			av_frame_free(&newFrame);
+			debugPrint(DEBUG_AUDIO, "FFmpeg buffersink error: %d\n", ret);
+			break;
+		}
+		
+		/* Got a new frame - store it as the buffered frame for consumption */
+		pFFmpeg->bufferedFrame = newFrame;
+		pFFmpeg->bufferedFrameOffset = 0;
+		/* Loop will consume from it on next iteration */
+	}
+	
+	pthread_mutex_unlock(&player->decoderLock);
+	
+	/* Fill remaining with silence if we didn't get enough */
+	if (framesRead < frameCount) {
+		memset(output + (framesRead * pFFmpeg->channels), 0, 
+		       (frameCount - framesRead) * pFFmpeg->channels * sizeof(int16_t));
+	}
+	
+	if (pFramesRead != NULL) {
+		*pFramesRead = framesRead;
+	}
+	
+	/* Return AT_END only if we read nothing AND we're at the end */
+	if (framesRead == 0 && pFFmpeg->reachedEnd) {
+		return MA_AT_END;
+	}
+	
+	return MA_SUCCESS;
+}
+
+/* Seeking not supported for streaming */
+static ma_result ffmpeg_data_source_seek(ma_data_source* pDataSource, ma_uint64 frameIndex) {
+	(void)pDataSource;
+	(void)frameIndex;
+	return MA_NOT_IMPLEMENTED;
+}
+
+/* Return audio format */
+static ma_result ffmpeg_data_source_get_data_format(ma_data_source* pDataSource,
+		ma_format* pFormat, ma_uint32* pChannels, ma_uint32* pSampleRate,
+		ma_channel* pChannelMap, size_t channelMapCap) {
+	ffmpeg_data_source_t* pFFmpeg = (ffmpeg_data_source_t*)pDataSource;
+	
+	if (pFormat != NULL) {
+		*pFormat = ma_format_s16;
+	}
+	if (pChannels != NULL) {
+		*pChannels = pFFmpeg->channels;
+	}
+	if (pSampleRate != NULL) {
+		*pSampleRate = pFFmpeg->sampleRate;
+	}
+	if (pChannelMap != NULL && channelMapCap > 0) {
+		ma_channel_map_init_standard(ma_standard_channel_map_default, 
+		                             pChannelMap, channelMapCap, pFFmpeg->channels);
+	}
+	
+	return MA_SUCCESS;
+}
+
+/* Return current cursor position */
+static ma_result ffmpeg_data_source_get_cursor(ma_data_source* pDataSource, ma_uint64* pCursor) {
+	ffmpeg_data_source_t* pFFmpeg = (ffmpeg_data_source_t*)pDataSource;
+	
+	if (pCursor == NULL) {
+		return MA_INVALID_ARGS;
+	}
+	
+	*pCursor = pFFmpeg->cursor;
+	return MA_SUCCESS;
+}
+
+/* Return total length */
+static ma_result ffmpeg_data_source_get_length(ma_data_source* pDataSource, ma_uint64* pLength) {
+	ffmpeg_data_source_t* pFFmpeg = (ffmpeg_data_source_t*)pDataSource;
+	
+	if (pLength == NULL) {
+		return MA_INVALID_ARGS;
+	}
+	
+	*pLength = pFFmpeg->totalFrames;
+	return MA_SUCCESS;
+}
+
+/* Data source vtable */
+static ma_data_source_vtable g_ffmpeg_data_source_vtable = {
+	ffmpeg_data_source_read,
+	ffmpeg_data_source_seek,
+	ffmpeg_data_source_get_data_format,
+	ffmpeg_data_source_get_cursor,
+	ffmpeg_data_source_get_length,
+	NULL,  /* onSetLooping */
+	0      /* flags */
+};
+
+/* Initialize the ffmpeg data source */
+static ma_result ffmpeg_data_source_init(ffmpeg_data_source_t* pFFmpeg, player_t* player) {
+	ma_data_source_config baseConfig;
+	
+	baseConfig = ma_data_source_config_init();
+	baseConfig.vtable = &g_ffmpeg_data_source_vtable;
+	
+	ma_result result = ma_data_source_init(&baseConfig, &pFFmpeg->base);
+	if (result != MA_SUCCESS) {
+		return result;
+	}
+	
+	pFFmpeg->player = player;
+	pFFmpeg->cursor = 0;
+	pFFmpeg->reachedEnd = false;
+	pFFmpeg->bufferedFrame = NULL;
+	pFFmpeg->bufferedFrameOffset = 0;
+	
+	/* Get format info from the stream */
+	const AVCodecParameters* cp = player->st->codecpar;
+	pFFmpeg->channels = cp->ch_layout.nb_channels;
+	pFFmpeg->sampleRate = player->settings->sampleRate != 0 ? 
+	                      player->settings->sampleRate : cp->sample_rate;
+	
+	/* Calculate total frames from stream duration */
+	double durationSecs = av_q2d(player->st->time_base) * (double)player->st->duration;
+	pFFmpeg->totalFrames = (ma_uint64)(durationSecs * pFFmpeg->sampleRate);
+	
+	debugPrint(DEBUG_AUDIO, "FFmpeg data source initialized: %u Hz, %u channels, %" PRIu64 " total frames (%.1f sec)\n",
+	           pFFmpeg->sampleRate, pFFmpeg->channels, pFFmpeg->totalFrames, durationSecs);
+	
+	return MA_SUCCESS;
+}
+
+static void ffmpeg_data_source_uninit(ffmpeg_data_source_t* pFFmpeg) {
+	/* Free any buffered frame */
+	if (pFFmpeg->bufferedFrame != NULL) {
+		av_frame_free(&pFFmpeg->bufferedFrame);
+		pFFmpeg->bufferedFrame = NULL;
+	}
+	ma_data_source_uninit(&pFFmpeg->base);
+	memset(pFFmpeg, 0, sizeof(*pFFmpeg));
+}
+
+/*
+ * ============================================================================
+ * Song End Callback
+ * ============================================================================
+ */
+
+static void onSongEnd(void* pUserData, ma_sound* pSound) {
+	(void)pSound;
+	player_t* player = (player_t*)pUserData;
+	
+	debugPrint(DEBUG_AUDIO, "Song end callback fired\n");
+	
+	pthread_mutex_lock(&player->lock);
+	player->mode = PLAYER_FINISHED;
+	pthread_cond_broadcast(&player->cond);
+	pthread_mutex_unlock(&player->lock);
+}
+
+/*
+ * ============================================================================
+ * Player Initialization and Cleanup
+ * ============================================================================
+ */
+
+void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
+	av_log_set_level(AV_LOG_FATAL);
 #ifdef HAVE_AV_REGISTER_ALL
-	av_register_all ();
+	av_register_all();
 #endif
 #ifdef HAVE_AVFILTER_REGISTER_ALL
-	avfilter_register_all ();
+	avfilter_register_all();
 #endif
 #ifdef HAVE_AVFORMAT_NETWORK_INIT
-	avformat_network_init ();
+	avformat_network_init();
 #endif
 
-	pthread_mutex_init (&p->lock, NULL);
-	pthread_cond_init (&p->cond, NULL);
-	pthread_mutex_init (&p->aoplayLock, NULL);
-	pthread_cond_init (&p->aoplayCond, NULL);
-	pthread_mutex_init (&p->ringLock, NULL);
-	pthread_cond_init (&p->ringCond, NULL);
-	BarPlayerReset (p);
+	pthread_mutex_init(&p->lock, NULL);
+	pthread_cond_init(&p->cond, NULL);
+	pthread_mutex_init(&p->decoderLock, NULL);
+	pthread_cond_init(&p->decoderCond, NULL);
+	
+	/* Initialize miniaudio engine once */
+	ma_engine_config engineConfig = ma_engine_config_init();
+	engineConfig.noDevice = MA_FALSE;  /* We want a device */
+	
+	ma_result result = ma_engine_init(&engineConfig, &p->engine);
+	if (result != MA_SUCCESS) {
+		fprintf(stderr, "Failed to initialize audio engine: %d\n", result);
+		p->engineInitialized = false;
+	} else {
+		p->engineInitialized = true;
+		debugPrint(DEBUG_AUDIO, "Audio engine initialized (sample rate: %u)\n",
+		           ma_engine_get_sample_rate(&p->engine));
+	}
+	
+	BarPlayerReset(p);
 	p->settings = settings;
 }
 
-void BarPlayerDestroy (player_t * const p) {
-	pthread_cond_destroy (&p->cond);
-	pthread_mutex_destroy (&p->lock);
-	pthread_cond_destroy (&p->aoplayCond);
-	pthread_mutex_destroy (&p->aoplayLock);
-	pthread_cond_destroy (&p->ringCond);
-	pthread_mutex_destroy (&p->ringLock);
+void BarPlayerDestroy(player_t * const p) {
+	/* Uninit engine */
+	if (p->engineInitialized) {
+		ma_engine_uninit(&p->engine);
+		p->engineInitialized = false;
+	}
+	
+	pthread_cond_destroy(&p->cond);
+	pthread_mutex_destroy(&p->lock);
+	pthread_cond_destroy(&p->decoderCond);
+	pthread_mutex_destroy(&p->decoderLock);
 
 #ifdef HAVE_AVFORMAT_NETWORK_INIT
-	avformat_network_deinit ();
+	avformat_network_deinit();
 #endif
-	/* miniaudio doesn't need global cleanup */
 }
 
-void BarPlayerReset (player_t * const p) {
+void BarPlayerReset(player_t * const p) {
+	/* Clean up sound from previous song */
+	if (p->soundInitialized) {
+		ma_sound_uninit(&p->sound);
+		p->soundInitialized = false;
+		debugPrint(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
+	}
+	
+	/* Free any buffered frame in the data source before zeroing */
+	if (p->dataSource.bufferedFrame != NULL) {
+		av_frame_free(&p->dataSource.bufferedFrame);
+		p->dataSource.bufferedFrame = NULL;
+	}
+	
+	/* Reset all fields */
 	p->doQuit = false;
 	p->doPause = false;
 	p->pauseStartTime = 0;
@@ -139,19 +427,18 @@ void BarPlayerReset (player_t * const p) {
 	p->streamIdx = -1;
 	p->lastTimestamp = 0;
 	p->interrupted = 0;
-	memset(&p->maDevice, 0, sizeof(p->maDevice));
-	p->deviceChanged = false;
-	p->ringBuffer = NULL;
-	p->ringSize = 0;
-	p->ringWritePos = 0;
-	p->ringReadPos = 0;
-	p->producerRunning = false;
+	p->decodingFinished = false;
+	memset(&p->dataSource, 0, sizeof(p->dataSource));
 }
 
-/*	Update volume filter
+/*
+ * ============================================================================
+ * Volume Control
+ * ============================================================================
  */
-void BarPlayerSetVolume (player_t * const player) {
-	assert (player != NULL);
+
+void BarPlayerSetVolume(player_t * const player) {
+	assert(player != NULL);
 
 	if (player->mode != PLAYER_PLAYING) {
 		return;
@@ -159,44 +446,41 @@ void BarPlayerSetVolume (player_t * const player) {
 
 	int ret;
 #ifdef HAVE_AVFILTER_GRAPH_SEND_COMMAND
-	/* ffmpeg and libav disagree on the type of this option (string vs. double)
-	 * -> print to string and let them parse it again */
 	char strbuf[16];
-	snprintf (strbuf, sizeof (strbuf), "%fdB",
+	snprintf(strbuf, sizeof(strbuf), "%fdB",
 			player->settings->volume + (player->gain * player->settings->gainMul));
-	assert (player->fgraph != NULL);
-	if ((ret = avfilter_graph_send_command (player->fgraph, "volume", "volume",
+	assert(player->fgraph != NULL);
+	if ((ret = avfilter_graph_send_command(player->fgraph, "volume", "volume",
 					strbuf, NULL, 0, 0)) < 0) {
 #else
-	/* convert from decibel */
-	const double volume = pow (10, (player->settings->volume + (player->gain * player->settings->gainMul)) / 20);
-	/* libav does not provide other means to set this right now. it might not
-	 * even work everywhere. */
-	assert (player->fvolume != NULL);
-	if ((ret = av_opt_set_double (player->fvolume->priv, "volume", volume,
-			0)) != 0) {
+	const double volume = pow(10, (player->settings->volume + (player->gain * player->settings->gainMul)) / 20);
+	assert(player->fvolume != NULL);
+	if ((ret = av_opt_set_double(player->fvolume->priv, "volume", volume, 0)) != 0) {
 #endif
-		printError (player->settings, "Cannot set volume", ret);
+		printError(player->settings, "Cannot set volume", ret);
 	}
 }
 
+/*
+ * ============================================================================
+ * Stream and Filter Setup
+ * ============================================================================
+ */
+
 #define softfail(msg) \
-	printError (player->settings, msg, ret); \
+	printError(player->settings, msg, ret); \
 	return false;
 
-/*	ffmpeg callback for blocking functions, returns 1 to abort function
- */
-static int intCb (void * const data) {
+/* ffmpeg callback for blocking functions */
+static int intCb(void * const data) {
 	player_t * const player = data;
-	assert (player != NULL);
+	assert(player != NULL);
 	if (player->interrupted > 1) {
-		/* got a sigint multiple times, quit pianobar (handled by main.c). */
-		pthread_mutex_lock (&player->lock);
+		pthread_mutex_lock(&player->lock);
 		player->doQuit = true;
-		pthread_mutex_unlock (&player->lock);
+		pthread_mutex_unlock(&player->lock);
 		return 1;
 	} else if (player->interrupted != 0) {
-		/* the request is retried with the same player context */
 		player->interrupted = 0;
 		return 1;
 	} else {
@@ -204,647 +488,353 @@ static int intCb (void * const data) {
 	}
 }
 
-static bool openStream (player_t * const player) {
-	assert (player != NULL);
-	/* no leak? */
-	assert (player->fctx == NULL);
+static bool openStream(player_t * const player) {
+	assert(player != NULL);
+	assert(player->fctx == NULL);
 
 	int ret;
 
-	/* stream setup */
-	player->fctx = avformat_alloc_context ();
+	player->fctx = avformat_alloc_context();
 	player->fctx->interrupt_callback.callback = intCb;
 	player->fctx->interrupt_callback.opaque = player;
 
-	/* in microseconds */
-	unsigned long int timeout = player->settings->timeout*1000000;
+	unsigned long int timeout = player->settings->timeout * 1000000;
 	char timeoutStr[16];
-	ret = snprintf (timeoutStr, sizeof (timeoutStr), "%lu", timeout);
-	assert (ret < sizeof (timeoutStr));
+	ret = snprintf(timeoutStr, sizeof(timeoutStr), "%lu", timeout);
+	assert(ret < (int)sizeof(timeoutStr));
 	AVDictionary *options = NULL;
-	av_dict_set (&options, "timeout", timeoutStr, 0);
+	av_dict_set(&options, "timeout", timeoutStr, 0);
 
-	assert (player->url != NULL);
-	if ((ret = avformat_open_input (&player->fctx, player->url, NULL, &options)) < 0) {
-		softfail ("Unable to open audio file");
+	assert(player->url != NULL);
+	if ((ret = avformat_open_input(&player->fctx, player->url, NULL, &options)) < 0) {
+		softfail("Unable to open audio file");
 	}
 
-	if ((ret = avformat_find_stream_info (player->fctx, NULL)) < 0) {
-		softfail ("find_stream_info");
+	if ((ret = avformat_find_stream_info(player->fctx, NULL)) < 0) {
+		softfail("find_stream_info");
 	}
 
-	/* ignore all streams, undone for audio stream below */
 	for (size_t i = 0; i < player->fctx->nb_streams; i++) {
 		player->fctx->streams[i]->discard = AVDISCARD_ALL;
 	}
 
-	player->streamIdx = av_find_best_stream (player->fctx, AVMEDIA_TYPE_AUDIO,
-			-1, -1, NULL, 0);
+	player->streamIdx = av_find_best_stream(player->fctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
 	if (player->streamIdx < 0) {
-		softfail ("find_best_stream");
+		softfail("find_best_stream");
 	}
 
 	player->st = player->fctx->streams[player->streamIdx];
 	player->st->discard = AVDISCARD_DEFAULT;
 
-	/* decoder setup */
-	if ((player->cctx = avcodec_alloc_context3 (NULL)) == NULL) {
-		softfail ("avcodec_alloc_context3");
+	if ((player->cctx = avcodec_alloc_context3(NULL)) == NULL) {
+		softfail("avcodec_alloc_context3");
 	}
 	const AVCodecParameters * const cp = player->st->codecpar;
-	if ((ret = avcodec_parameters_to_context (player->cctx, cp)) < 0) {
-		softfail ("avcodec_parameters_to_context");
+	if ((ret = avcodec_parameters_to_context(player->cctx, cp)) < 0) {
+		softfail("avcodec_parameters_to_context");
 	}
 
-	const AVCodec * const decoder = avcodec_find_decoder (cp->codec_id);
+	const AVCodec * const decoder = avcodec_find_decoder(cp->codec_id);
 	if (decoder == NULL) {
-		softfail ("find_decoder");
+		softfail("find_decoder");
 	}
 
-	if ((ret = avcodec_open2 (player->cctx, decoder, NULL)) < 0) {
-		softfail ("codec_open2");
+	if ((ret = avcodec_open2(player->cctx, decoder, NULL)) < 0) {
+		softfail("codec_open2");
 	}
 
 	if (player->lastTimestamp > 0) {
-		av_seek_frame (player->fctx, player->streamIdx, player->lastTimestamp, 0);
+		av_seek_frame(player->fctx, player->streamIdx, player->lastTimestamp, 0);
 	}
 
-	const unsigned int songDuration = av_q2d (player->st->time_base) *
-			(double) player->st->duration;
-	pthread_mutex_lock (&player->lock);
+	const unsigned int songDuration = av_q2d(player->st->time_base) *
+			(double)player->st->duration;
+	pthread_mutex_lock(&player->lock);
 	player->songPlayed = 0;
 	player->songDuration = songDuration;
-	pthread_mutex_unlock (&player->lock);
+	pthread_mutex_unlock(&player->lock);
 
 	return true;
 }
 
-/*	Get output sample rate. Default to stream sample rate
- */
-static int getSampleRate (const player_t * const player) {
+static int getSampleRate(const player_t * const player) {
 	AVCodecParameters const * const cp = player->st->codecpar;
 	return player->settings->sampleRate == 0 ?
 			cp->sample_rate :
 			player->settings->sampleRate;
 }
 
-/*	setup filter chain
- */
-static bool openFilter (player_t * const player) {
-	/* filter setup */
+static bool openFilter(player_t * const player) {
 	char strbuf[256];
 	int ret = 0;
 	AVCodecParameters * const cp = player->st->codecpar;
 
-	if ((player->fgraph = avfilter_graph_alloc ()) == NULL) {
-		softfail ("graph_alloc");
+	if ((player->fgraph = avfilter_graph_alloc()) == NULL) {
+		softfail("graph_alloc");
 	}
 
-	/* abuffer */
 	AVRational time_base = player->st->time_base;
 
 	char channelLayout[128];
 	av_channel_layout_describe(&player->cctx->ch_layout, channelLayout, sizeof(channelLayout));
-	snprintf (strbuf, sizeof (strbuf),
+	snprintf(strbuf, sizeof(strbuf),
 			"time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
 			time_base.num, time_base.den, cp->sample_rate,
-			av_get_sample_fmt_name (player->cctx->sample_fmt),
+			av_get_sample_fmt_name(player->cctx->sample_fmt),
 			channelLayout);
-	if ((ret = avfilter_graph_create_filter (&player->fabuf,
-			avfilter_get_by_name ("abuffer"), "source", strbuf, NULL,
+	if ((ret = avfilter_graph_create_filter(&player->fabuf,
+			avfilter_get_by_name("abuffer"), "source", strbuf, NULL,
 			player->fgraph)) < 0) {
-		softfail ("create_filter abuffer");
+		softfail("create_filter abuffer");
 	}
 
-	/* volume */
-	if ((ret = avfilter_graph_create_filter (&player->fvolume,
-			avfilter_get_by_name ("volume"), "volume", "0dB", NULL,
+	if ((ret = avfilter_graph_create_filter(&player->fvolume,
+			avfilter_get_by_name("volume"), "volume", "0dB", NULL,
 			player->fgraph)) < 0) {
-		softfail ("create_filter volume");
+		softfail("create_filter volume");
 	}
 
-	/* aformat: convert float samples into something more usable */
 	AVFilterContext *fafmt = NULL;
-	snprintf (strbuf, sizeof (strbuf), "sample_fmts=%s:sample_rates=%d",
-			av_get_sample_fmt_name (avformat), getSampleRate (player));
-	if ((ret = avfilter_graph_create_filter (&fafmt,
-					avfilter_get_by_name ("aformat"), "format", strbuf, NULL,
+	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d",
+			av_get_sample_fmt_name(avformat), getSampleRate(player));
+	if ((ret = avfilter_graph_create_filter(&fafmt,
+					avfilter_get_by_name("aformat"), "format", strbuf, NULL,
 					player->fgraph)) < 0) {
-		softfail ("create_filter aformat");
+		softfail("create_filter aformat");
 	}
 
-	/* abuffersink */
-	if ((ret = avfilter_graph_create_filter (&player->fbufsink,
-			avfilter_get_by_name ("abuffersink"), "sink", NULL, NULL,
+	if ((ret = avfilter_graph_create_filter(&player->fbufsink,
+			avfilter_get_by_name("abuffersink"), "sink", NULL, NULL,
 			player->fgraph)) < 0) {
-		softfail ("create_filter abuffersink");
+		softfail("create_filter abuffersink");
 	}
 
-	/* connect filter: abuffer -> volume -> aformat -> abuffersink */
-	if (avfilter_link (player->fabuf, 0, player->fvolume, 0) != 0 ||
-			avfilter_link (player->fvolume, 0, fafmt, 0) != 0 ||
-			avfilter_link (fafmt, 0, player->fbufsink, 0) != 0) {
-		softfail ("filter_link");
+	if (avfilter_link(player->fabuf, 0, player->fvolume, 0) != 0 ||
+			avfilter_link(player->fvolume, 0, fafmt, 0) != 0 ||
+			avfilter_link(fafmt, 0, player->fbufsink, 0) != 0) {
+		softfail("filter_link");
 	}
 
-	if ((ret = avfilter_graph_config (player->fgraph, NULL)) < 0) {
-		softfail ("graph_config");
+	if ((ret = avfilter_graph_config(player->fgraph, NULL)) < 0) {
+		softfail("graph_config");
 	}
 
 	return true;
 }
 
-/*	miniaudio data callback - called when device needs audio data
- *	This reads from the ring buffer filled by the producer thread
- */
-static void maDataCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-	player_t * const player = (player_t *)pDevice->pUserData;
-	(void)pInput;  /* Unused for playback */
-	
-	if (!player || !player->ringBuffer) {
-		/* Not ready yet, output silence */
-		memset(pOutput, 0, frameCount * pDevice->playback.channels * sizeof(int16_t));
-		return;
-	}
-	
-	int16_t* output = (int16_t*)pOutput;
-	size_t samplesNeeded = frameCount * pDevice->playback.channels;
-	size_t samplesRead = 0;
-	
-	pthread_mutex_lock(&player->ringLock);
-	
-	/* Check if paused */
-	if (player->doPause) {
-		pthread_mutex_unlock(&player->ringLock);
-		memset(pOutput, 0, samplesNeeded * sizeof(int16_t));
-		return;
-	}
-	
-	/* Read from ring buffer */
-	while (samplesRead < samplesNeeded) {
-		size_t available = (player->ringWritePos >= player->ringReadPos) ?
-		                   (player->ringWritePos - player->ringReadPos) :
-		                   (player->ringSize - player->ringReadPos + player->ringWritePos);
-		
-		if (available == 0) {
-			/* Buffer underrun, output silence for remaining samples */
-			memset(output + samplesRead, 0, (samplesNeeded - samplesRead) * sizeof(int16_t));
-			break;
-		}
-		
-		/* Read samples from ring buffer */
-		size_t samplesThisRead = (samplesNeeded - samplesRead < available) ? 
-		                         (samplesNeeded - samplesRead) : available;
-		
-		/* Handle wrap-around */
-		size_t samplesToEnd = player->ringSize - player->ringReadPos;
-		if (samplesThisRead > samplesToEnd) {
-			/* Read to end of buffer */
-			memcpy(output + samplesRead, player->ringBuffer + player->ringReadPos, 
-			       samplesToEnd * sizeof(int16_t));
-			samplesRead += samplesToEnd;
-			player->ringReadPos = 0;
-			samplesThisRead -= samplesToEnd;
-		}
-		
-		/* Read remaining samples */
-		if (samplesThisRead > 0) {
-			memcpy(output + samplesRead, player->ringBuffer + player->ringReadPos, 
-			       samplesThisRead * sizeof(int16_t));
-			samplesRead += samplesThisRead;
-			player->ringReadPos += samplesThisRead;
-			if (player->ringReadPos >= player->ringSize) {
-				player->ringReadPos = 0;
-			}
-		}
-	}
-	
-	/* Wake up producer if it was waiting for space */
-	pthread_cond_signal(&player->ringCond);
-	pthread_mutex_unlock(&player->ringLock);
-}
-
-/*	miniaudio notification callback - called when device state changes
- */
-static void maNotificationCallback(const ma_device_notification* pNotification) {
-	player_t * const player = (player_t *)pNotification->pDevice->pUserData;
-	
-	if (!player) {
-		return;
-	}
-	
-	switch (pNotification->type) {
-		case ma_device_notification_type_started:
-			debugPrint(DEBUG_AUDIO, "miniaudio: Device started\n");
-			break;
-			
-		case ma_device_notification_type_stopped:
-			debugPrint(DEBUG_AUDIO, "miniaudio: Device stopped\n");
-			break;
-			
-		case ma_device_notification_type_rerouted:
-			debugPrint(DEBUG_AUDIO, "miniaudio: Device rerouted (possible default device change)\n");
-			player->deviceChanged = true;
-			break;
-			
-		case ma_device_notification_type_interruption_began:
-			debugPrint(DEBUG_AUDIO, "miniaudio: Interruption began\n");
-			break;
-			
-		case ma_device_notification_type_interruption_ended:
-			debugPrint(DEBUG_AUDIO, "miniaudio: Interruption ended\n");
-			break;
-			
-		default:
-			break;
-	}
-}
-
-/*	Map BarAudioBackendType to ma_backend
- */
-static ma_backend settingsToMaBackend(BarAudioBackendType backend) {
-	switch (backend) {
-		case BAR_AUDIO_BACKEND_PULSEAUDIO:
-			return ma_backend_pulseaudio;
-		case BAR_AUDIO_BACKEND_ALSA:
-			return ma_backend_alsa;
-		case BAR_AUDIO_BACKEND_JACK:
-			return ma_backend_jack;
-		case BAR_AUDIO_BACKEND_COREAUDIO:
-			return ma_backend_coreaudio;
-		case BAR_AUDIO_BACKEND_WASAPI:
-			return ma_backend_wasapi;
-		case BAR_AUDIO_BACKEND_AUTO:
-		default:
-			return ma_backend_null;  /* Use null as terminator, let miniaudio auto-select */
-	}
-}
-
-/*	Producer thread - pulls frames from ffmpeg and writes to ring buffer
- */
-static void* BarAudioProducerThread(void* data) {
-	player_t * const player = (player_t *)data;
-	
-	while (player->producerRunning && !shouldQuit(player)) {
-		/* Check if paused */
-		pthread_mutex_lock(&player->lock);
-		if (player->doPause) {
-			pthread_mutex_unlock(&player->lock);
-			usleep(10000);  /* Sleep 10ms while paused */
-			continue;
-		}
-		pthread_mutex_unlock(&player->lock);
-		
-		/* Get frame from ffmpeg */
-		pthread_mutex_lock(&player->aoplayLock);
-		
-		AVFrame *filteredFrame = av_frame_alloc();
-		if (!filteredFrame) {
-			pthread_mutex_unlock(&player->aoplayLock);
-			break;
-		}
-		
-		int ret = av_buffersink_get_frame(player->fbufsink, filteredFrame);
-		
-		if (ret == AVERROR_EOF || shouldQuit(player)) {
-			av_frame_free(&filteredFrame);
-			pthread_mutex_unlock(&player->aoplayLock);
-			break;
-		} else if (ret == AVERROR(EAGAIN) || ret < 0) {
-			/* No data available yet, wait for decoder */
-			av_frame_free(&filteredFrame);
-			pthread_cond_wait(&player->aoplayCond, &player->aoplayLock);
-			pthread_mutex_unlock(&player->aoplayLock);
-			continue;
-		}
-		
-		/* Update playback position */
-		const double timeBase = av_q2d(av_buffersink_get_time_base(player->fbufsink));
-		const double timestamp = (double)filteredFrame->pts * timeBase;
-		const unsigned int songPlayed = (unsigned int)timestamp;
-		
-		pthread_mutex_lock(&player->lock);
-		player->songPlayed = songPlayed;
-		pthread_mutex_unlock(&player->lock);
-		
-		/* Update last timestamp for buffer management */
-		const double timeBaseSt = av_q2d(player->st->time_base);
-		const int64_t lastTimestamp = (int64_t)(timestamp / timeBaseSt);
-		player->lastTimestamp = lastTimestamp;
-		pthread_cond_broadcast(&player->aoplayCond);
-		
-		pthread_mutex_unlock(&player->aoplayLock);
-		
-		/* Write to ring buffer */
-		const int numChannels = filteredFrame->ch_layout.nb_channels;
-		const size_t frameSamples = filteredFrame->nb_samples * numChannels;
-		const int16_t* frameData = (const int16_t*)filteredFrame->data[0];
-		
-		pthread_mutex_lock(&player->ringLock);
-		
-		/* Wait for space in ring buffer */
-		while (player->producerRunning) {
-			size_t available = (player->ringReadPos > player->ringWritePos) ?
-			                   (player->ringReadPos - player->ringWritePos - 1) :
-			                   (player->ringSize - player->ringWritePos + player->ringReadPos - 1);
-			
-			if (available >= frameSamples) {
-				break;
-			}
-			
-			/* Wait for consumer to free up space */
-			pthread_cond_wait(&player->ringCond, &player->ringLock);
-		}
-		
-		if (!player->producerRunning) {
-			pthread_mutex_unlock(&player->ringLock);
-			av_frame_free(&filteredFrame);
-			break;
-		}
-		
-		/* Write samples to ring buffer */
-		size_t samplesWritten = 0;
-		while (samplesWritten < frameSamples) {
-			size_t samplesToEnd = player->ringSize - player->ringWritePos;
-			size_t samplesThisWrite = (frameSamples - samplesWritten < samplesToEnd) ?
-			                          (frameSamples - samplesWritten) : samplesToEnd;
-			
-			memcpy(player->ringBuffer + player->ringWritePos, 
-			       frameData + samplesWritten,
-			       samplesThisWrite * sizeof(int16_t));
-			
-			samplesWritten += samplesThisWrite;
-			player->ringWritePos += samplesThisWrite;
-			if (player->ringWritePos >= player->ringSize) {
-				player->ringWritePos = 0;
-			}
-		}
-		
-		pthread_mutex_unlock(&player->ringLock);
-		av_frame_free(&filteredFrame);
-	}
-	
-	debugPrint(DEBUG_AUDIO, "Producer thread exiting\n");
-	return NULL;
-}
-
-/*	setup miniaudio device
- */
-static bool openDevice (player_t * const player) {
-	const AVCodecParameters * const cp = player->st->codecpar;
-
-	/* Allocate ring buffer: 3 seconds of audio */
-	const size_t sampleRate = getSampleRate(player);
-	const size_t channels = cp->ch_layout.nb_channels;
-	player->ringSize = sampleRate * channels * 3;  /* 3 seconds */
-	player->ringBuffer = (int16_t*)calloc(player->ringSize, sizeof(int16_t));
-	if (!player->ringBuffer) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to allocate ring buffer\n");
-		return false;
-	}
-	player->ringWritePos = 0;
-	player->ringReadPos = 0;
-	debugPrint(DEBUG_AUDIO, "Ring buffer allocated: %zu samples (%.1f seconds)\n",
-	           player->ringSize, (double)player->ringSize / (sampleRate * channels));
-
-	/* Configure miniaudio device with optimized settings */
-	ma_device_config config = ma_device_config_init(ma_device_type_playback);
-	config.playback.format   = ma_format_s16;  /* Matches avformat */
-	config.playback.channels = channels;
-	config.sampleRate        = sampleRate;
-	config.dataCallback      = maDataCallback;
-	config.notificationCallback = maNotificationCallback;
-	config.pUserData         = player;  /* Pass player context to callbacks */
-	
-	/* Optimize for low-latency playback */
-	config.periodSizeInMilliseconds = 10;  /* 10ms periods */
-	config.periods = 3;  /* Triple buffering */
-	config.performanceProfile = ma_performance_profile_low_latency;
-	
-	/* macOS-specific: prevent sample rate changes */
-	config.coreaudio.allowNominalSampleRateChange = MA_FALSE;
-	
-	/* Let miniaudio auto-select backend */
-	ma_result result = ma_device_init(NULL, &config, &player->maDevice);
-	if (result != MA_SUCCESS) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to initialize audio device: %d\n", result);
-		free(player->ringBuffer);
-		player->ringBuffer = NULL;
-		return false;
-	}
-	
-	debugPrint(DEBUG_AUDIO, "miniaudio device initialized: %s (backend: %s, sample_rate: %u, channels: %u)\n",
-	           player->maDevice.playback.name,
-	           ma_get_backend_name(player->maDevice.pContext->backend),
-	           player->maDevice.sampleRate,
-	           player->maDevice.playback.channels);
-	
-	/* Start the device */
-	if ((result = ma_device_start(&player->maDevice)) != MA_SUCCESS) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to start audio device: %d\n", result);
-		ma_device_uninit(&player->maDevice);
-		free(player->ringBuffer);
-		player->ringBuffer = NULL;
-		return false;
-	}
-	
-	/* Start producer thread */
-	player->producerRunning = true;
-	if (pthread_create(&player->producerThread, NULL, BarAudioProducerThread, player) != 0) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to create producer thread\n");
-		ma_device_stop(&player->maDevice);
-		ma_device_uninit(&player->maDevice);
-		free(player->ringBuffer);
-		player->ringBuffer = NULL;
-		player->producerRunning = false;
-		return false;
-	}
-	
-	return true;
-}
-
-/*	Operating on shared variables and must be protected by mutex
+/*
+ * ============================================================================
+ * Playback Control
+ * ============================================================================
  */
 
-static bool shouldQuit (player_t * const player) {
-	pthread_mutex_lock (&player->lock);
+static bool shouldQuit(player_t * const player) {
+	pthread_mutex_lock(&player->lock);
 	const bool ret = player->doQuit;
-	pthread_mutex_unlock (&player->lock);
+	pthread_mutex_unlock(&player->lock);
 	return ret;
 }
 
-static void changeMode (player_t * const player, unsigned int mode) {
-	pthread_mutex_lock (&player->lock);
+bool BarPlayerIsPaused(player_t * const player) {
+	pthread_mutex_lock(&player->lock);
+	const bool ret = player->doPause;
+	pthread_mutex_unlock(&player->lock);
+	return ret;
+}
+
+static void changeMode(player_t * const player, unsigned int mode) {
+	pthread_mutex_lock(&player->lock);
 	player->mode = mode;
-	pthread_mutex_unlock (&player->lock);
+	pthread_cond_broadcast(&player->cond);
+	pthread_mutex_unlock(&player->lock);
 }
 
-BarPlayerMode BarPlayerGetMode (player_t * const player) {
-	pthread_mutex_lock (&player->lock);
+BarPlayerMode BarPlayerGetMode(player_t * const player) {
+	pthread_mutex_lock(&player->lock);
 	const BarPlayerMode ret = player->mode;
-	pthread_mutex_unlock (&player->lock);
+	pthread_mutex_unlock(&player->lock);
 	return ret;
 }
 
-/*	decode and play stream. returns 0 or av error code.
+/*
+ * ============================================================================
+ * Decoding Loop - Feeds frames to filter chain
+ * ============================================================================
  */
-static int play (player_t * const player) {
-	assert (player != NULL);
-	const int64_t minBufferHealth = player->settings->bufferSecs;
+
+static int decode(player_t * const player) {
+	assert(player != NULL);
 	AVCodecContext * const cctx = player->cctx;
 
-	AVPacket *pkt = av_packet_alloc ();
-	assert (pkt != NULL);
+	AVPacket *pkt = av_packet_alloc();
+	assert(pkt != NULL);
 	pkt->data = NULL;
 	pkt->size = 0;
 
-	AVFrame *frame = NULL;
-	frame = av_frame_alloc ();
-	assert (frame != NULL);
-	
-	/* No separate playback thread needed - miniaudio callback handles it */
+	AVFrame *frame = av_frame_alloc();
+	assert(frame != NULL);
+
 	enum { FILL, DRAIN, DONE } drainMode = FILL;
 	int ret = 0;
-	const double timeBase = av_q2d (player->st->time_base);
-	while (!shouldQuit (player) && drainMode != DONE) {
+	
+	while (!shouldQuit(player) && drainMode != DONE) {
 		if (drainMode == FILL) {
-			ret = av_read_frame (player->fctx, pkt);
+			ret = av_read_frame(player->fctx, pkt);
 			if (ret == AVERROR_EOF) {
-				/* enter drain mode */
 				drainMode = DRAIN;
-				avcodec_send_packet (cctx, NULL);
-				debugPrint (DEBUG_AUDIO, "decoder entering drain mode after EOF\n");
+				avcodec_send_packet(cctx, NULL);
+				debugPrint(DEBUG_AUDIO, "Decoder entering drain mode after EOF\n");
 			} else if (pkt->stream_index != player->streamIdx) {
-				/* unused packet */
-				av_packet_unref (pkt);
+				av_packet_unref(pkt);
 				continue;
 			} else if (ret < 0) {
-				/* error, abort */
-				/* mark the EOF, so that BarAoPlayThread can quit*/
 				char error[AV_ERROR_MAX_STRING_SIZE];
 				if (av_strerror(ret, error, sizeof(error)) < 0) {
-					strncpy (error, "(unknown)", sizeof(error)-1);
+					strncpy(error, "(unknown)", sizeof(error) - 1);
 				}
-				debugPrint (DEBUG_AUDIO, "av_read_frame failed with code %i (%s), "
-						"sending NULL frame\n", ret, error);
-				pthread_mutex_lock (&player->aoplayLock);
-				const int rt = av_buffersrc_add_frame (player->fabuf, NULL);
-				assert (rt == 0);
-				pthread_cond_broadcast (&player->aoplayCond);
-				pthread_mutex_unlock (&player->aoplayLock);
+				debugPrint(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
+				
+				pthread_mutex_lock(&player->decoderLock);
+				(void)av_buffersrc_add_frame(player->fabuf, NULL);
+				pthread_cond_broadcast(&player->decoderCond);
+				pthread_mutex_unlock(&player->decoderLock);
 				break;
 			} else {
-				/* fill buffer */
-				avcodec_send_packet (cctx, pkt);
+				avcodec_send_packet(cctx, pkt);
 			}
 		}
 
-		while (!shouldQuit (player)) {
-			ret = avcodec_receive_frame (cctx, frame);
+		while (!shouldQuit(player)) {
+			ret = avcodec_receive_frame(cctx, frame);
 			if (ret == AVERROR_EOF) {
-				/* done draining */
 				drainMode = DONE;
-				/* mark the EOF*/
-				debugPrint (DEBUG_AUDIO, "receive_frame got EOF, sending NULL frame\n");
-				pthread_mutex_lock (&player->aoplayLock);
-				const int rt = av_buffersrc_add_frame (player->fabuf, NULL);
-				assert (rt == 0);
-				pthread_cond_broadcast (&player->aoplayCond);
-				pthread_mutex_unlock (&player->aoplayLock);
+				debugPrint(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
+				
+				pthread_mutex_lock(&player->decoderLock);
+				(void)av_buffersrc_add_frame(player->fabuf, NULL);
+				pthread_cond_broadcast(&player->decoderCond);
+				pthread_mutex_unlock(&player->decoderLock);
 				break;
 			} else if (ret != 0) {
-				/* no more output */
 				break;
 			}
 
-			/* XXX: suppresses warning from resample filter */
-			if (frame->pts == (int64_t) AV_NOPTS_VALUE) {
+			if (frame->pts == (int64_t)AV_NOPTS_VALUE) {
 				frame->pts = 0;
 			}
-			pthread_mutex_lock (&player->aoplayLock);
-			ret = av_buffersrc_write_frame (player->fabuf, frame);
-			assert (ret >= 0);
-			pthread_mutex_unlock (&player->aoplayLock);
-		
-		int64_t bufferHealth = 0;
-		do {
-			pthread_mutex_lock (&player->aoplayLock);
-			bufferHealth = timeBase * (double) (frame->pts - player->lastTimestamp);
-			if (bufferHealth > minBufferHealth) {
-				debugPrint (DEBUG_AUDIO, "decoding buffer filled health %"PRIi64" minHealth %"PRIi64"\n",
-						bufferHealth, minBufferHealth);
-				/* Buffer get healthy, resume */
-				pthread_cond_broadcast (&player->aoplayCond);
-				/* Buffer is healthy enough, wait */
-				pthread_cond_wait (&player->aoplayCond, &player->aoplayLock);
-				debugPrint (DEBUG_AUDIO, "ao play signalled it needs more data health %"PRIi64" minHealth %"PRIi64"\n",
-						bufferHealth, minBufferHealth);
-				
-				/* Check if we should quit after waking */
-				if (shouldQuit(player)) {
-					pthread_mutex_unlock (&player->aoplayLock);
-					break;
-				}
-			}
-			pthread_mutex_unlock (&player->aoplayLock);
-		} while (bufferHealth > minBufferHealth && !shouldQuit(player));
-	}
+			
+			pthread_mutex_lock(&player->decoderLock);
+			ret = av_buffersrc_write_frame(player->fabuf, frame);
+			assert(ret >= 0);
+			pthread_cond_broadcast(&player->decoderCond);
+			pthread_mutex_unlock(&player->decoderLock);
+		}
 
-		av_packet_unref (pkt);
+		av_packet_unref(pkt);
 	}
-	av_frame_free (&frame);
-	av_packet_free (&pkt);
-	debugPrint (DEBUG_AUDIO, "decoder is done\n");
-	/* miniaudio callback will continue playing buffered data until empty */
-
+	
+	av_frame_free(&frame);
+	av_packet_free(&pkt);
+	
+	/* Mark decoding as finished */
+	pthread_mutex_lock(&player->decoderLock);
+	player->decodingFinished = true;
+	pthread_cond_broadcast(&player->decoderCond);
+	pthread_mutex_unlock(&player->decoderLock);
+	
+	debugPrint(DEBUG_AUDIO, "Decoder finished\n");
 	return ret;
 }
 
-static void finish (player_t * const player) {
-	/* Stop producer thread */
-	if (player->producerRunning) {
-		player->producerRunning = false;
-		pthread_cond_signal(&player->ringCond);  /* Wake up if waiting */
-		pthread_join(player->producerThread, NULL);
-		debugPrint(DEBUG_AUDIO, "Producer thread joined\n");
+/*
+ * ============================================================================
+ * Sound Setup and Playback
+ * ============================================================================
+ */
+
+static bool setupSound(player_t * const player) {
+	if (!player->engineInitialized) {
+		BarUiMsg(player->settings, MSG_ERR, "Audio engine not initialized\n");
+		return false;
 	}
 	
-	/* Stop and uninit miniaudio device */
-	if (player->maDevice.pContext != NULL) {
-		ma_device_stop(&player->maDevice);
-		ma_device_uninit(&player->maDevice);
-		memset(&player->maDevice, 0, sizeof(player->maDevice));
+	/* Initialize the ffmpeg data source */
+	ma_result result = ffmpeg_data_source_init(&player->dataSource, player);
+	if (result != MA_SUCCESS) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to init data source: %d\n", result);
+		return false;
 	}
 	
-	/* Free ring buffer */
-	if (player->ringBuffer != NULL) {
-		free(player->ringBuffer);
-		player->ringBuffer = NULL;
-		player->ringSize = 0;
-		player->ringWritePos = 0;
-		player->ringReadPos = 0;
-		debugPrint(DEBUG_AUDIO, "Ring buffer freed\n");
+	/* Create sound from data source */
+	result = ma_sound_init_from_data_source(&player->engine, 
+	                                        &player->dataSource, 
+	                                        0,    /* flags */
+	                                        NULL, /* group */
+	                                        &player->sound);
+	if (result != MA_SUCCESS) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to init sound: %d\n", result);
+		ffmpeg_data_source_uninit(&player->dataSource);
+		return false;
 	}
 	
+	player->soundInitialized = true;
+	
+	/* Set end callback for clean completion detection */
+	ma_sound_set_end_callback(&player->sound, onSongEnd, player);
+	
+	/* Start playback */
+	result = ma_sound_start(&player->sound);
+	if (result != MA_SUCCESS) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to start sound: %d\n", result);
+		ma_sound_uninit(&player->sound);
+		player->soundInitialized = false;
+		ffmpeg_data_source_uninit(&player->dataSource);
+		return false;
+	}
+	
+	debugPrint(DEBUG_AUDIO, "Sound started successfully\n");
+	return true;
+}
+
+static void cleanupSound(player_t * const player) {
+	if (player->soundInitialized) {
+		ma_sound_stop(&player->sound);
+		ma_sound_uninit(&player->sound);
+		player->soundInitialized = false;
+		debugPrint(DEBUG_AUDIO, "Sound cleaned up\n");
+	}
+	
+	ffmpeg_data_source_uninit(&player->dataSource);
+}
+
+static void finish(player_t * const player) {
+	/* Clean up miniaudio sound */
+	cleanupSound(player);
+	
+	/* Clean up ffmpeg resources */
 	if (player->fgraph != NULL) {
-		avfilter_graph_free (&player->fgraph);
+		avfilter_graph_free(&player->fgraph);
 		player->fgraph = NULL;
 	}
 	if (player->cctx != NULL) {
-		avcodec_free_context (&player->cctx);
+		avcodec_free_context(&player->cctx);
 		player->cctx = NULL;
 	}
 	if (player->fctx != NULL) {
-		avformat_close_input (&player->fctx);
+		avformat_close_input(&player->fctx);
 	}
+	
+	debugPrint(DEBUG_AUDIO, "Finish cleanup complete\n");
 }
 
-/*	player thread; for every song a new thread is started
- *	@param audioPlayer structure
- *	@return PLAYER_RET_*
+/*
+ * ============================================================================
+ * Player Thread - Main Entry Point
+ * ============================================================================
  */
-void *BarPlayerThread (void *data) {
-	assert (data != NULL);
+
+void *BarPlayerThread(void *data) {
+	assert(data != NULL);
 
 	player_t * const player = data;
 	uintptr_t pret = PLAYER_RET_OK;
@@ -852,32 +842,48 @@ void *BarPlayerThread (void *data) {
 	bool retry;
 	do {
 		retry = false;
-		if (openStream (player)) {
-			if (openFilter (player) && openDevice (player)) {
-				changeMode (player, PLAYER_PLAYING);
-				BarPlayerSetVolume (player);
-				const int ret = play (player);
+		if (openStream(player)) {
+			if (openFilter(player) && setupSound(player)) {
+				changeMode(player, PLAYER_PLAYING);
+				BarPlayerSetVolume(player);
+				
+				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
+				const int ret = decode(player);
+				
+				/* Wait for playback to complete (end callback will signal) */
+				while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
+					/* Update progress from miniaudio's cursor */
+					float cursor;
+					if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
+						pthread_mutex_lock(&player->lock);
+						player->songPlayed = (unsigned int)cursor;
+						pthread_mutex_unlock(&player->lock);
+					}
+					
+					/* Check if song ended */
+					if (ma_sound_at_end(&player->sound)) {
+						debugPrint(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
+						changeMode(player, PLAYER_FINISHED);
+						break;
+					}
+					
+					usleep(100000);  /* 100ms update interval */
+				}
+				
 				retry = (ret == AVERROR_INVALIDDATA ||
 						 ret == -ECONNRESET) &&
 						!player->interrupted;
 			} else {
-				/* filter missing or audio device busy */
 				pret = PLAYER_RET_HARDFAIL;
 			}
 		} else {
-			/* stream not found */
 			pret = PLAYER_RET_SOFTFAIL;
 		}
-		changeMode (player, PLAYER_WAITING);
-		finish (player);
+		changeMode(player, PLAYER_WAITING);
+		finish(player);
 	} while (retry);
 
-	changeMode (player, PLAYER_FINISHED);
+	changeMode(player, PLAYER_FINISHED);
 
-	return (void *) pret;
+	return (void *)pret;
 }
-
-/* BarAoPlayThread is no longer used with miniaudio.
- * The miniaudio data callback (maDataCallback) handles audio playback instead.
- * Old function has been removed. See git history if needed for reference.
- */
