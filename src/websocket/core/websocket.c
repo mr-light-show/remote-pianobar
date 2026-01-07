@@ -531,6 +531,11 @@ static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
 	}
 	ctx->lastVolumePollTime = now;
 	
+	/* Check if default audio device changed and refresh if needed */
+	if (BarSystemVolumeRefreshDevice()) {
+		debugPrint(DEBUG_WEBSOCKET, "WebSocket: Default audio output device changed\n");
+	}
+	
 	/* Read current system volume */
 	int currentVolume = BarSystemVolumeGet();
 	if (currentVolume < 0) {

@@ -36,12 +36,28 @@ See `contrib/config-example` for a template configuration file.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `audio_quality` | `high` | Audio quality: `low`, `medium`, or `high` |
+| `audio_backend` | `auto` | Audio backend: `auto`, `pulseaudio`, `alsa`, `jack`, `coreaudio` (macOS), `wasapi` (Windows). Auto-detection recommended. |
 | `volume` | `0` (dB) | Initial volume (-40 to +20 dB) |
 | `gain_mul` | `1.0` | Volume gain multiplier |
 | `max_gain` | `10` (dB) | Maximum gain for volume slider at 100%. Recommended values: 10 (safe), 15 (more headroom), 20 (maximum) |
 | `sample_rate` | `0` (stream default) | Force specific sample rate (Hz) |
 | `buffer_seconds` | `5` | Audio buffer size in seconds |
 | `audio_pipe` | (none) | Path to audio output pipe |
+
+### Audio Backend Selection
+
+Pianobar uses miniaudio for audio playback, which supports multiple backends:
+
+- **auto** (default): Automatically selects the best available backend for your system
+- **pulseaudio**: Linux PulseAudio (most modern Linux desktops)
+- **alsa**: Linux ALSA (direct hardware access)
+- **jack**: JACK Audio Connection Kit (professional audio)
+- **coreaudio**: macOS Core Audio
+- **wasapi**: Windows WASAPI
+
+The `auto` setting is recommended for most users. Miniaudio will automatically detect and use the best backend for your platform. Manual backend selection is only needed for troubleshooting or special audio routing requirements.
+
+**Note:** Miniaudio provides automatic device switching when the default audio output changes (e.g., plugging/unplugging headphones). This works automatically in `auto` mode.
 
 ### Volume Control
 

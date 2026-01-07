@@ -96,12 +96,23 @@ typedef enum {
 /* Volume control mode - defined outside WEBSOCKET_ENABLED since it's independent */
 #include "system_volume.h"
 
+/* Audio backend selection */
+typedef enum {
+	BAR_AUDIO_BACKEND_AUTO = 0,       /* Automatic selection (default) */
+	BAR_AUDIO_BACKEND_PULSEAUDIO = 1, /* Force PulseAudio (Linux) */
+	BAR_AUDIO_BACKEND_ALSA = 2,       /* Force ALSA (Linux) */
+	BAR_AUDIO_BACKEND_JACK = 3,       /* Force JACK (Linux) */
+	BAR_AUDIO_BACKEND_COREAUDIO = 4,  /* Force CoreAudio (macOS) */
+	BAR_AUDIO_BACKEND_WASAPI = 5,     /* Force WASAPI (Windows) */
+} BarAudioBackendType;
+
 typedef struct {
 	bool autoselect;
 	unsigned int history, maxRetry, timeout, bufferSecs;
 	unsigned int pauseTimeout;  /* minutes before auto-stop when paused, 0 = disabled */
 	int volume;
 	BarVolumeModeType volumeMode;
+	BarAudioBackendType audioBackend;
 	float gainMul;
 	int maxGain;
 	BarStationSorting_t sortOrder;

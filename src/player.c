@@ -26,13 +26,16 @@ THE SOFTWARE.
  * There are two threads involved here:
  * BarPlayerThread
  * 		Sets up the stream and fetches the data into a ffmpeg buffersrc
- * BarAoPlayThread
- * 		Reads data from the filter chain’s sink and hands it over to libao for
- * 		playback.
+ * miniaudio callback (maDataCallback)
+ * 		Reads data from the filter chain's sink and passes it to miniaudio device
  * 
  */
 
 #include "config.h"
+
+/* miniaudio implementation - must be defined before including player.h */
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 
 #include <unistd.h>
 #include <string.h>
@@ -67,6 +70,12 @@ THE SOFTWARE.
 /* default sample format */
 const enum AVSampleFormat avformat = AV_SAMPLE_FMT_S16;
 
+/* Forward declarations for callbacks and helper functions */
+static bool shouldQuit (player_t * const player);
+static void maDataCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
+static void maNotificationCallback(const ma_device_notification* pNotification);
+static void* BarAudioProducerThread(void* data);
+
 static void printError (const BarSettings_t * const settings,
 		const char * const msg, int ret) {
 	char avmsg[128];
@@ -77,7 +86,7 @@ static void printError (const BarSettings_t * const settings,
 /*	global initialization
  */
 void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
-	ao_initialize ();
+	/* miniaudio doesn't need global initialization */
 	av_log_set_level (AV_LOG_FATAL);
 #ifdef HAVE_AV_REGISTER_ALL
 	av_register_all ();
@@ -93,6 +102,8 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
 	pthread_cond_init (&p->cond, NULL);
 	pthread_mutex_init (&p->aoplayLock, NULL);
 	pthread_cond_init (&p->aoplayCond, NULL);
+	pthread_mutex_init (&p->ringLock, NULL);
+	pthread_cond_init (&p->ringCond, NULL);
 	BarPlayerReset (p);
 	p->settings = settings;
 }
@@ -102,11 +113,13 @@ void BarPlayerDestroy (player_t * const p) {
 	pthread_mutex_destroy (&p->lock);
 	pthread_cond_destroy (&p->aoplayCond);
 	pthread_mutex_destroy (&p->aoplayLock);
+	pthread_cond_destroy (&p->ringCond);
+	pthread_mutex_destroy (&p->ringLock);
 
 #ifdef HAVE_AVFORMAT_NETWORK_INIT
 	avformat_network_deinit ();
 #endif
-	ao_shutdown ();
+	/* miniaudio doesn't need global cleanup */
 }
 
 void BarPlayerReset (player_t * const p) {
@@ -126,7 +139,13 @@ void BarPlayerReset (player_t * const p) {
 	p->streamIdx = -1;
 	p->lastTimestamp = 0;
 	p->interrupted = 0;
-	p->aoDev = NULL;
+	memset(&p->maDevice, 0, sizeof(p->maDevice));
+	p->deviceChanged = false;
+	p->ringBuffer = NULL;
+	p->ringSize = 0;
+	p->ringWritePos = 0;
+	p->ringReadPos = 0;
+	p->producerRunning = false;
 }
 
 /*	Update volume filter
@@ -335,45 +354,312 @@ static bool openFilter (player_t * const player) {
 	return true;
 }
 
-/*	setup libao
+/*	miniaudio data callback - called when device needs audio data
+ *	This reads from the ring buffer filled by the producer thread
+ */
+static void maDataCallback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+	player_t * const player = (player_t *)pDevice->pUserData;
+	(void)pInput;  /* Unused for playback */
+	
+	if (!player || !player->ringBuffer) {
+		/* Not ready yet, output silence */
+		memset(pOutput, 0, frameCount * pDevice->playback.channels * sizeof(int16_t));
+		return;
+	}
+	
+	int16_t* output = (int16_t*)pOutput;
+	size_t samplesNeeded = frameCount * pDevice->playback.channels;
+	size_t samplesRead = 0;
+	
+	pthread_mutex_lock(&player->ringLock);
+	
+	/* Check if paused */
+	if (player->doPause) {
+		pthread_mutex_unlock(&player->ringLock);
+		memset(pOutput, 0, samplesNeeded * sizeof(int16_t));
+		return;
+	}
+	
+	/* Read from ring buffer */
+	while (samplesRead < samplesNeeded) {
+		size_t available = (player->ringWritePos >= player->ringReadPos) ?
+		                   (player->ringWritePos - player->ringReadPos) :
+		                   (player->ringSize - player->ringReadPos + player->ringWritePos);
+		
+		if (available == 0) {
+			/* Buffer underrun, output silence for remaining samples */
+			memset(output + samplesRead, 0, (samplesNeeded - samplesRead) * sizeof(int16_t));
+			break;
+		}
+		
+		/* Read samples from ring buffer */
+		size_t samplesThisRead = (samplesNeeded - samplesRead < available) ? 
+		                         (samplesNeeded - samplesRead) : available;
+		
+		/* Handle wrap-around */
+		size_t samplesToEnd = player->ringSize - player->ringReadPos;
+		if (samplesThisRead > samplesToEnd) {
+			/* Read to end of buffer */
+			memcpy(output + samplesRead, player->ringBuffer + player->ringReadPos, 
+			       samplesToEnd * sizeof(int16_t));
+			samplesRead += samplesToEnd;
+			player->ringReadPos = 0;
+			samplesThisRead -= samplesToEnd;
+		}
+		
+		/* Read remaining samples */
+		if (samplesThisRead > 0) {
+			memcpy(output + samplesRead, player->ringBuffer + player->ringReadPos, 
+			       samplesThisRead * sizeof(int16_t));
+			samplesRead += samplesThisRead;
+			player->ringReadPos += samplesThisRead;
+			if (player->ringReadPos >= player->ringSize) {
+				player->ringReadPos = 0;
+			}
+		}
+	}
+	
+	/* Wake up producer if it was waiting for space */
+	pthread_cond_signal(&player->ringCond);
+	pthread_mutex_unlock(&player->ringLock);
+}
+
+/*	miniaudio notification callback - called when device state changes
+ */
+static void maNotificationCallback(const ma_device_notification* pNotification) {
+	player_t * const player = (player_t *)pNotification->pDevice->pUserData;
+	
+	if (!player) {
+		return;
+	}
+	
+	switch (pNotification->type) {
+		case ma_device_notification_type_started:
+			debugPrint(DEBUG_AUDIO, "miniaudio: Device started\n");
+			break;
+			
+		case ma_device_notification_type_stopped:
+			debugPrint(DEBUG_AUDIO, "miniaudio: Device stopped\n");
+			break;
+			
+		case ma_device_notification_type_rerouted:
+			debugPrint(DEBUG_AUDIO, "miniaudio: Device rerouted (possible default device change)\n");
+			player->deviceChanged = true;
+			break;
+			
+		case ma_device_notification_type_interruption_began:
+			debugPrint(DEBUG_AUDIO, "miniaudio: Interruption began\n");
+			break;
+			
+		case ma_device_notification_type_interruption_ended:
+			debugPrint(DEBUG_AUDIO, "miniaudio: Interruption ended\n");
+			break;
+			
+		default:
+			break;
+	}
+}
+
+/*	Map BarAudioBackendType to ma_backend
+ */
+static ma_backend settingsToMaBackend(BarAudioBackendType backend) {
+	switch (backend) {
+		case BAR_AUDIO_BACKEND_PULSEAUDIO:
+			return ma_backend_pulseaudio;
+		case BAR_AUDIO_BACKEND_ALSA:
+			return ma_backend_alsa;
+		case BAR_AUDIO_BACKEND_JACK:
+			return ma_backend_jack;
+		case BAR_AUDIO_BACKEND_COREAUDIO:
+			return ma_backend_coreaudio;
+		case BAR_AUDIO_BACKEND_WASAPI:
+			return ma_backend_wasapi;
+		case BAR_AUDIO_BACKEND_AUTO:
+		default:
+			return ma_backend_null;  /* Use null as terminator, let miniaudio auto-select */
+	}
+}
+
+/*	Producer thread - pulls frames from ffmpeg and writes to ring buffer
+ */
+static void* BarAudioProducerThread(void* data) {
+	player_t * const player = (player_t *)data;
+	
+	while (player->producerRunning && !shouldQuit(player)) {
+		/* Check if paused */
+		pthread_mutex_lock(&player->lock);
+		if (player->doPause) {
+			pthread_mutex_unlock(&player->lock);
+			usleep(10000);  /* Sleep 10ms while paused */
+			continue;
+		}
+		pthread_mutex_unlock(&player->lock);
+		
+		/* Get frame from ffmpeg */
+		pthread_mutex_lock(&player->aoplayLock);
+		
+		AVFrame *filteredFrame = av_frame_alloc();
+		if (!filteredFrame) {
+			pthread_mutex_unlock(&player->aoplayLock);
+			break;
+		}
+		
+		int ret = av_buffersink_get_frame(player->fbufsink, filteredFrame);
+		
+		if (ret == AVERROR_EOF || shouldQuit(player)) {
+			av_frame_free(&filteredFrame);
+			pthread_mutex_unlock(&player->aoplayLock);
+			break;
+		} else if (ret == AVERROR(EAGAIN) || ret < 0) {
+			/* No data available yet, wait for decoder */
+			av_frame_free(&filteredFrame);
+			pthread_cond_wait(&player->aoplayCond, &player->aoplayLock);
+			pthread_mutex_unlock(&player->aoplayLock);
+			continue;
+		}
+		
+		/* Update playback position */
+		const double timeBase = av_q2d(av_buffersink_get_time_base(player->fbufsink));
+		const double timestamp = (double)filteredFrame->pts * timeBase;
+		const unsigned int songPlayed = (unsigned int)timestamp;
+		
+		pthread_mutex_lock(&player->lock);
+		player->songPlayed = songPlayed;
+		pthread_mutex_unlock(&player->lock);
+		
+		/* Update last timestamp for buffer management */
+		const double timeBaseSt = av_q2d(player->st->time_base);
+		const int64_t lastTimestamp = (int64_t)(timestamp / timeBaseSt);
+		player->lastTimestamp = lastTimestamp;
+		pthread_cond_broadcast(&player->aoplayCond);
+		
+		pthread_mutex_unlock(&player->aoplayLock);
+		
+		/* Write to ring buffer */
+		const int numChannels = filteredFrame->ch_layout.nb_channels;
+		const size_t frameSamples = filteredFrame->nb_samples * numChannels;
+		const int16_t* frameData = (const int16_t*)filteredFrame->data[0];
+		
+		pthread_mutex_lock(&player->ringLock);
+		
+		/* Wait for space in ring buffer */
+		while (player->producerRunning) {
+			size_t available = (player->ringReadPos > player->ringWritePos) ?
+			                   (player->ringReadPos - player->ringWritePos - 1) :
+			                   (player->ringSize - player->ringWritePos + player->ringReadPos - 1);
+			
+			if (available >= frameSamples) {
+				break;
+			}
+			
+			/* Wait for consumer to free up space */
+			pthread_cond_wait(&player->ringCond, &player->ringLock);
+		}
+		
+		if (!player->producerRunning) {
+			pthread_mutex_unlock(&player->ringLock);
+			av_frame_free(&filteredFrame);
+			break;
+		}
+		
+		/* Write samples to ring buffer */
+		size_t samplesWritten = 0;
+		while (samplesWritten < frameSamples) {
+			size_t samplesToEnd = player->ringSize - player->ringWritePos;
+			size_t samplesThisWrite = (frameSamples - samplesWritten < samplesToEnd) ?
+			                          (frameSamples - samplesWritten) : samplesToEnd;
+			
+			memcpy(player->ringBuffer + player->ringWritePos, 
+			       frameData + samplesWritten,
+			       samplesThisWrite * sizeof(int16_t));
+			
+			samplesWritten += samplesThisWrite;
+			player->ringWritePos += samplesThisWrite;
+			if (player->ringWritePos >= player->ringSize) {
+				player->ringWritePos = 0;
+			}
+		}
+		
+		pthread_mutex_unlock(&player->ringLock);
+		av_frame_free(&filteredFrame);
+	}
+	
+	debugPrint(DEBUG_AUDIO, "Producer thread exiting\n");
+	return NULL;
+}
+
+/*	setup miniaudio device
  */
 static bool openDevice (player_t * const player) {
 	const AVCodecParameters * const cp = player->st->codecpar;
 
-	ao_sample_format aoFmt;
-	memset (&aoFmt, 0, sizeof (aoFmt));
-	aoFmt.bits = av_get_bytes_per_sample (avformat) * 8;
-	assert (aoFmt.bits > 0);
-	aoFmt.channels = cp->ch_layout.nb_channels;
-	aoFmt.rate = getSampleRate (player);
-	aoFmt.byte_format = AO_FMT_NATIVE;
-
-	int driver = -1;
-	if (player->settings->audioPipe) {
-		// using audio pipe
-		struct stat st;
-		if (stat (player->settings->audioPipe, &st)) {
-			BarUiMsg (player->settings, MSG_ERR, "Cannot stat audio pipe file.\n");
-			return false;
-		}
-		if (!S_ISFIFO (st.st_mode)) {
-			BarUiMsg (player->settings, MSG_ERR, "File is not a pipe, error.\n");
-			return false;
-		}
-		driver = ao_driver_id ("raw");
-		if ((player->aoDev = ao_open_file(driver, player->settings->audioPipe, 1, &aoFmt, NULL)) == NULL) {
-			BarUiMsg (player->settings, MSG_ERR, "Cannot open audio pipe file.\n");
-			return false;
-		}
-	} else {
-		// use driver from libao configuration
-		driver = ao_default_driver_id ();
-		if ((player->aoDev = ao_open_live (driver, &aoFmt, NULL)) == NULL) {
-			BarUiMsg (player->settings, MSG_ERR, "Cannot open audio device.\n");
-			return false;
-		}
+	/* Allocate ring buffer: 3 seconds of audio */
+	const size_t sampleRate = getSampleRate(player);
+	const size_t channels = cp->ch_layout.nb_channels;
+	player->ringSize = sampleRate * channels * 3;  /* 3 seconds */
+	player->ringBuffer = (int16_t*)calloc(player->ringSize, sizeof(int16_t));
+	if (!player->ringBuffer) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to allocate ring buffer\n");
+		return false;
 	}
+	player->ringWritePos = 0;
+	player->ringReadPos = 0;
+	debugPrint(DEBUG_AUDIO, "Ring buffer allocated: %zu samples (%.1f seconds)\n",
+	           player->ringSize, (double)player->ringSize / (sampleRate * channels));
 
+	/* Configure miniaudio device with optimized settings */
+	ma_device_config config = ma_device_config_init(ma_device_type_playback);
+	config.playback.format   = ma_format_s16;  /* Matches avformat */
+	config.playback.channels = channels;
+	config.sampleRate        = sampleRate;
+	config.dataCallback      = maDataCallback;
+	config.notificationCallback = maNotificationCallback;
+	config.pUserData         = player;  /* Pass player context to callbacks */
+	
+	/* Optimize for low-latency playback */
+	config.periodSizeInMilliseconds = 10;  /* 10ms periods */
+	config.periods = 3;  /* Triple buffering */
+	config.performanceProfile = ma_performance_profile_low_latency;
+	
+	/* macOS-specific: prevent sample rate changes */
+	config.coreaudio.allowNominalSampleRateChange = MA_FALSE;
+	
+	/* Let miniaudio auto-select backend */
+	ma_result result = ma_device_init(NULL, &config, &player->maDevice);
+	if (result != MA_SUCCESS) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to initialize audio device: %d\n", result);
+		free(player->ringBuffer);
+		player->ringBuffer = NULL;
+		return false;
+	}
+	
+	debugPrint(DEBUG_AUDIO, "miniaudio device initialized: %s (backend: %s, sample_rate: %u, channels: %u)\n",
+	           player->maDevice.playback.name,
+	           ma_get_backend_name(player->maDevice.pContext->backend),
+	           player->maDevice.sampleRate,
+	           player->maDevice.playback.channels);
+	
+	/* Start the device */
+	if ((result = ma_device_start(&player->maDevice)) != MA_SUCCESS) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to start audio device: %d\n", result);
+		ma_device_uninit(&player->maDevice);
+		free(player->ringBuffer);
+		player->ringBuffer = NULL;
+		return false;
+	}
+	
+	/* Start producer thread */
+	player->producerRunning = true;
+	if (pthread_create(&player->producerThread, NULL, BarAudioProducerThread, player) != 0) {
+		BarUiMsg(player->settings, MSG_ERR, "Failed to create producer thread\n");
+		ma_device_stop(&player->maDevice);
+		ma_device_uninit(&player->maDevice);
+		free(player->ringBuffer);
+		player->ringBuffer = NULL;
+		player->producerRunning = false;
+		return false;
+	}
+	
 	return true;
 }
 
@@ -415,8 +701,8 @@ static int play (player_t * const player) {
 	AVFrame *frame = NULL;
 	frame = av_frame_alloc ();
 	assert (frame != NULL);
-	pthread_t aoplaythread;
-	pthread_create (&aoplaythread, NULL, BarAoPlayThread, player);
+	
+	/* No separate playback thread needed - miniaudio callback handles it */
 	enum { FILL, DRAIN, DONE } drainMode = FILL;
 	int ret = 0;
 	const double timeBase = av_q2d (player->st->time_base);
@@ -479,38 +765,67 @@ static int play (player_t * const player) {
 			ret = av_buffersrc_write_frame (player->fabuf, frame);
 			assert (ret >= 0);
 			pthread_mutex_unlock (&player->aoplayLock);
-			
-			int64_t bufferHealth = 0;
-			do {
-				pthread_mutex_lock (&player->aoplayLock);
-				bufferHealth = timeBase * (double) (frame->pts - player->lastTimestamp);
-				if (bufferHealth > minBufferHealth) {
-					debugPrint (DEBUG_AUDIO, "decoding buffer filled health %"PRIi64" minHealth %"PRIi64"\n",
-							bufferHealth, minBufferHealth);
-					/* Buffer get healthy, resume */
-					pthread_cond_broadcast (&player->aoplayCond);
-					/* Buffer is healthy enough, wait */
-					pthread_cond_wait (&player->aoplayCond, &player->aoplayLock);
-					debugPrint (DEBUG_AUDIO, "ao play signalled it needs more data health %"PRIi64" minHealth %"PRIi64"\n",
-							bufferHealth, minBufferHealth);
+		
+		int64_t bufferHealth = 0;
+		do {
+			pthread_mutex_lock (&player->aoplayLock);
+			bufferHealth = timeBase * (double) (frame->pts - player->lastTimestamp);
+			if (bufferHealth > minBufferHealth) {
+				debugPrint (DEBUG_AUDIO, "decoding buffer filled health %"PRIi64" minHealth %"PRIi64"\n",
+						bufferHealth, minBufferHealth);
+				/* Buffer get healthy, resume */
+				pthread_cond_broadcast (&player->aoplayCond);
+				/* Buffer is healthy enough, wait */
+				pthread_cond_wait (&player->aoplayCond, &player->aoplayLock);
+				debugPrint (DEBUG_AUDIO, "ao play signalled it needs more data health %"PRIi64" minHealth %"PRIi64"\n",
+						bufferHealth, minBufferHealth);
+				
+				/* Check if we should quit after waking */
+				if (shouldQuit(player)) {
+					pthread_mutex_unlock (&player->aoplayLock);
+					break;
 				}
-				pthread_mutex_unlock (&player->aoplayLock);
-			} while (bufferHealth > minBufferHealth);
-		}
+			}
+			pthread_mutex_unlock (&player->aoplayLock);
+		} while (bufferHealth > minBufferHealth && !shouldQuit(player));
+	}
 
 		av_packet_unref (pkt);
 	}
 	av_frame_free (&frame);
 	av_packet_free (&pkt);
-	debugPrint (DEBUG_AUDIO, "decoder is done, waiting for ao player\n");
-	pthread_join (aoplaythread, NULL);
+	debugPrint (DEBUG_AUDIO, "decoder is done\n");
+	/* miniaudio callback will continue playing buffered data until empty */
 
 	return ret;
 }
 
 static void finish (player_t * const player) {
-	ao_close (player->aoDev);
-	player->aoDev = NULL;
+	/* Stop producer thread */
+	if (player->producerRunning) {
+		player->producerRunning = false;
+		pthread_cond_signal(&player->ringCond);  /* Wake up if waiting */
+		pthread_join(player->producerThread, NULL);
+		debugPrint(DEBUG_AUDIO, "Producer thread joined\n");
+	}
+	
+	/* Stop and uninit miniaudio device */
+	if (player->maDevice.pContext != NULL) {
+		ma_device_stop(&player->maDevice);
+		ma_device_uninit(&player->maDevice);
+		memset(&player->maDevice, 0, sizeof(player->maDevice));
+	}
+	
+	/* Free ring buffer */
+	if (player->ringBuffer != NULL) {
+		free(player->ringBuffer);
+		player->ringBuffer = NULL;
+		player->ringSize = 0;
+		player->ringWritePos = 0;
+		player->ringReadPos = 0;
+		debugPrint(DEBUG_AUDIO, "Ring buffer freed\n");
+	}
+	
 	if (player->fgraph != NULL) {
 		avfilter_graph_free (&player->fgraph);
 		player->fgraph = NULL;
@@ -562,76 +877,7 @@ void *BarPlayerThread (void *data) {
 	return (void *) pret;
 }
 
-void *BarAoPlayThread (void *data) {
-	assert (data != NULL);
-
-	player_t * const player = data;
-
-	AVFrame *filteredFrame = NULL;
-	filteredFrame = av_frame_alloc ();
-	assert (filteredFrame != NULL);
-
-	int ret;
-	const double timeBase = av_q2d (av_buffersink_get_time_base (player->fbufsink)),
-			timeBaseSt = av_q2d (player->st->time_base);
-	while (!shouldQuit(player)) {
-		pthread_mutex_lock (&player->aoplayLock);
-		ret = av_buffersink_get_frame (player->fbufsink, filteredFrame);
-		if (ret == AVERROR_EOF || shouldQuit (player)) {
-			/* we are done here */
-			pthread_mutex_unlock (&player->aoplayLock);
-			debugPrint (DEBUG_AUDIO, "ao player got EOF, exiting\n");
-			break;
-		} else if (ret < 0) {
-			/* wait for more frames */
-			debugPrint (DEBUG_AUDIO, "ao player is waiting for more frames after code %i (%s)\n",
-					ret, av_err2str (ret));
-			pthread_cond_broadcast (&player->aoplayCond);
-			pthread_cond_wait (&player->aoplayCond, &player->aoplayLock);
-			pthread_mutex_unlock (&player->aoplayLock);
-			continue;
-		}
-		pthread_mutex_unlock (&player->aoplayLock);
-
-		const int numChannels = filteredFrame->ch_layout.nb_channels;
-		const int bps = av_get_bytes_per_sample (filteredFrame->format);
-		ao_play (player->aoDev, (char *) filteredFrame->data[0],
-				filteredFrame->nb_samples * numChannels * bps);
-
-		const double timestamp = (double) filteredFrame->pts * timeBase;
-		const unsigned int songPlayed = timestamp;
-
-		/* CRITICAL RULE: player.lock and player.aoplayLock must NEVER be held simultaneously.
-		 * Audio thread alternates between locks: aoplayLock (buffer) → lock (control).
-		 * See src/THREAD_SAFETY.md for detailed explanation of two-lock player design. */
-		
-		ASSERT_AOPLAY_LOCK_NOT_HELD(player);  /* Verify aoplayLock is free before acquiring lock */
-		pthread_mutex_lock (&player->lock);
-		player->songPlayed = songPlayed;
-		/* pausing */
-		if (player->doPause) {
-			do {
-				debugPrint (DEBUG_AUDIO, "ao player is paused\n");
-				pthread_cond_wait (&player->cond, &player->lock);
-			} while (player->doPause);
-			debugPrint (DEBUG_AUDIO, "ao player continues\n");
-		}
-		pthread_mutex_unlock (&player->lock);
-
-		/* lastTimestamp must be the last pts, but expressed in terms of
-		 * st->time_base, not the sink's time_base. */
-		const int64_t lastTimestamp = timestamp/timeBaseSt;
-		/* notify download thread, we might need more data */
-		ASSERT_PLAYER_LOCK_NOT_HELD(player);  /* Verify lock is free before acquiring aoplayLock */
-		pthread_mutex_lock (&player->aoplayLock);
-		player->lastTimestamp = lastTimestamp;
-		pthread_cond_broadcast (&player->aoplayCond);
-		pthread_mutex_unlock (&player->aoplayLock);
-
-		av_frame_unref (filteredFrame);
-	}
-	av_frame_free (&filteredFrame);
-	debugPrint (DEBUG_AUDIO, "ao player is done\n");
-
-	return (void *) 0;
-}
+/* BarAoPlayThread is no longer used with miniaudio.
+ * The miniaudio data callback (maDataCallback) handles audio playback instead.
+ * Old function has been removed. See git history if needed for reference.
+ */

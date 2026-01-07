@@ -25,6 +25,7 @@ THE SOFTWARE.
 #define _POSIX_C_SOURCE 200809L
 
 #include "system_volume.h"
+#include "debug.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,8 +68,44 @@ static bool macosGetDefaultDevice(void) {
 	return status == noErr && defaultOutputDevice != kAudioObjectUnknown;
 }
 
+/* Check if default output device changed and update if needed
+ * Returns true if device changed, false otherwise */
+static bool macosCheckAndRefreshDevice(void) {
+	AudioObjectPropertyAddress addr = {
+		kAudioHardwarePropertyDefaultOutputDevice,
+		kAudioObjectPropertyScopeGlobal,
+		kAudioObjectPropertyElementMain
+	};
+	
+	AudioDeviceID currentDevice = kAudioObjectUnknown;
+	UInt32 size = sizeof(currentDevice);
+	OSStatus status = AudioObjectGetPropertyData(
+		kAudioObjectSystemObject, &addr, 0, NULL, &size, &currentDevice);
+	
+	if (status != noErr || currentDevice == kAudioObjectUnknown) {
+		return false;
+	}
+	
+	/* Check if device changed */
+	if (currentDevice != defaultOutputDevice) {
+		AudioDeviceID oldDevice = defaultOutputDevice;
+		defaultOutputDevice = currentDevice;
+		
+		/* Log device change */
+		debugPrint(DEBUG_AUDIO, "System volume: Default audio device changed (0x%x -> 0x%x)\n", 
+		           (unsigned int)oldDevice, (unsigned int)currentDevice);
+		
+		return true;
+	}
+	
+	return false;
+}
+
 /* CoreAudio: Get volume (0.0-1.0 -> 0-100) */
 static int macosCoreaudioGetVolume(void) {
+	/* Check if default device changed */
+	macosCheckAndRefreshDevice();
+	
 	if (defaultOutputDevice == kAudioObjectUnknown) {
 		return -1;
 	}
@@ -94,6 +131,9 @@ static int macosCoreaudioGetVolume(void) {
 
 /* CoreAudio: Set volume (0-100 -> 0.0-1.0) */
 static bool macosCoreaudioSetVolume(int percent) {
+	/* Check if default device changed */
+	macosCheckAndRefreshDevice();
+	
 	if (defaultOutputDevice == kAudioObjectUnknown) {
 		return false;
 	}
@@ -108,6 +148,15 @@ static bool macosCoreaudioSetVolume(int percent) {
 	
 	OSStatus status = AudioObjectSetPropertyData(
 		defaultOutputDevice, &addr, 0, NULL, sizeof(volume), &volume);
+	
+	/* If operation failed, device may have changed - try refreshing and retrying once */
+	if (status != noErr) {
+		if (macosCheckAndRefreshDevice() && defaultOutputDevice != kAudioObjectUnknown) {
+			debugPrint(DEBUG_AUDIO, "System volume: Retrying set volume after device change\n");
+			status = AudioObjectSetPropertyData(
+				defaultOutputDevice, &addr, 0, NULL, sizeof(volume), &volume);
+		}
+	}
 	
 	return status == noErr;
 }
@@ -609,5 +658,18 @@ bool BarSystemVolumeSet(int percent) {
 
 bool BarSystemVolumeAvailable(void) {
 	return activeBackend != BACKEND_NONE;
+}
+
+bool BarSystemVolumeRefreshDevice(void) {
+#ifdef __APPLE__
+	/* Only CoreAudio backend needs device refresh */
+	if (activeBackend == BACKEND_COREAUDIO) {
+		return macosCheckAndRefreshDevice();
+	}
+	return false;
+#else
+	/* Linux backends use dynamic device resolution - no refresh needed */
+	return false;
+#endif
 }
 

@@ -341,9 +341,24 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 
 	BarWsBroadcastSongStop(app);
 
-	/* FIXME: pthread_join blocks everything if network connection
-	 * is hung up e.g. */
-	pthread_join (*playerThread, &threadRet);
+	/* Wait for player thread with timeout to prevent infinite hang */
+	bool threadExited = false;
+	for (int i = 0; i < 100; i++) {  /* 10 seconds max */
+		int ret = pthread_kill(*playerThread, 0);
+		if (ret == ESRCH) {
+			/* Thread no longer exists - join to clean up */
+			pthread_join(*playerThread, &threadRet);
+			threadExited = true;
+			break;
+		}
+		usleep(100000);  /* 100ms */
+	}
+
+	if (!threadExited) {
+		BarUiMsg(&app->settings, MSG_ERR, "Player thread did not exit within 10s, detaching\n");
+		pthread_detach(*playerThread);
+		threadRet = (void *)PLAYER_RET_HARDFAIL;
+	}
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
 		app->playerErrors = 0;

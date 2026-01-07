@@ -256,6 +256,8 @@ Features
 Building Remote Pianobar
 +++++++++++++++++++++++++
 
+**Audio Library:** Remote Pianobar uses `miniaudio <https://miniaud.io/>`_ for audio playback, which provides automatic device switching and cross-platform support. The library is included in the source tree (``src/miniaudio.h``) and requires no additional dependencies.
+
 To build Remote Pianobar::
 
 	make WEBSOCKET=1 clean && make WEBSOCKET=1

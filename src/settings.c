@@ -399,6 +399,22 @@ void BarSettingsRead (BarSettings_t *settings) {
 				} else {
 					settings->volumeMode = BAR_VOLUME_MODE_PLAYER;
 				}
+			} else if (streq ("audio_backend", key)) {
+				if (streq (val, "auto")) {
+					settings->audioBackend = BAR_AUDIO_BACKEND_AUTO;
+				} else if (streq (val, "pulseaudio")) {
+					settings->audioBackend = BAR_AUDIO_BACKEND_PULSEAUDIO;
+				} else if (streq (val, "alsa")) {
+					settings->audioBackend = BAR_AUDIO_BACKEND_ALSA;
+				} else if (streq (val, "jack")) {
+					settings->audioBackend = BAR_AUDIO_BACKEND_JACK;
+				} else if (streq (val, "coreaudio")) {
+					settings->audioBackend = BAR_AUDIO_BACKEND_COREAUDIO;
+				} else if (streq (val, "wasapi")) {
+					settings->audioBackend = BAR_AUDIO_BACKEND_WASAPI;
+				} else {
+					settings->audioBackend = BAR_AUDIO_BACKEND_AUTO;
+				}
 			} else if (streq ("gain_mul", key)) {
 				settings->gainMul = atof (val);
 			} else if (streq ("max_gain", key)) {

@@ -50,3 +50,8 @@ bool BarSystemVolumeSet(int percent);
  * (backend initialized successfully) */
 bool BarSystemVolumeAvailable(void);
 
+/* Check if default output device changed and refresh if needed
+ * Returns true if device was refreshed, false otherwise
+ * Safe to call from any thread */
+bool BarSystemVolumeRefreshDevice(void);
+

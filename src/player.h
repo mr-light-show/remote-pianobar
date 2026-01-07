@@ -31,7 +31,7 @@ THE SOFTWARE.
 #include <stdint.h>
 #include <signal.h>
 
-#include <ao/ao.h>
+#include "miniaudio.h"
 #include <libavformat/avformat.h>
 #include <libavfilter/avfilter.h>
 #include <libavcodec/avcodec.h>
@@ -78,7 +78,18 @@ typedef struct {
 	int64_t lastTimestamp;
 	sig_atomic_t interrupted;
 
-	ao_device *aoDev;
+	ma_device maDevice;
+	bool deviceChanged;  /* Set when default device changes */
+
+	/* Ring buffer for producer-consumer audio pipeline */
+	int16_t *ringBuffer;
+	size_t ringSize;       /* Total size in samples */
+	size_t ringWritePos;   /* Producer write position */
+	size_t ringReadPos;    /* Consumer read position */
+	pthread_mutex_t ringLock;
+	pthread_cond_t ringCond;
+	pthread_t producerThread;
+	bool producerRunning;
 
 	/* settings (must be set before starting the thread) */
 	double gain;

@@ -76,8 +76,7 @@ LIBGCRYPT_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libgcrypt)
 LIBJSONC_CFLAGS:=$(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null || $(PKG_CONFIG) --cflags json)
 LIBJSONC_LDFLAGS:=$(shell $(PKG_CONFIG) --libs json-c 2>/dev/null || $(PKG_CONFIG) --libs json)
 
-LIBAO_CFLAGS:=$(shell $(PKG_CONFIG) --cflags ao)
-LIBAO_LDFLAGS:=$(shell $(PKG_CONFIG) --libs ao)
+# miniaudio is header-only, no linking required
 
 # System volume control - platform-specific
 OS := $(shell uname)
@@ -108,11 +107,11 @@ endif
 ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
 			${LIBAV_CFLAGS} ${LIBCURL_CFLAGS} \
 			${LIBGCRYPT_CFLAGS} ${LIBJSONC_CFLAGS} \
-			${LIBAO_CFLAGS} ${SYSVOLUME_CFLAGS}
+			${SYSVOLUME_CFLAGS}
 ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 			${LIBAV_LDFLAGS} ${LIBCURL_LDFLAGS} \
 			${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
-			${LIBAO_LDFLAGS} ${SYSVOLUME_LDFLAGS}
+			${SYSVOLUME_LDFLAGS}
 
 # Add WebSocket flags if enabled
 ifeq ($(WEBSOCKET),1)

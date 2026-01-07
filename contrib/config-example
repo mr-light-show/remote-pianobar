@@ -41,6 +41,7 @@
 
 # Misc
 #audio_quality = low
+#audio_backend = auto
 #autostart_station = 123456
 #event_command = /home/user/.config/pianobar/eventcmd
 #fifo = /tmp/pianobar
@@ -53,6 +54,10 @@
 #max_gain = 10
 #sample_rate = 44100
 #audio_pipe = /tmp/mypipe
+
+# Audio backend selection (auto-detection recommended)
+# Options: auto, pulseaudio, alsa, jack, coreaudio (macOS), wasapi (Windows)
+# Default: auto
 
 # Format strings
 #format_nowplaying_song = [32m%t[0m by [34m%a[0m on %l[31m%r[0m%@%s
