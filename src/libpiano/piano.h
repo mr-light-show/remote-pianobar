@@ -57,7 +57,8 @@ typedef struct PianoStation {
 	char isCreator;
 	char isQuickMix;
 	char useQuickMix; /* station will be included in quickmix */
-	char *name;
+	char *name;       /* Original name from Pandora */
+	char *displayName; /* Transformed name for display (NULL = use name) */
 	char *id;
 	char *seedId;
 } PianoStation_t;

@@ -95,6 +95,7 @@ void PianoDestroySearchResult (PianoSearchResult_t *searchResult) {
  */
 void PianoDestroyStation (PianoStation_t *station) {
 	free (station->name);
+	free (station->displayName);
 	free (station->id);
 	free (station->seedId);
 	memset (station, 0, sizeof (*station));

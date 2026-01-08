@@ -39,6 +39,7 @@ THE SOFTWARE.
 #include "bar_state.h"
 #include "debug.h"
 #include "system_volume.h"
+#include "station_display.h"
 
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/protocol/socketio.h"
@@ -1201,6 +1202,9 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 		BarUiMsg(&app->settings, MSG_ERR, "Failed to get stations.\n");
 		return;
 	}
+	
+	/* Update display names after stations are fetched */
+	BarUpdateStationDisplayNames(app);
 	
 	/* Broadcast updated stations to WebSocket clients */
 	BarWsBroadcastStations(app);

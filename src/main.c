@@ -56,6 +56,7 @@ THE SOFTWARE.
 #include "ui.h"
 #include "ui_dispatch.h"
 #include "bar_state.h"
+#include "station_display.h"
 #include "playback_manager.h"
 #include "system_volume.h"
 
@@ -206,6 +207,12 @@ static bool BarMainGetStations (BarApp_t *app) {
 
 	BarUiMsg (&app->settings, MSG_INFO, "Get stations... ");
 	ret = BarUiPianoCall (app, PIANO_REQUEST_GET_STATIONS, NULL, &pRet, &wRet);
+	
+	/* Update display names after stations are fetched */
+	if (ret) {
+		BarUpdateStationDisplayNames(app);
+	}
+	
 	BarUiStartEventCmd (&app->settings, "usergetstations", NULL, NULL, &app->player,
 			BarStateGetStationList(app), pRet, wRet);
 	return ret;

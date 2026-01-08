@@ -24,6 +24,7 @@ THE SOFTWARE.
 #pragma once
 
 #include <stdbool.h>
+#include <regex.h>
 
 #include <piano.h>
 
@@ -107,6 +108,13 @@ typedef enum {
 } BarAudioBackendType;
 
 typedef struct {
+	char *pattern;      /* regex pattern string */
+	char *replacement;  /* replacement string */
+	regex_t compiled;   /* compiled regex */
+	bool valid;         /* whether regex compiled successfully */
+} BarStationDisplayNameOverride_t;
+
+typedef struct {
 	bool autoselect;
 	unsigned int history, maxRetry, timeout, bufferSecs;
 	unsigned int pauseTimeout;  /* minutes before auto-stop when paused, 0 = disabled */
@@ -136,6 +144,10 @@ typedef struct {
 	char keys[BAR_KS_COUNT];
 	int sampleRate;
 	BarMsgFormatStr_t msgFormat[MSG_COUNT];
+	
+	/* Station display name overrides */
+	BarStationDisplayNameOverride_t *stationDisplayNameOverrides;
+	size_t stationDisplayNameOverrideCount;
 	
 	/* WebSocket support (conditional compilation) */
 	#ifdef WEBSOCKET_ENABLED

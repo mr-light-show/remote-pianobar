@@ -85,8 +85,9 @@ static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song,
 	if (stationFieldName && song->stationId && app) {
 		songStation = BarStateFindStationById(app, song->stationId);
 		if (songStation) {
+			const char *displayName = songStation->displayName ? songStation->displayName : songStation->name;
 			json_object_object_add(songObj, stationFieldName,
-			                       json_object_new_string(songStation->name));
+			                       json_object_new_string(displayName));
 		}
 	}
 	
@@ -463,8 +464,9 @@ void BarSocketIoEmitStart(BarApp_t *app) {
 	/* Add current station info */
 	PianoStation_t *curStation = BarStateGetCurrentStation(app);
 	if (curStation) {
+		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
 		json_object_object_add(data, "station", 
-		                       json_object_new_string(curStation->name));
+		                       json_object_new_string(displayName));
 		json_object_object_add(data, "stationId",
 		                       json_object_new_string(curStation->id));
 	}
@@ -537,12 +539,13 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 	/* Emit stations in sorted order */
 	for (size_t i = 0; i < stationCount; i++) {
 		PianoStation_t *curStation = sortedStations[i];
+		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
 		
 		station = json_object_new_object();
 		json_object_object_add(station, "id", 
 		                       json_object_new_string(curStation->id));
 		json_object_object_add(station, "name", 
-		                       json_object_new_string(curStation->name));
+		                       json_object_new_string(displayName));
 		json_object_object_add(station, "isQuickMix", 
 		                       json_object_new_boolean(curStation->isQuickMix));
 		json_object_object_add(station, "isQuickMixed", 
@@ -593,8 +596,9 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	/* Always include station fields, even if NULL */
 	PianoStation_t *curStation = BarStateGetCurrentStation(app);
 	if (curStation) {
+		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
 		json_object_object_add(data, "station", 
-		                       json_object_new_string(curStation->name));
+		                       json_object_new_string(displayName));
 		json_object_object_add(data, "stationId",
 		                       json_object_new_string(curStation->id));
 	} else {

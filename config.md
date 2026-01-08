@@ -80,6 +80,7 @@ ReplayGain is applied on top of the volume setting. The default `system_volume_p
 | `ban_icon` | ` </3` | Icon for banned songs |
 | `tired_icon` | ` zZ` | Icon for tired songs |
 | `at_icon` | ` @ ` | Separator icon |
+| `station_display_name_override` | (none) | Transform station names for display using regex. See below for format. |
 
 ### Notes on Station Auto-Start
 
@@ -116,6 +117,31 @@ Available values for the `sort` setting:
 - `quickmix_01_name_za` - Regular stations first, QuickMix last, then alphabetical Z-A
 - `quickmix_10_name_az` - QuickMix first, regular stations last, then alphabetical A-Z
 - `quickmix_10_name_za` - QuickMix first, regular stations last, then alphabetical Z-A
+
+### Station Display Name Override
+
+For stations that Pandora doesn't allow you to rename, you can configure display name transformations using regular expressions. Add multiple entries to apply them in sequence.
+
+**Format:** `station_display_name_override = /regex_pattern/replacement/`
+
+**Examples:**
+
+```ini
+# Remove "Radio" suffix from all station names (case-sensitive or case-insensitive)
+station_display_name_override = / Radio$//
+station_display_name_override = /[rR]adio$//
+
+# Replace "Playlist" with "Channel"
+station_display_name_override = /Playlist/Channel/
+```
+
+**Notes:**
+- Uses POSIX Extended Regular Expressions (ERE)
+- Multiple entries are applied in order
+- Leading and trailing whitespace is automatically trimmed after each transformation
+- Transformations are display-only (doesn't modify actual Pandora station names)
+- Works in both CLI and web UI
+- Invalid regex patterns are silently ignored
 
 ## Format Strings
 

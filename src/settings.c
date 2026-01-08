@@ -147,6 +147,18 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 	free (settings->logFile);
 	#endif
 	
+	/* Free station display name overrides */
+	if (settings->stationDisplayNameOverrides) {
+		for (size_t i = 0; i < settings->stationDisplayNameOverrideCount; i++) {
+			free (settings->stationDisplayNameOverrides[i].pattern);
+			free (settings->stationDisplayNameOverrides[i].replacement);
+			if (settings->stationDisplayNameOverrides[i].valid) {
+				regfree (&settings->stationDisplayNameOverrides[i].compiled);
+			}
+		}
+		free (settings->stationDisplayNameOverrides);
+	}
+	
 	memset (settings, 0, sizeof (*settings));
 }
 
@@ -200,6 +212,9 @@ void BarSettingsRead (BarSettings_t *settings) {
 	settings->audioPipe = NULL;
 	assert (settings->fifo != NULL);
 	settings->sampleRate = 0; /* default to stream sample rate */
+	
+	settings->stationDisplayNameOverrides = NULL;
+	settings->stationDisplayNameOverrideCount = 0;
 
 	settings->msgFormat[MSG_NONE].prefix = NULL;
 	settings->msgFormat[MSG_NONE].postfix = NULL;
@@ -396,6 +411,50 @@ void BarSettingsRead (BarSettings_t *settings) {
 				settings->volume = atoi (val);
 			} else if (streq ("system_volume_player_gain", key)) {
 				settings->systemVolumePlayerGain = atoi (val);
+			} else if (streq ("station_display_name_override", key)) {
+				/* Parse /regex/replacement/ format */
+				if (val[0] == '/') {
+					const char *p = val + 1;
+					const char *pattern_start = p;
+					const char *pattern_end = strchr (p, '/');
+					
+					if (pattern_end) {
+						const char *repl_start = pattern_end + 1;
+						const char *repl_end = strchr (repl_start, '/');
+						
+						if (repl_end) {
+							/* Valid format found */
+							size_t idx = settings->stationDisplayNameOverrideCount;
+							settings->stationDisplayNameOverrides = realloc (
+								settings->stationDisplayNameOverrides,
+								(idx + 1) * sizeof (BarStationDisplayNameOverride_t));
+							
+							/* Copy pattern */
+							size_t pattern_len = pattern_end - pattern_start;
+							settings->stationDisplayNameOverrides[idx].pattern = 
+								strndup (pattern_start, pattern_len);
+							
+							/* Copy replacement */
+							size_t repl_len = repl_end - repl_start;
+							settings->stationDisplayNameOverrides[idx].replacement = 
+								strndup (repl_start, repl_len);
+							
+							/* Compile regex */
+							int ret = regcomp (
+								&settings->stationDisplayNameOverrides[idx].compiled,
+								settings->stationDisplayNameOverrides[idx].pattern,
+								REG_EXTENDED);
+							
+							settings->stationDisplayNameOverrides[idx].valid = (ret == 0);
+							settings->stationDisplayNameOverrideCount++;
+							
+							if (ret != 0) {
+								fprintf (stderr, "Warning: Invalid regex pattern: %s\n",
+									settings->stationDisplayNameOverrides[idx].pattern);
+							}
+						}
+					}
+				}
 			} else if (streq ("volume_mode", key)) {
 				if (streq (val, "system")) {
 					settings->volumeMode = BAR_VOLUME_MODE_SYSTEM;

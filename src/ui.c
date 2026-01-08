@@ -570,13 +570,14 @@ PianoStation_t *BarUiSelectStation (BarApp_t *app, PianoStation_t *stations,
 		displayCount = 0;
 		for (i = 0; i < stationCount; i++) {
 			const PianoStation_t *currStation = sortedStations[i];
+			const char *displayName = currStation->displayName ? currStation->displayName : currStation->name;
 			/* filter stations */
-			if (BarStrCaseStr (currStation->name, buf) != NULL) {
+			if (BarStrCaseStr (displayName, buf) != NULL) {
 				BarUiMsg (&app->settings, MSG_LIST, "%2zi) %c%c%c %s\n", i,
 						currStation->useQuickMix ? 'q' : ' ',
 						currStation->isQuickMix ? 'Q' : ' ',
 						!currStation->isCreator ? 'S' : ' ',
-						currStation->name);
+						displayName);
 				++displayCount;
 				lastDisplayed = i;
 			}
@@ -833,7 +834,8 @@ static void BarUiAppendNewline (char *s, size_t maxlen) {
 void BarUiPrintStation (const BarSettings_t *settings,
 		PianoStation_t *station) {
 	char outstr[512];
-	const char *vals[] = {station->name, station->id};
+	const char *displayName = station->displayName ? station->displayName : station->name;
+	const char *vals[] = {displayName, station->id};
 
 	BarUiCustomFormat (outstr, sizeof (outstr), settings->npStationFormat,
 			"ni", vals);

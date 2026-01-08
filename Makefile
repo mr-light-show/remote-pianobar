@@ -31,6 +31,7 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/bar_state.c \
 		${PIANOBAR_DIR}/playback_manager.c \
 		${PIANOBAR_DIR}/settings.c \
+		${PIANOBAR_DIR}/station_display.c \
 		${PIANOBAR_DIR}/terminal.c \
 		${PIANOBAR_DIR}/ui_act.c \
 		${PIANOBAR_DIR}/ui.c \
