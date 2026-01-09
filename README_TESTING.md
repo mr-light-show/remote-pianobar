@@ -27,14 +27,14 @@ sudo apt-get install check cppcheck
 
 To run the unit tests:
 ```bash
-make WEBSOCKET=1 test
+make test
 ```
 
 ### Comprehensive Testing
 
 To run all tests including linting and memory leak detection:
 ```bash
-make WEBSOCKET=1 test-all
+make test-all
 ```
 
 This will:
@@ -44,16 +44,16 @@ This will:
 
 ### Individual Test Targets
 
-- `make WEBSOCKET=1 test` - Run unit tests only
-- `make WEBSOCKET=1 lint` - Run static analysis on source code
-- `make WEBSOCKET=1 lint-test` - Run static analysis on test code
-- `make WEBSOCKET=1 test-asan` - Run tests with AddressSanitizer (memory leak detection)
-- `make WEBSOCKET=1 test-valgrind` - Run tests with valgrind (Linux only)
+- `make test` - Run unit tests only
+- `make lint` - Run static analysis on source code
+- `make lint-test` - Run static analysis on test code
+- `make test-asan` - Run tests with AddressSanitizer (memory leak detection)
+- `make test-valgrind` - Run tests with valgrind (Linux only)
 
 ### Cleaning Test Files
 
 ```bash
-make WEBSOCKET=1 test-clean
+make test-clean
 ```
 
 ## Test Structure
@@ -156,7 +156,7 @@ TEST_SRC:=\
 ### 4. Run the Tests
 
 ```bash
-make WEBSOCKET=1 test
+make test
 ```
 
 ## Check Framework Assertions
@@ -178,7 +178,7 @@ For a complete list, see: https://libcheck.github.io/check/doc/check_html/check_
 AddressSanitizer is built into modern compilers and works on macOS, Linux, and other platforms:
 
 ```bash
-make WEBSOCKET=1 test-asan
+make test-asan
 ```
 
 This will:
@@ -191,7 +191,7 @@ This will:
 On Linux, you can also use Valgrind:
 
 ```bash
-make WEBSOCKET=1 test-valgrind
+make test-valgrind
 ```
 
 ## Continuous Integration
@@ -199,7 +199,7 @@ make WEBSOCKET=1 test-valgrind
 For CI/CD pipelines, use:
 
 ```bash
-make WEBSOCKET=1 test-all
+make test-all
 ```
 
 This runs the comprehensive test suite and exits with non-zero status on any failure.
@@ -211,7 +211,7 @@ This runs the comprehensive test suite and exits with non-zero status on any fai
 Make sure you have built Remote Pianobar first:
 ```bash
 make clean
-make WEBSOCKET=1
+make
 ```
 
 ### "Check library not found"
@@ -237,7 +237,7 @@ in the Makefile to include those dependencies.
 4. **Test One Thing**: Each test should verify one specific behavior
 5. **Use Descriptive Names**: Test names should clearly indicate what they test
 6. **Clean Up**: Tests should not leave temporary files or state
-7. **Run Before Commit**: Always run `make WEBSOCKET=1 test` before committing
+7. **Run Before Commit**: Always run `make test` before committing
 
 ## Future Enhancements
 

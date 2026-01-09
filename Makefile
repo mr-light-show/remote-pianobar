@@ -40,10 +40,9 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/websocket_bridge.c \
 		${PIANOBAR_DIR}/system_volume.c
 
-# WebSocket support (conditional compilation)
-WEBSOCKET?=0
+# WebSocket support (enabled by default, use NOWEBSOCKET=1 to disable)
 WEBSOCKET_DIR:=src/websocket
-ifeq ($(WEBSOCKET),1)
+ifneq ($(NOWEBSOCKET),1)
 	PIANOBAR_SRC+=\
 		${WEBSOCKET_DIR}/core/websocket.c \
 		${WEBSOCKET_DIR}/core/queue.c \
@@ -97,8 +96,8 @@ else ifeq (${OS},Linux)
 	SYSVOLUME_LDFLAGS+=$(shell $(PKG_CONFIG) --libs alsa)
 endif
 
-# WebSocket library flags (if enabled)
-ifeq ($(WEBSOCKET),1)
+# WebSocket library flags (unless disabled)
+ifneq ($(NOWEBSOCKET),1)
 	CFLAGS+=-DWEBSOCKET_ENABLED
 	LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
 	LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
@@ -116,8 +115,8 @@ ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 			${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
 			${SYSVOLUME_LDFLAGS}
 
-# Add WebSocket flags if enabled
-ifeq ($(WEBSOCKET),1)
+# Add WebSocket flags (unless disabled)
+ifneq ($(NOWEBSOCKET),1)
 	ALL_CFLAGS+=${LIBWEBSOCKETS_CFLAGS}
 	ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
 endif
@@ -156,7 +155,7 @@ libpiano.so.0: ${LIBPIANO_RELOBJ} ${LIBPIANO_OBJ}
 -include $(LIBPIANO_SRC:.c=.d)
 
 # Test-specific compilation rules (must come before general %.o: %.c rule)
-ifeq ($(WEBSOCKET),1)
+ifneq ($(NOWEBSOCKET),1)
 test/%.o: test/%.c
 	${SILENTECHO} "    CC  $< (test)"
 	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $*.d -MP $<
@@ -165,6 +164,11 @@ test/unit/%.o: test/unit/%.c
 	${SILENTECHO} "    CC  $< (test)"
 	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $*.d -MP $<
 endif
+
+# Special rule for miniaudio_impl.c - suppress deprecation warnings from third-party library
+src/miniaudio_impl.o: src/miniaudio_impl.c
+	${SILENTECHO} "    CC  $<"
+	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} -Wno-deprecated-declarations -MMD -MF $*.d -MP $<
 
 # build standard object files
 %.o: %.c
@@ -214,8 +218,8 @@ uninstall:
 	${DESTDIR}/${LIBDIR}/libpiano.a \
 	${DESTDIR}/${INCDIR}/piano.h
 
-# Test suite (only available when WEBSOCKET=1)
-ifeq ($(WEBSOCKET),1)
+# Test suite (available by default, disabled when NOWEBSOCKET=1)
+ifneq ($(NOWEBSOCKET),1)
 TEST_DIR:=test
 TEST_SRC:=\
 		${TEST_DIR}/test_main.c \
@@ -228,9 +232,9 @@ TEST_OBJ:=${TEST_SRC:.c=.o}
 TEST_BIN:=pianobar_test
 
 # Build test suite (only link the modules being tested)
-${TEST_BIN}: ${TEST_OBJ} src/debug.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
+${TEST_BIN}: ${TEST_OBJ} src/debug.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/debug.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/debug.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}
@@ -276,23 +280,23 @@ test-clean:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
 else
 test:
-	@echo "Tests are only available with WEBSOCKET=1"
-	@echo "Run: make WEBSOCKET=1 test"
+	@echo "Tests are disabled when NOWEBSOCKET=1"
+	@echo "Run: make test (without NOWEBSOCKET=1)"
 	@exit 1
 
 test-asan:
-	@echo "Tests are only available with WEBSOCKET=1"
-	@echo "Run: make WEBSOCKET=1 test-asan"
+	@echo "Tests are disabled when NOWEBSOCKET=1"
+	@echo "Run: make test-asan (without NOWEBSOCKET=1)"
 	@exit 1
 
 test-valgrind:
-	@echo "Tests are only available with WEBSOCKET=1"
-	@echo "Run: make WEBSOCKET=1 test-valgrind"
+	@echo "Tests are disabled when NOWEBSOCKET=1"
+	@echo "Run: make test-valgrind (without NOWEBSOCKET=1)"
 	@exit 1
 
 test-all:
-	@echo "Tests are only available with WEBSOCKET=1"
-	@echo "Run: make WEBSOCKET=1 test-all"
+	@echo "Tests are disabled when NOWEBSOCKET=1"
+	@echo "Run: make test-all (without NOWEBSOCKET=1)"
 	@exit 1
 
 lint:
@@ -302,7 +306,7 @@ lint:
 		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_DIR}/*.c ${LIBPIANO_DIR}/*.c
 
 lint-test:
-	@echo "Tests are only available with WEBSOCKET=1"
+	@echo "Tests are disabled when NOWEBSOCKET=1"
 	@exit 1
 
 test-clean:

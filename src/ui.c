@@ -1013,6 +1013,7 @@ void BarUiStartEventCmd (const BarSettings_t *settings, const char *type,
 		BarUiMsg (settings, MSG_ERR, "Cannot fork eventcmd. (%s)\n", strerror (errno));
 	} else {
 		/* parent */
+		/* parent */
 		int status;
 		PianoStation_t *songStation = NULL;
 		FILE *pipeWriteFd;

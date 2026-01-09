@@ -258,7 +258,7 @@ enable_core_dumps() {
 # Clean build
 clean_build() {
     echo -e "${BLUE}Cleaning previous build...${NC}"
-    make WEBSOCKET=1 clean 2>/dev/null || true
+    make clean 2>/dev/null || true
     rm -f pianobar pianobar_test
     echo -e "${GREEN}✓ Clean complete${NC}"
 }
@@ -280,7 +280,7 @@ build_pianobar() {
     
     echo -e "${YELLOW}CFLAGS: $CFLAGS${NC}"
     
-    make WEBSOCKET=1 CFLAGS="$CFLAGS"
+    make CFLAGS="$CFLAGS"
     
     if [ ! -f "pianobar" ]; then
         echo -e "${RED}✗ Build failed - pianobar binary not found${NC}"
@@ -522,8 +522,8 @@ apt-get install -y -qq nodejs
 cd /workspace
 
 echo "=== Building pianobar ==="
-make WEBSOCKET=1 clean || true
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make clean || true
+make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 echo "=== Building WebUI ==="
 cd webui
