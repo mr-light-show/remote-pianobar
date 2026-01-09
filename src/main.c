@@ -43,6 +43,19 @@ THE SOFTWARE.
 #include <stdbool.h>
 #include <limits.h>
 #include <signal.h>
+#include <errno.h>
+#include <stdint.h>
+#ifdef __APPLE__
+#include <execinfo.h>
+#include <mach-o/dyld.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#else
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 /* waitpid () */
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -63,6 +76,7 @@ THE SOFTWARE.
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"
+#include "websocket/daemon/daemon.h"
 #endif
 #include "websocket_bridge.h"
 #include "ui_readline.h"
@@ -91,7 +105,9 @@ static bool BarMainLoginUser (BarApp_t *app) {
  */
 static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		BarReadlineFds_t *input) {
+
 	bool usernameFromConfig = true;
+
 
 	if (settings->username == NULL) {
 		/* In web-only mode, stdin is not available - credentials must be in config */
@@ -103,6 +119,7 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		}
 		#endif
 		
+
 		char nameBuf[100];
 
 		BarUiMsg (settings, MSG_QUESTION, "Email: ");
@@ -111,7 +128,9 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		}
 		settings->username = strdup (nameBuf);
 		usernameFromConfig = false;
+	} else {
 	}
+
 
 	if (settings->password == NULL) {
 		/* In web-only mode, stdin is not available - credentials must be in config */
@@ -424,7 +443,15 @@ static void BarMainPrintTime (BarApp_t *app) {
 /*	main loop
  */
 static void BarMainLoop (BarApp_t *app) {
+
+
+
 	pthread_t playerThread;
+
+
+
+
+
 
 	if (!BarMainGetLoginCredentials (&app->settings, &app->input)) {
 		return;
@@ -449,6 +476,7 @@ static void BarMainLoop (BarApp_t *app) {
 
 	player_t * const player = &app->player;
 	bool promptedForStation = false;
+
 
 	while (!app->doQuit) {
 		/* One-time prompt if no station selected */
@@ -552,6 +580,13 @@ static void intHandler (int signal) {
 	}
 }
 
+/* Crash handler - re-raise signal to get default behavior (core dump, crash report) */
+static void crashHandler (int sig) {
+	/* Re-raise signal to get default behavior (core dump, crash report) */
+	signal(sig, SIG_DFL);
+	raise(sig);
+}
+
 static void BarMainSetupSigaction () {
 	struct sigaction act = {
 			.sa_handler = intHandler,
@@ -559,14 +594,209 @@ static void BarMainSetupSigaction () {
 			};
 	sigemptyset (&act.sa_mask);
 	sigaction (SIGINT, &act, NULL);
+	
+	/* Register crash handlers */
+	act.sa_handler = crashHandler;
+	sigaction (SIGSEGV, &act, NULL);
+	sigaction (SIGABRT, &act, NULL);
+	sigaction (SIGBUS, &act, NULL);
+	sigaction (SIGILL, &act, NULL);
+	sigaction (SIGFPE, &act, NULL);
+}
+
+/* Get the machine's IPv4 address (first non-loopback interface) */
+static void BarMainGetIPv4Address(char *buffer, size_t buffer_size) {
+	struct ifaddrs *ifaddrs_ptr = NULL;
+	struct ifaddrs *ifa = NULL;
+	
+	buffer[0] = '\0';
+	
+	if (getifaddrs(&ifaddrs_ptr) != 0) {
+		strncpy(buffer, "127.0.0.1", buffer_size - 1);
+		buffer[buffer_size - 1] = '\0';
+		return;
+	}
+	
+	/* Find first non-loopback IPv4 address */
+	for (ifa = ifaddrs_ptr; ifa != NULL; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == NULL) {
+			continue;
+		}
+		
+		/* Check for IPv4 address */
+		if (ifa->ifa_addr->sa_family == AF_INET) {
+			struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+			const char *ip = inet_ntoa(sin->sin_addr);
+			
+			/* Skip loopback addresses */
+			if (strcmp(ip, "127.0.0.1") != 0 && strcmp(ip, "127.0.0.0") != 0) {
+				strncpy(buffer, ip, buffer_size - 1);
+				buffer[buffer_size - 1] = '\0';
+				break;
+			}
+		}
+	}
+	
+	freeifaddrs(ifaddrs_ptr);
+	
+	/* Fallback to localhost if no address found */
+	if (buffer[0] == '\0') {
+		strncpy(buffer, "127.0.0.1", buffer_size - 1);
+		buffer[buffer_size - 1] = '\0';
+	}
+}
+
+/* Check if --launched-as-daemon flag is present in command-line arguments */
+static bool BarMainCheckRelaunchFlag(int argc, char **argv) {
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--launched-as-daemon") == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Relaunch pianobar as a daemon using fork+exec on macOS when ui_mode=web
+ * This avoids CoreAudio XPC service issues that occur after fork() */
+static void BarMainRelaunchAsDaemon(int argc, char **argv) {
+#ifdef __APPLE__
+	pid_t pid = fork();
+	if (pid < 0) {
+		fprintf(stderr, "Failed to fork for relaunch: %s\n", strerror(errno));
+		return;
+	}
+	
+	if (pid == 0) {
+		/* Child process: exec pianobar with --launched-as-daemon flag */
+		/* Build new argv array with --launched-as-daemon inserted after program name */
+		char **new_argv = malloc((argc + 2) * sizeof(char *));
+		if (!new_argv) {
+			fprintf(stderr, "Failed to allocate memory for relaunch\n");
+			exit(1);
+		}
+		
+		/* Get path to current executable */
+		char exe_path[PATH_MAX];
+		uint32_t size = sizeof(exe_path);
+		if (_NSGetExecutablePath(exe_path, &size) != 0) {
+			free(new_argv);
+			fprintf(stderr, "Failed to get executable path\n");
+			exit(1);
+		}
+		
+		/* Build new argv: [exe_path, --launched-as-daemon, original_args...] */
+		new_argv[0] = exe_path;
+		new_argv[1] = "--launched-as-daemon";
+		for (int i = 1; i < argc; i++) {
+			new_argv[i + 1] = argv[i];
+		}
+		new_argv[argc + 1] = NULL;
+		
+		/* Exec the new process - this replaces the current process */
+		execvp(exe_path, new_argv);
+		
+		/* If we get here, exec failed */
+		fprintf(stderr, "Failed to exec pianobar: %s\n", strerror(errno));
+		free(new_argv);
+		exit(1);
+	}
+	
+	/* Parent process: wait briefly for child to start, then exit */
+	/* This allows the child (exec'd process) to detach from the terminal */
+	sleep(1);
+	exit(0);
+#else
+	/* Not macOS, no-op */
+	(void)argc;
+	(void)argv;
+#endif
 }
 
 int main (int argc, char **argv) {
 	static BarApp_t app;
 
-	debugEnable();
+
+	/* Check for --launched-as-daemon flag early (before any initialization) */
+	bool launched_as_daemon = BarMainCheckRelaunchFlag(argc, argv);
 
 	memset (&app, 0, sizeof (app));
+
+
+	/* Read settings EARLY to check ui_mode before any CoreAudio initialization
+	 * This is the ONLY initialization we do before detecting ui_mode=web */
+	BarSettingsInit (&app.settings);
+	BarSettingsRead (&app.settings);
+
+	/* Check if pianobar is already running in web mode and kill it if so */
+#ifdef WEBSOCKET_ENABLED
+	if (app.settings.uiMode == BAR_UI_MODE_WEB && app.settings.pidFile) {
+		if (BarDaemonIsRunning(app.settings.pidFile)) {
+			/* Read PID for message */
+			FILE *fp = fopen(app.settings.pidFile, "r");
+			pid_t old_pid = 0;
+			if (fp) {
+				(void)fscanf(fp, "%d", &old_pid);
+				fclose(fp);
+			}
+			
+			fprintf(stderr, "Pianobar is already running (PID: %d). Stopping it and starting a new instance...\n", 
+			        (int)old_pid);
+			
+			if (BarDaemonKillRunning(app.settings.pidFile)) {
+				/* Wait a moment for process to fully terminate */
+				usleep(500000); /* 0.5 seconds */
+			} else {
+				fprintf(stderr, "Warning: Failed to kill running instance. Continuing anyway...\n");
+			}
+		}
+	}
+#endif
+
+	/* On macOS with ui_mode=web, relaunch using fork+exec to avoid CoreAudio XPC issues */
+#ifdef __APPLE__
+	#ifdef WEBSOCKET_ENABLED
+	if (!launched_as_daemon && app.settings.uiMode == BAR_UI_MODE_WEB) {
+		BarMainRelaunchAsDaemon(argc, argv);
+		/* If we get here, relaunch failed - continue anyway */
+	}
+	#endif
+#endif
+
+	/* Output UI path and URL before starting in web or both mode
+	 * Do this AFTER relaunch check so it only prints once (in the final process) */
+#ifdef WEBSOCKET_ENABLED
+	if (app.settings.uiMode == BAR_UI_MODE_WEB || app.settings.uiMode == BAR_UI_MODE_BOTH) {
+		fprintf(stderr, "Starting pianobar\n");
+		
+		/* Get IPv4 address */
+		char ipv4_addr[INET_ADDRSTRLEN];
+		BarMainGetIPv4Address(ipv4_addr, sizeof(ipv4_addr));
+		
+		/* Output webui_path */
+		if (app.settings.webuiPath) {
+			fprintf(stderr, "Web UI files: %s\n", app.settings.webuiPath);
+		} else {
+			fprintf(stderr, "Web UI files: (using built-in)\n");
+		}
+		
+		/* Output URL with IPv4 address */
+		if (app.settings.websocketPort > 0) {
+			fprintf(stderr, "Web interface: http://%s:%d/\n", ipv4_addr, app.settings.websocketPort);
+		}
+	}
+#endif
+
+	/* NOW do other initialization (after relaunch check, if any) */
+	debugEnable();
+
+
+	/* Disable Objective-C runtime fork safety check on macOS
+	 * CoreAudio uses Objective-C internally, and macOS crashes if Objective-C
+	 * classes were being initialized in another thread when fork() was called.
+	 * This allows CoreAudio to work after fork. */
+#ifdef __APPLE__
+	setenv("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES", 1);
+#endif
 
 	/* signals */
 	signal (SIGPIPE, SIG_IGN);
@@ -577,20 +807,15 @@ int main (int argc, char **argv) {
 	gcry_check_version (NULL);
 	gcry_control (GCRYCTL_DISABLE_SECMEM, 0);
 	gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
-	BarPlayerInit (&app.player, &app.settings);
+	
+
+	/* Initialize state but NOT player yet - player init must come after daemonization
+	 * because ma_engine_init() opens audio device file descriptors */
 	BarStateInit (&app);
 
-	BarSettingsInit (&app.settings);
-	BarSettingsRead (&app.settings);
 
-	/* Daemonize EARLY if running in web-only mode - before any terminal/stdin setup 
-	 * System volume init must come AFTER daemonization since it may access system resources */
-	if (!BarWsDaemonize(&app)) {
-		fprintf(stderr, "Failed to daemonize\n");
-		return 1;
-	}
-
-	/* Initialize system volume control if configured - AFTER daemonization */
+	/* Initialize system volume control BEFORE daemonization
+	 * popen() and CoreAudio APIs require working file descriptors and user session access */
 	if (app.settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		if (BarSystemVolumeInit()) {
 			/* In system mode, set player to configured initial gain.
@@ -604,11 +829,72 @@ int main (int argc, char **argv) {
 			app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 		}
 	}
+	
+	/* Initialize libcurl BEFORE daemonization
+	 * curl_global_init() must happen BEFORE fork. OpenSSL (used by curl) can detect
+	 * if it's running in a forked child and may refuse to work. However, curl_easy_init()
+	 * (which creates the actual handle) should be called AFTER fork in the child process. */
+	
+	
+	curl_global_init (CURL_GLOBAL_DEFAULT);
+
+
+	/* NOTE: ma_engine_init() must happen AFTER fork in the child process.
+	 * CoreAudio creates background threads that don't survive fork properly.
+	 * Initializing before fork causes CoreAudio threads to crash when cleaning up. */
+
+
+	/* Daemonize if running in web-only mode - BEFORE player init
+	 * On macOS with --launched-as-daemon flag, we've already been relaunched via exec,
+	 * so we just need to perform daemonization steps without forking again. */
+	if (app.settings.uiMode == BAR_UI_MODE_WEB) {
+#ifdef __APPLE__
+		if (launched_as_daemon) {
+			
+			/* Do daemonization steps FIRST to detach from terminal immediately */
+			if (!BarDaemonizeSteps(&app)) {
+				fprintf(stderr, "Failed to perform daemonization steps\n");
+				return 1;
+			}
+			
+			/* Print info after daemonization (stdout/stderr are redirected, but
+			 * messages may still appear if logFile is configured) */
+			fprintf(stderr, "Pianobar daemon started (PID: %d)\n", getpid());
+			fprintf(stderr, "Web interface: http://%s:%d/\n",
+			       app.settings.websocketHost ? app.settings.websocketHost : "127.0.0.1",
+			       app.settings.websocketPort);
+			
+			if (app.settings.pidFile) {
+				fprintf(stderr, "PID file: %s\n", app.settings.pidFile);
+			}
+		} else {
+			/* Should have been relaunched earlier - this shouldn't happen */
+			fprintf(stderr, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
+			return 1;
+		}
+#else
+		
+		/* Normal daemonization on non-macOS platforms */
+		if (!BarWsDaemonize(&app)) {
+			fprintf(stderr, "Failed to daemonize\n");
+			return 1;
+		}
+
+#endif
+
+	} else {
+	}
+
+
+	/* Initialize player AFTER daemonization */
+	BarPlayerInit (&app.player, &app.settings);
+
 
 	/* save terminal attributes, before disabling echoing */
 	if (!BarShouldSkipCliOutput(&app)) {
 		BarTermInit ();
 	}
+
 
 	PianoReturn_t pret;
 	if ((pret = PianoInit (&app.ph, app.settings.partnerUser,
@@ -618,6 +904,7 @@ int main (int argc, char **argv) {
 				" %s\n", PianoErrorToStr (pret));
 		return 0;
 	}
+	
 
 	if (!BarShouldSkipCliOutput(&app)) {
 		BarUiMsg (&app.settings, MSG_NONE,
@@ -631,12 +918,16 @@ int main (int argc, char **argv) {
 		}
 	}
 
-	curl_global_init (CURL_GLOBAL_DEFAULT);
+
 	app.http = curl_easy_init ();
+	
+
 	assert (app.http != NULL);
+
 
 	/* init fds */
 	FD_ZERO(&app.input.set);
+	
 
 	#ifdef WEBSOCKET_ENABLED
 	if (app.settings.uiMode != BAR_UI_MODE_WEB) {
@@ -674,12 +965,21 @@ int main (int argc, char **argv) {
 	}
 	#endif
 
+
 	/* Initialize WebSocket server if enabled */
 	if (!BarWsInit(&app)) {
 		BarUiMsg (&app.settings, MSG_ERR, "Failed to start WebSocket server\n");
+	} else {
 	}
 
+
+
+	/* Log immediately before call - avoid using local variables that might be on corrupted stack */
+
+	/* Call BarMainLoop directly - crash happens here or in function prologue
+	 * Using &app directly avoids any stack variable issues */
 	BarMainLoop (&app);
+
 
 	if (app.input.fds[1] != -1) {
 		close (app.input.fds[1]);

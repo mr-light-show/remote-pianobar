@@ -159,10 +159,10 @@ make
 
 ```bash
 # Clean previous builds
-make clean WEBSOCKET=1
+make clean
 
-# Build Remote Pianobar with debug symbols
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+# Build Remote Pianobar with debug symbols (WebSocket enabled by default)
+make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 # The binary will be created as ./pianobar
 ```
@@ -171,8 +171,8 @@ make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 ```bash
 # Build with all debug flags enabled
-make clean WEBSOCKET=1
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -DPIANOBAR_DEBUG=0xFFFFFFFF"
+make clean
+make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -DPIANOBAR_DEBUG=0xFFFFFFFF"
 ```
 
 Available debug flags (defined in `src/debug.h`):
@@ -236,8 +236,8 @@ sudo apt install check
 sudo dnf install check-devel
 
 # Build test binary
-make clean WEBSOCKET=1
-make WEBSOCKET=1 test
+make clean
+make test
 
 # Run tests
 ./pianobar_test
@@ -307,7 +307,7 @@ PIANOBAR_RUNNING=1 npm run test:e2e
 ./build.sh --test
 
 # Or manually:
-make WEBSOCKET=1 test && \
+make test && \
   ./pianobar_test && \
   cd webui && \
   npm test -- --run && \
@@ -387,9 +387,9 @@ kill $(cat /tmp/pianobar.pid)
 **Terminal 1:** Run Remote Pianobar
 
 ```bash
-# Build with debug symbols
-make clean WEBSOCKET=1
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+# Build with debug symbols (WebSocket enabled by default)
+make clean
+make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 # Run pianobar
 ./pianobar
@@ -411,7 +411,7 @@ The dev server will automatically reload when you make changes to TypeScript/CSS
 #### C Code Changes
 
 1. Edit files in `src/` or `src/websocket/`
-2. Rebuild: `make WEBSOCKET=1`
+2. Rebuild: `make`
 3. Restart pianobar
 4. Add/update tests in `test/unit/`
 
@@ -426,7 +426,7 @@ The dev server will automatically reload when you make changes to TypeScript/CSS
 
 ```bash
 # Run C tests
-make WEBSOCKET=1 test && ./pianobar_test
+make test && ./pianobar_test
 
 # Run web UI tests
 cd webui
@@ -512,9 +512,9 @@ pianobar/
 ### Debugging C Code with GDB
 
 ```bash
-# Build with debug symbols
-make clean WEBSOCKET=1
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+# Build with debug symbols (WebSocket enabled by default)
+make clean
+make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 # Run with GDB
 gdb ./pianobar
@@ -530,9 +530,9 @@ gdb ./pianobar
 ### Debugging C Code with LLDB (macOS)
 
 ```bash
-# Build with debug symbols
-make clean WEBSOCKET=1
-make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+# Build with debug symbols (WebSocket enabled by default)
+make clean
+make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 
 # Run with LLDB
 lldb ./pianobar

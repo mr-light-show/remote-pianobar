@@ -190,7 +190,7 @@ You need the following software to build pianobar:
 
 - libasound2 (ALSA library for system volume control)
 
-**For WebSocket/Remote API builds (``make WEBSOCKET=1``):**
+**For WebSocket/Remote API builds (enabled by default):**
 
 - libwebsockets ≥ 4.0
 - openssl
@@ -224,9 +224,9 @@ Then type::
 
 	gmake clean && gmake
 
-Or for WebSocket/Remote API support::
+WebSocket/Remote API is included by default. To build without it::
 
-	make WEBSOCKET=1 clean && make WEBSOCKET=1
+	make NOWEBSOCKET=1 clean && make NOWEBSOCKET=1
 
 You can run the client directly from the source directory now::
 
@@ -258,13 +258,13 @@ Building Remote Pianobar
 
 **Audio Library:** Remote Pianobar uses `miniaudio <https://miniaud.io/>`_ for audio playback, which provides automatic device switching and cross-platform support. The library is included in the source tree (``src/miniaudio.h``) and requires no additional dependencies.
 
-To build Remote Pianobar::
+To build Remote Pianobar (WebSocket is enabled by default)::
 
-	make WEBSOCKET=1 clean && make WEBSOCKET=1
+	make clean && make
 
 Or use the included build script for development::
 
-	./build.sh        # Standard build with WebSocket
+	./build.sh        # Standard build
 	./build.sh debug  # Debug build with crash capture
 
 Configuration

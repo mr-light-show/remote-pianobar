@@ -26,7 +26,7 @@ Comprehensive testing documentation for Remote Pianobar.
 # Or run each suite individually:
 
 # 1. C unit tests
-make WEBSOCKET=1 test && ./pianobar_test
+make test && ./pianobar_test
 
 # 2. Web UI unit tests
 cd webui && npm test -- --run
@@ -58,8 +58,8 @@ sudo dnf install check-devel
 
 ```bash
 # Build test binary
-make clean WEBSOCKET=1
-make WEBSOCKET=1 test
+make clean
+make test
 
 # Run all tests
 ./pianobar_test
@@ -337,8 +337,8 @@ jobs:
       
       - name: Build and test
         run: |
-          make clean WEBSOCKET=1
-          make WEBSOCKET=1 test
+          make clean
+          make test
           ./pianobar_test
 
   web-tests:

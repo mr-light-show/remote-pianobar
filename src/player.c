@@ -42,6 +42,7 @@ THE SOFTWARE.
 #include <stdint.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <time.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
@@ -341,6 +342,7 @@ static void onSongEnd(void* pUserData, ma_sound* pSound) {
  */
 
 void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
+
 	av_log_set_level(AV_LOG_FATAL);
 #ifdef HAVE_AV_REGISTER_ALL
 	av_register_all();
@@ -357,10 +359,19 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	pthread_mutex_init(&p->decoderLock, NULL);
 	pthread_cond_init(&p->decoderCond, NULL);
 	
-	/* Initialize miniaudio engine once */
-	ma_engine_config engineConfig = ma_engine_config_init();
-	engineConfig.noDevice = MA_FALSE;  /* We want a device */
+	/* Initialize miniaudio engine once
+	 * On macOS, engine MUST be initialized AFTER fork to avoid CoreAudio thread issues.
+	 * CoreAudio creates background threads that don't survive fork properly. */
 	
+	if (p->engineInitialized) {
+		// Already initialized, just reset and return
+		BarPlayerReset(p);
+		p->settings = settings;
+		return;
+	}
+	
+	ma_engine_config engineConfig = ma_engine_config_init();
+	engineConfig.noDevice = MA_FALSE;
 	ma_result result = ma_engine_init(&engineConfig, &p->engine);
 	if (result != MA_SUCCESS) {
 		fprintf(stderr, "Failed to initialize audio engine: %d\n", result);

@@ -87,8 +87,12 @@ run_with_crash_capture() {
     ulimit -c unlimited
     
     # Run pianobar with debug output - normal CLI interaction
+    # Note: pianobar daemonizes, so parent exits immediately
     PIANOBAR_DEBUG=8 ./pianobar
     local exit_code=$?
+    
+    # Wait a moment for crash reports to be generated (macOS ReportCrash is async)
+    sleep 2
     
     # Check if pianobar crashed (abnormal exit)
     if [ $exit_code -ne 0 ] && [ $exit_code -ne 1 ]; then
@@ -102,7 +106,7 @@ run_with_crash_capture() {
             echo "Crash backtrace saved to: $crash_file"
             echo "Core dump available for analysis"
         else
-            echo "No core dump generated. Consider checking system crash logs:"
+            echo "No core dump generated. Checking system crash logs..."
             echo "  ~/Library/Logs/DiagnosticReports/"
             
             # Try to find recent crash logs
@@ -111,6 +115,21 @@ run_with_crash_capture() {
                 echo "Recent crash log found: $latest_crash"
                 cp "$latest_crash" "$crash_file"
                 echo "Crash info saved to: $crash_file"
+                echo ""
+                echo "=== Key Crash Information ==="
+                echo "Exception Type:"
+                grep -A 2 "Exception Type:" "$latest_crash" | head -3 || echo "Not found"
+                echo ""
+                echo "Crashed Thread Backtrace:"
+                THREAD_NUM=$(grep "Crashed Thread:" "$latest_crash" 2>/dev/null | sed 's/.*Crashed Thread: *\([0-9]*\).*/\1/')
+                if [ -n "$THREAD_NUM" ]; then
+                    awk "/Thread $THREAD_NUM/,/Thread [0-9]+|Binary Images/" "$latest_crash" 2>/dev/null | head -30
+                else
+                    echo "Could not extract thread backtrace"
+                fi
+            else
+                echo "No crash report found yet. Check manually:"
+                echo "  ls -lt ~/Library/Logs/DiagnosticReports/pianobar*.crash"
             fi
         fi
     fi
@@ -123,12 +142,12 @@ if [ "$1" = "debug" ]; then
     
     # Clean previous build
     echo "Cleaning previous build..."
-    make clean WEBSOCKET=1
+    make clean
     echo ""
     
     # Build with debug flags
     echo "Building with debug symbols..."
-    make WEBSOCKET=1 DEBUG=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+    make DEBUG=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
     echo ""
     
     echo "✓ Debug build complete!"
@@ -142,12 +161,12 @@ else
     
     # Clean previous build
     echo "Cleaning previous build..."
-    make clean WEBSOCKET=1
+    make clean
     echo ""
     
     # Build with optimization
     echo "Building optimized version..."
-    make WEBSOCKET=1
+    make
     echo ""
     
     echo "✓ Production build complete!"

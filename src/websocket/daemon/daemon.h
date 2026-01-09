@@ -27,8 +27,11 @@ THE SOFTWARE.
 
 /* Note: main.h must be included before this header to get BarApp_t definition */
 
-/* Daemonize the process */
+/* Daemonize the process (includes fork) */
 bool BarDaemonize(BarApp_t *app);
+
+/* Perform daemonization steps without forking (for relaunched processes) */
+bool BarDaemonizeSteps(BarApp_t *app);
 
 /* Write PID file */
 bool BarDaemonWritePidFile(BarApp_t *app);
@@ -38,6 +41,9 @@ void BarDaemonRemovePidFile(BarApp_t *app);
 
 /* Check if already running */
 bool BarDaemonIsRunning(const char *pidFile);
+
+/* Kill a running pianobar instance by reading PID from file */
+bool BarDaemonKillRunning(const char *pidFile);
 
 #endif /* _DAEMON_H */
 
