@@ -210,6 +210,8 @@ BarUiActCallback(BarUiActCreateStation) {
 	if (reqData.token != NULL) {
 		BarUiMsg (&app->settings, MSG_INFO, "Creating station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_CREATE_STATION, &reqData)) {
+			/* Update display names for newly created station */
+			BarUpdateStationDisplayNames(app);
 			/* Notify WebSocket clients of station list change */
 			BarWsBroadcastStations(app);
 		}
@@ -244,6 +246,8 @@ BarUiActCallback(BarUiActCreateStationFromSong) {
 	if (reqData.type != PIANO_MUSICTYPE_INVALID) {
 		BarUiMsg (&app->settings, MSG_INFO, "Creating station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_CREATE_STATION, &reqData)) {
+			/* Update display names for newly created station */
+			BarUpdateStationDisplayNames(app);
 			/* Notify WebSocket clients of station list change */
 			BarWsBroadcastStations(app);
 		}
@@ -267,6 +271,8 @@ BarUiActCallback(BarUiActAddSharedStation) {
 			BAR_RL_DEFAULT, -1) > 0) {
 		BarUiMsg (&app->settings, MSG_INFO, "Adding shared station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_CREATE_STATION, &reqData)) {
+			/* Update display names for newly created station */
+			BarUpdateStationDisplayNames(app);
 			/* Notify WebSocket clients of station list change */
 			BarWsBroadcastStations(app);
 		}
@@ -609,6 +615,8 @@ BarUiActCallback(BarUiActRenameStation) {
 
 		BarUiMsg (&app->settings, MSG_INFO, "Renaming station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_RENAME_STATION, &reqData)) {
+			/* Update display names after rename */
+			BarUpdateStationDisplayNames(app);
 			/* Notify WebSocket clients of station list change */
 			BarWsBroadcastStations(app);
 		}

@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include "../../ui_dispatch.h"
 #include "../../bar_state.h"
 #include "../../system_volume.h"
+#include "../../station_display.h"
 #include "socketio.h"
 #include "error_messages.h"
 #include "../core/websocket.h"
@@ -842,7 +843,8 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
 	/* Create the station */
 	if (BarWsPianoCall(app, PIANO_REQUEST_CREATE_STATION, &reqData, &pRet, &wRet, &errorMsg)) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Genre station created successfully\n");
-		
+		/* Update display names for newly created station */
+		BarUpdateStationDisplayNames(app);
 		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
 	} else {
@@ -897,7 +899,8 @@ void BarSocketIoHandleAddShared(BarApp_t *app, json_object *data) {
 	/* Create the station */
 	if (BarWsPianoCall(app, PIANO_REQUEST_CREATE_STATION, &reqData, &pRet, &wRet, &errorMsg)) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Shared station added successfully\n");
-		
+		/* Update display names for newly created station */
+		BarUpdateStationDisplayNames(app);
 		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
 	} else {
@@ -1026,6 +1029,8 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	/* Rename station */
 	if (BarWsPianoCall(app, PIANO_REQUEST_RENAME_STATION, &reqData, &pRet, &wRet, &errorMsg)) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station renamed successfully\n");
+		/* Update display names after rename */
+		BarUpdateStationDisplayNames(app);
 		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
 	} else {
@@ -1918,7 +1923,8 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	char *errorMsg = NULL;
 	if (BarWsPianoCall(app, PIANO_REQUEST_CREATE_STATION, &reqData, &pRet, &wRet, &errorMsg)) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station created successfully\n");
-		
+		/* Update display names for newly created station */
+		BarUpdateStationDisplayNames(app);
 		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
 	} else {
