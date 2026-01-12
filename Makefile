@@ -98,7 +98,6 @@ endif
 
 # WebSocket library flags (unless disabled)
 ifneq ($(NOWEBSOCKET),1)
-	CFLAGS+=-DWEBSOCKET_ENABLED
 	LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
 	LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
 	CHECK_CFLAGS:=$(shell $(PKG_CONFIG) --cflags check)
@@ -117,7 +116,7 @@ ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 
 # Add WebSocket flags (unless disabled)
 ifneq ($(NOWEBSOCKET),1)
-	ALL_CFLAGS+=${LIBWEBSOCKETS_CFLAGS}
+	ALL_CFLAGS+=-DWEBSOCKET_ENABLED ${LIBWEBSOCKETS_CFLAGS}
 	ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
 endif
 
