@@ -3,7 +3,9 @@
 /* package name */
 #define PACKAGE "pianobar"
 
-#define VERSION "2024.12.21-dev"
+#ifndef VERSION
+#define VERSION "dev"
+#endif
 
 /* glibc feature test macros, define _before_ including other files */
 #ifndef _DEFAULT_SOURCE

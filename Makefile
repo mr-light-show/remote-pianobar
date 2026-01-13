@@ -1,5 +1,8 @@
 # makefile of pianobar
 
+# Version - override with: make VERSION='"1.0.0"'
+VERSION ?= "$(shell date +%Y-%m-%d-%H:%M)-dev"
+
 PKG_CONFIG?=pkg-config
 PREFIX:=/usr/local
 BINDIR:=${PREFIX}/bin
@@ -106,6 +109,7 @@ endif
 
 # combine all flags
 ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
+			-DVERSION='${VERSION}' \
 			${LIBAV_CFLAGS} ${LIBCURL_CFLAGS} \
 			${LIBGCRYPT_CFLAGS} ${LIBJSONC_CFLAGS} \
 			${SYSVOLUME_CFLAGS}
