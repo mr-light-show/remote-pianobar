@@ -147,7 +147,9 @@ void BarUpdateStationDisplayNames(BarApp_t *app) {
 		station->displayName = NULL;
 		
 		/* Compute new displayName */
-		station->displayName = BarApplyStationNameOverrides(&app->settings, station->name);
+		if (station->name != NULL) {
+			station->displayName = BarApplyStationNameOverrides(&app->settings, station->name);
+		}
 		
 		station = (PianoStation_t *)station->head.next;
 	}
