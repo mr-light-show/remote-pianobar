@@ -689,13 +689,14 @@ static int decode(player_t * const player) {
 				if (av_strerror(ret, error, sizeof(error)) < 0) {
 					strncpy(error, "(unknown)", sizeof(error) - 1);
 				}
-				debugPrint(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
-				
-				pthread_mutex_lock(&player->decoderLock);
-				(void)av_buffersrc_add_frame(player->fabuf, NULL);
-				pthread_cond_broadcast(&player->decoderCond);
-				pthread_mutex_unlock(&player->decoderLock);
-				break;
+			debugPrint(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
+			
+			pthread_mutex_lock(&player->decoderLock);
+			int flush_ret = av_buffersrc_add_frame(player->fabuf, NULL);
+			(void)flush_ret;  /* Ignore return - flushing on error */
+			pthread_cond_broadcast(&player->decoderCond);
+			pthread_mutex_unlock(&player->decoderLock);
+			break;
 			} else {
 				avcodec_send_packet(cctx, pkt);
 			}
@@ -704,14 +705,15 @@ static int decode(player_t * const player) {
 		while (!shouldQuit(player)) {
 			ret = avcodec_receive_frame(cctx, frame);
 			if (ret == AVERROR_EOF) {
-				drainMode = DONE;
-				debugPrint(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
-				
-				pthread_mutex_lock(&player->decoderLock);
-				(void)av_buffersrc_add_frame(player->fabuf, NULL);
-				pthread_cond_broadcast(&player->decoderCond);
-				pthread_mutex_unlock(&player->decoderLock);
-				break;
+			drainMode = DONE;
+			debugPrint(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
+			
+			pthread_mutex_lock(&player->decoderLock);
+			int flush_ret = av_buffersrc_add_frame(player->fabuf, NULL);
+			(void)flush_ret;  /* Ignore return - flushing on drain */
+			pthread_cond_broadcast(&player->decoderCond);
+			pthread_mutex_unlock(&player->decoderLock);
+			break;
 			} else if (ret != 0) {
 				break;
 			}
