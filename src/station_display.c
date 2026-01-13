@@ -23,6 +23,8 @@ THE SOFTWARE.
 
 /* Station display name transformation */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include "station_display.h"
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +63,11 @@ static char* trimWhitespace(char *str) {
  */
 static char* applyRegexReplacement(const char *input, regex_t *regex, const char *replacement) {
 	regmatch_t match;
+	
+	/* Safety checks */
+	if (!input || !regex || !replacement) {
+		return NULL;
+	}
 	
 	if (regexec(regex, input, 1, &match, 0) != 0) {
 		return NULL;  /* No match */
@@ -112,6 +119,11 @@ char* BarApplyStationNameOverrides(const BarSettings_t *settings, const char *or
 	for (size_t i = 0; i < settings->stationDisplayNameOverrideCount; i++) {
 		if (!settings->stationDisplayNameOverrides[i].valid) {
 			continue;  /* Skip invalid regex */
+		}
+		
+		/* Skip if replacement is NULL */
+		if (!settings->stationDisplayNameOverrides[i].replacement) {
+			continue;
 		}
 		
 		char *transformed = applyRegexReplacement(
