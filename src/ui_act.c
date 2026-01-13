@@ -752,6 +752,13 @@ BarUiActCallback(BarUiActSelectQuickMix) {
 BarUiActCallback(BarUiActQuit) {
 	BarUiMsg(&app->settings, MSG_INFO, "Exiting...\n");
 	app->doQuit = true;
+	
+	/* Wake up player thread immediately to exit fast */
+	pthread_mutex_lock(&app->player.lock);
+	app->player.doQuit = true;
+	pthread_cond_broadcast(&app->player.cond);
+	pthread_mutex_unlock(&app->player.lock);
+	
 	BarUiDoSkipSong (&app->player);
 }
 

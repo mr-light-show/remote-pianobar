@@ -857,25 +857,34 @@ void *BarPlayerThread(void *data) {
 				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
 				const int ret = decode(player);
 				
-				/* Wait for playback to complete (end callback will signal) */
-				while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
-					/* Update progress from miniaudio's cursor */
-					float cursor;
-					if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
-						pthread_mutex_lock(&player->lock);
-						player->songPlayed = (unsigned int)cursor;
-						pthread_mutex_unlock(&player->lock);
+			/* Wait for playback to complete (end callback will signal) */
+			while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
+				/* Check quit first and stop audio immediately */
+				if (shouldQuit(player)) {
+					debugPrint(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
+					if (player->soundInitialized) {
+						ma_sound_stop(&player->sound);
 					}
-					
-					/* Check if song ended */
-					if (ma_sound_at_end(&player->sound)) {
-						debugPrint(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
-						changeMode(player, PLAYER_FINISHED);
-						break;
-					}
-					
-					usleep(100000);  /* 100ms update interval */
+					break;
 				}
+				
+				/* Update progress from miniaudio's cursor */
+				float cursor;
+				if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
+					pthread_mutex_lock(&player->lock);
+					player->songPlayed = (unsigned int)cursor;
+					pthread_mutex_unlock(&player->lock);
+				}
+				
+				/* Check if song ended */
+				if (ma_sound_at_end(&player->sound)) {
+					debugPrint(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
+					changeMode(player, PLAYER_FINISHED);
+					break;
+				}
+				
+				usleep(100000);  /* 100ms update interval */
+			}
 				
 				retry = (ret == AVERROR_INVALIDDATA ||
 						 ret == -ECONNRESET) &&
