@@ -34,28 +34,25 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+      
+      - name: Cache and install APT packages (AMD64)
+        if: matrix.arch == 'amd64'
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check
+          version: 1.0
+      
+      - name: Setup Node.js with caching (AMD64)
+        if: matrix.arch == 'amd64'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: webui/package-lock.json
         
-      - name: Install dependencies and build (AMD64)
+      - name: Build pianobar and Web UI (AMD64)
         if: matrix.arch == 'amd64'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libao-dev \
-            libcurl4-openssl-dev \
-            libgcrypt20-dev \
-            libjson-c-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavutil-dev \
-            libswresample-dev \
-            libwebsockets-dev \
-            libasound2-dev \
-            check \
-            nodejs \
-            npm
-          
           # Build pianobar
           make WEBSOCKET=1 clean
           make WEBSOCKET=1
@@ -235,6 +232,17 @@ jobs:
           echo "Updating version to: $VERSION"
           sed -i '' 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
+      
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar
+            /opt/homebrew/Cellar
+          key: ${{ runner.os }}-brew-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-brew-
         
       - name: Install dependencies
         run: |
@@ -248,6 +256,13 @@ jobs:
             libwebsockets \
             node \
             create-dmg
+      
+      - name: Setup Node.js with caching
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: webui/package-lock.json
       
       - name: Build Remote Pianobar
         run: |
