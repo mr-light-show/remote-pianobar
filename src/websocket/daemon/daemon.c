@@ -20,12 +20,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+/* Must be defined before any includes that might use it */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+/* Include unistd.h first to ensure _POSIX_C_SOURCE takes effect */
+#include <unistd.h>
+
 #include "../../main.h"
 #include "daemon.h"
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>

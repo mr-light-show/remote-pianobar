@@ -47,6 +47,7 @@ THE SOFTWARE.
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
 
 /* ANSI color codes */
 #define COLOR_RESET   "\033[0m"
@@ -77,6 +78,11 @@ inline static bool debugEnable () {
 __attribute__((format(printf, 2, 3)))
 inline static void debugPrint(debugKind kind, const char * const format, ...) {
 	if (debug & kind) {
+		/* Get timestamp with millisecond precision */
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
+		struct tm *tm_info = localtime(&ts.tv_sec);
+		
 		/* Only use colors if stderr is a terminal */
 		const bool useColor = isatty(fileno(stderr));
 		const char *color = "";
@@ -92,6 +98,11 @@ inline static void debugPrint(debugKind kind, const char * const format, ...) {
 			}
 			fprintf(stderr, "%s", color);
 		}
+		
+		/* Print timestamp [HH:MM:SS.mmm] */
+		fprintf(stderr, "[%02d:%02d:%02d.%03ld] ",
+		        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
+		        ts.tv_nsec / 1000000);
 		
 		va_list fmtargs;
 		va_start (fmtargs, format);

@@ -389,7 +389,15 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 void BarPlayerDestroy(player_t * const p) {
 	/* Uninit engine */
 	if (p->engineInitialized) {
+		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: Stopping engine before uninit\n");
+		
+		/* Stop engine playback before uninit to avoid audio drain delay on Linux */
+		ma_engine_stop(&p->engine);
+		
+		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: Calling ma_engine_uninit\n");
 		ma_engine_uninit(&p->engine);
+		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: ma_engine_uninit completed\n");
+		
 		p->engineInitialized = false;
 	}
 	
@@ -689,13 +697,14 @@ static int decode(player_t * const player) {
 				if (av_strerror(ret, error, sizeof(error)) < 0) {
 					strncpy(error, "(unknown)", sizeof(error) - 1);
 				}
-				debugPrint(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
-				
-				pthread_mutex_lock(&player->decoderLock);
-				(void)av_buffersrc_add_frame(player->fabuf, NULL);
-				pthread_cond_broadcast(&player->decoderCond);
-				pthread_mutex_unlock(&player->decoderLock);
-				break;
+			debugPrint(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
+			
+			pthread_mutex_lock(&player->decoderLock);
+			int flush_ret = av_buffersrc_add_frame(player->fabuf, NULL);
+			(void)flush_ret;  /* Ignore return - flushing on error */
+			pthread_cond_broadcast(&player->decoderCond);
+			pthread_mutex_unlock(&player->decoderLock);
+			break;
 			} else {
 				avcodec_send_packet(cctx, pkt);
 			}
@@ -704,14 +713,15 @@ static int decode(player_t * const player) {
 		while (!shouldQuit(player)) {
 			ret = avcodec_receive_frame(cctx, frame);
 			if (ret == AVERROR_EOF) {
-				drainMode = DONE;
-				debugPrint(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
-				
-				pthread_mutex_lock(&player->decoderLock);
-				(void)av_buffersrc_add_frame(player->fabuf, NULL);
-				pthread_cond_broadcast(&player->decoderCond);
-				pthread_mutex_unlock(&player->decoderLock);
-				break;
+			drainMode = DONE;
+			debugPrint(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
+			
+			pthread_mutex_lock(&player->decoderLock);
+			int flush_ret = av_buffersrc_add_frame(player->fabuf, NULL);
+			(void)flush_ret;  /* Ignore return - flushing on drain */
+			pthread_cond_broadcast(&player->decoderCond);
+			pthread_mutex_unlock(&player->decoderLock);
+			break;
 			} else if (ret != 0) {
 				break;
 			}
@@ -839,35 +849,63 @@ void *BarPlayerThread(void *data) {
 	bool retry;
 	do {
 		retry = false;
+		
+		/* Check quit before starting/retrying */
+		if (shouldQuit(player)) {
+			debugPrint(DEBUG_AUDIO, "Player: Quit detected before stream open\n");
+			break;
+		}
+		
 		if (openStream(player)) {
 			if (openFilter(player) && setupSound(player)) {
 				changeMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
 				
-				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
-				const int ret = decode(player);
-				
-				/* Wait for playback to complete (end callback will signal) */
-				while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
-					/* Update progress from miniaudio's cursor */
-					float cursor;
-					if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
-						pthread_mutex_lock(&player->lock);
-						player->songPlayed = (unsigned int)cursor;
-						pthread_mutex_unlock(&player->lock);
+			/* Run decoder - feeds frames to filter chain which miniaudio reads from */
+			const int ret = decode(player);
+			
+			/* Check quit after decode completes */
+			if (shouldQuit(player)) {
+				debugPrint(DEBUG_AUDIO, "Player: Quit detected after decode\n");
+				break;
+			}
+			
+			/* Wait for playback to complete (end callback will signal) */
+			while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
+				/* Check quit first and stop audio immediately */
+				if (shouldQuit(player)) {
+					debugPrint(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
+					if (player->soundInitialized) {
+						ma_sound_stop(&player->sound);
 					}
-					
-					/* Check if song ended */
-					if (ma_sound_at_end(&player->sound)) {
-						debugPrint(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
-						changeMode(player, PLAYER_FINISHED);
-						break;
-					}
-					
-					usleep(100000);  /* 100ms update interval */
+					break;
 				}
 				
-				retry = (ret == AVERROR_INVALIDDATA ||
+				/* Update progress from miniaudio's cursor */
+				float cursor;
+				if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
+					pthread_mutex_lock(&player->lock);
+					player->songPlayed = (unsigned int)cursor;
+					pthread_mutex_unlock(&player->lock);
+				}
+				
+				/* Check if song ended */
+				if (ma_sound_at_end(&player->sound)) {
+					debugPrint(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
+					changeMode(player, PLAYER_FINISHED);
+					break;
+				}
+				
+			usleep(100000);  /* 100ms update interval */
+		}
+			
+			/* Check quit after playback before retry logic */
+			if (shouldQuit(player)) {
+				debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+				break;
+			}
+			
+			retry = (ret == AVERROR_INVALIDDATA ||
 						 ret == -ECONNRESET) &&
 						!player->interrupted;
 			} else {
@@ -875,10 +913,16 @@ void *BarPlayerThread(void *data) {
 			}
 		} else {
 			pret = PLAYER_RET_SOFTFAIL;
-		}
-		changeMode(player, PLAYER_WAITING);
-		finish(player);
-	} while (retry);
+	}
+	changeMode(player, PLAYER_WAITING);
+	finish(player);
+	
+	/* Check quit after cleanup before retry */
+	if (shouldQuit(player)) {
+		debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
+		break;
+	}
+} while (retry);
 
 	changeMode(player, PLAYER_FINISHED);
 

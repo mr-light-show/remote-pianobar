@@ -564,7 +564,7 @@ static void* BarWebsocketThread(void *arg) {
 	
 	debugPrint(DEBUG_WEBSOCKET, "WebSocket: Thread started\n");
 	
-	while (ctx->threadRunning) {
+	while (ctx->threadRunning && !app->doQuit) {
 		bool didWork = false;
 		
 		/* Service WebSocket - 50ms timeout

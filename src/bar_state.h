@@ -96,25 +96,25 @@ THE SOFTWARE.
 		} \
 	} while (0)
 
-/* Assert that player.aoplayLock is currently held */
+/* Assert that player.decoderLock is currently held */
 #define ASSERT_AOPLAY_LOCK_HELD(player) \
 	do { \
-		int _trylock_result = pthread_mutex_trylock(&(player)->aoplayLock); \
+		int _trylock_result = pthread_mutex_trylock(&(player)->decoderLock); \
 		if (_trylock_result == 0) { \
-			pthread_mutex_unlock(&(player)->aoplayLock); \
-			assert(0 && "aoplayLock is NOT held (expected to be held)"); \
+			pthread_mutex_unlock(&(player)->decoderLock); \
+			assert(0 && "decoderLock is NOT held (expected to be held)"); \
 		} else { \
-			assert(_trylock_result == EBUSY && "aoplayLock should be held"); \
+			assert(_trylock_result == EBUSY && "decoderLock should be held"); \
 		} \
 	} while (0)
 
-/* Assert that player.aoplayLock is NOT currently held */
+/* Assert that player.decoderLock is NOT currently held */
 #define ASSERT_AOPLAY_LOCK_NOT_HELD(player) \
 	do { \
-		int _trylock_result = pthread_mutex_trylock(&(player)->aoplayLock); \
-		assert(_trylock_result == 0 && "aoplayLock is held (expected to be free)"); \
+		int _trylock_result = pthread_mutex_trylock(&(player)->decoderLock); \
+		assert(_trylock_result == 0 && "decoderLock is held (expected to be free)"); \
 		if (_trylock_result == 0) { \
-			pthread_mutex_unlock(&(player)->aoplayLock); \
+			pthread_mutex_unlock(&(player)->decoderLock); \
 		} \
 	} while (0)
 

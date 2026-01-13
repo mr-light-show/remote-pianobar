@@ -735,7 +735,8 @@ int main (int argc, char **argv) {
 			FILE *fp = fopen(app.settings.pidFile, "r");
 			pid_t old_pid = 0;
 			if (fp) {
-				(void)fscanf(fp, "%d", &old_pid);
+				int scanned = fscanf(fp, "%d", &old_pid);
+				(void)scanned;  /* Ignore scan result - just for message */
 				fclose(fp);
 			}
 			

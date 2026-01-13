@@ -433,11 +433,18 @@ void BarSettingsRead (BarSettings_t *settings) {
 							size_t pattern_len = pattern_end - pattern_start;
 							settings->stationDisplayNameOverrides[idx].pattern = 
 								strndup (pattern_start, pattern_len);
+							if (!settings->stationDisplayNameOverrides[idx].pattern) {
+								continue;  /* Skip this entry on allocation failure */
+							}
 							
 							/* Copy replacement */
 							size_t repl_len = repl_end - repl_start;
 							settings->stationDisplayNameOverrides[idx].replacement = 
 								strndup (repl_start, repl_len);
+							if (!settings->stationDisplayNameOverrides[idx].replacement) {
+								free (settings->stationDisplayNameOverrides[idx].pattern);
+								continue;  /* Skip this entry on allocation failure */
+							}
 							
 							/* Compile regex */
 							int ret = regcomp (
