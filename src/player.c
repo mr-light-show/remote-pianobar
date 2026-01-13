@@ -389,7 +389,15 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 void BarPlayerDestroy(player_t * const p) {
 	/* Uninit engine */
 	if (p->engineInitialized) {
+		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: Stopping engine before uninit\n");
+		
+		/* Stop engine playback before uninit to avoid audio drain delay on Linux */
+		ma_engine_stop(&p->engine);
+		
+		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: Calling ma_engine_uninit\n");
 		ma_engine_uninit(&p->engine);
+		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: ma_engine_uninit completed\n");
+		
 		p->engineInitialized = false;
 	}
 	
