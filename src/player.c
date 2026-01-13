@@ -849,14 +849,27 @@ void *BarPlayerThread(void *data) {
 	bool retry;
 	do {
 		retry = false;
+		
+		/* Check quit before starting/retrying */
+		if (shouldQuit(player)) {
+			debugPrint(DEBUG_AUDIO, "Player: Quit detected before stream open\n");
+			break;
+		}
+		
 		if (openStream(player)) {
 			if (openFilter(player) && setupSound(player)) {
 				changeMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
 				
-				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
-				const int ret = decode(player);
-				
+			/* Run decoder - feeds frames to filter chain which miniaudio reads from */
+			const int ret = decode(player);
+			
+			/* Check quit after decode completes */
+			if (shouldQuit(player)) {
+				debugPrint(DEBUG_AUDIO, "Player: Quit detected after decode\n");
+				break;
+			}
+			
 			/* Wait for playback to complete (end callback will signal) */
 			while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
 				/* Check quit first and stop audio immediately */
@@ -883,10 +896,16 @@ void *BarPlayerThread(void *data) {
 					break;
 				}
 				
-				usleep(100000);  /* 100ms update interval */
+			usleep(100000);  /* 100ms update interval */
+		}
+			
+			/* Check quit after playback before retry logic */
+			if (shouldQuit(player)) {
+				debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+				break;
 			}
-				
-				retry = (ret == AVERROR_INVALIDDATA ||
+			
+			retry = (ret == AVERROR_INVALIDDATA ||
 						 ret == -ECONNRESET) &&
 						!player->interrupted;
 			} else {
@@ -894,10 +913,16 @@ void *BarPlayerThread(void *data) {
 			}
 		} else {
 			pret = PLAYER_RET_SOFTFAIL;
-		}
-		changeMode(player, PLAYER_WAITING);
-		finish(player);
-	} while (retry);
+	}
+	changeMode(player, PLAYER_WAITING);
+	finish(player);
+	
+	/* Check quit after cleanup before retry */
+	if (shouldQuit(player)) {
+		debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
+		break;
+	}
+} while (retry);
 
 	changeMode(player, PLAYER_FINISHED);
 
