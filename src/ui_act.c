@@ -74,6 +74,11 @@ static inline void BarUiDoSkipSong (player_t * const player) {
 	pthread_cond_broadcast (&player->cond);
 	pthread_mutex_unlock (&player->lock);
 	
+	/* Immediately stop audio to clear buffered frames */
+	if (player->soundInitialized) {
+		ma_sound_stop(&player->sound);
+	}
+	
 	ASSERT_PLAYER_LOCK_NOT_HELD(player);  /* Verify lock is free before acquiring decoderLock */
 	pthread_mutex_lock (&player->decoderLock);
 	pthread_cond_broadcast (&player->decoderCond);
