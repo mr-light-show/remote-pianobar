@@ -59,4 +59,5 @@ bool BarWsPianoCall (BarApp_t * const, const PianoRequestType_t,
 void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song);
 void BarUiCustomFormat (char *dest, size_t destSize, const char *format,
 		const char *formatChars, const char **formatVals);
+void BarPrintStartupInfo(BarApp_t *app, pid_t pid, bool is_daemon, FILE *stream);
 

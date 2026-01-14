@@ -38,6 +38,37 @@ get_webui_path() {
     return 1
 }
 
+# Get log_file path from pianobar config
+get_log_file() {
+    local config_file=""
+    
+    # Check for config in standard locations
+    if [ -f "$HOME/.config/pianobar/config" ]; then
+        config_file="$HOME/.config/pianobar/config"
+    elif [ -f "$HOME/.pianobar/config" ]; then
+        config_file="$HOME/.pianobar/config"
+    fi
+    
+    if [ -z "$config_file" ]; then
+        return 1
+    fi
+    
+    # Extract log_file, strip whitespace and comments
+    local log_file=$(grep -E "^[[:space:]]*log_file[[:space:]]*=" "$config_file" | \
+                     sed 's/^[[:space:]]*log_file[[:space:]]*=[[:space:]]*//;s/[[:space:]]*#.*$//' | \
+                     tr -d '\r')
+    
+    if [ -n "$log_file" ]; then
+        # Expand ~ to home directory
+        log_file="${log_file/#\~/$HOME}"
+        echo "$log_file"
+        return 0
+    fi
+    
+    return 1
+}
+
+
 # Copy WebUI to configured location
 deploy_webui() {
     echo "=== Deploying Web UI ==="
@@ -204,6 +235,22 @@ echo ""
 echo "Web interface will be available at:"
 echo "  http://localhost:8080"
 echo ""
+
+log_file=$(get_log_file)
+if [ $? -eq 0 ] && [ -f "$log_file" ]; then
+    echo "Rotating log file: $log_file"
+    
+    # Remove oldest log if it exists
+    [ -f "${log_file}.3" ] && rm "${log_file}.3"
+    
+    # Rotate existing logs
+    [ -f "${log_file}.2" ] && mv "${log_file}.2" "${log_file}.3"
+    [ -f "${log_file}.1" ] && mv "${log_file}.1" "${log_file}.2"
+    [ -f "${log_file}"   ] && mv "${log_file}"   "${log_file}.1"
+        
+    echo "Log rotated successfully"
+fi
+
 
 # If debug mode, run with crash capture
 if [ "$1" = "debug" ]; then

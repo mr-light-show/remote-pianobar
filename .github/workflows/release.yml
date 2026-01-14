@@ -39,8 +39,8 @@ jobs:
         if: matrix.arch == 'amd64'
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check
-          version: 1.0
+          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check libblas-dev liblapack-dev
+          version: 2.0
       
       - name: Setup Node.js with caching (AMD64)
         if: matrix.arch == 'amd64'

@@ -3,6 +3,9 @@ export class SocketService {
   private listeners: Map<string, Function[]> = new Map();
   private connectionListeners: Function[] = [];
   public isConnected = false;
+  private reconnectAttempt = 0;
+  private reconnectTimer: number | null = null;
+  private readonly maxReconnectDelay = 60000; // 60 seconds max
   
   constructor() {
     this.connect();
@@ -17,6 +20,7 @@ export class SocketService {
     this.ws.onopen = () => {
       console.log('WebSocket connected');
       this.isConnected = true;
+      this.reconnectAttempt = 0; // Reset reconnect counter on successful connection
       this.notifyConnectionChange(true);
       
       // Request full state including stations on connect
@@ -55,11 +59,39 @@ export class SocketService {
       console.log('WebSocket disconnected');
       this.isConnected = false;
       this.notifyConnectionChange(false);
+      
+      // Automatically schedule reconnection with exponential backoff
+      this.scheduleReconnect();
     };
   }
   
   private notifyConnectionChange(connected: boolean) {
     this.connectionListeners.forEach(cb => cb(connected));
+  }
+  
+  private scheduleReconnect() {
+    // Clear any existing reconnect timer
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+    }
+    
+    // Calculate exponential backoff delay: 1s, 2s, 4s, 8s, 16s, 32s, 60s (capped)
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), this.maxReconnectDelay);
+    
+    console.log(`Scheduling reconnect attempt ${this.reconnectAttempt + 1} in ${delay}ms`);
+    
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectAttempt++;
+      this.reconnect();
+    }, delay);
+  }
+  
+  private stopReconnecting() {
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
   }
   
   onConnectionChange(callback: (connected: boolean) => void) {
@@ -97,6 +129,7 @@ export class SocketService {
   }
   
   disconnect() {
+    this.stopReconnecting(); // Cancel auto-reconnect when manually disconnecting
     this.ws.close();
   }
 }
