@@ -1117,3 +1117,34 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 	}
 }
 
+
+/* Print startup info (welcome, web UI files, interface URL, PID file) */
+void BarPrintStartupInfo(BarApp_t *app, pid_t pid, bool is_daemon, FILE *stream) {
+	/* Print daemon/process start message if daemon mode */
+	if (is_daemon) {
+		fprintf(stream, "Pianobar daemon started (PID: %d)\n", (int)pid);
+	}
+	
+	/* Always print welcome message */
+	fprintf(stream, "Welcome to %s (%s)!\n", PACKAGE, VERSION);
+	
+#ifdef WEBSOCKET_ENABLED
+	/* Only print web-related info in web or both mode */
+	if (app->settings.uiMode == BAR_UI_MODE_WEB || app->settings.uiMode == BAR_UI_MODE_BOTH) {
+		if (app->settings.webuiPath) {
+			fprintf(stream, "Web UI files: %s\n", app->settings.webuiPath);
+		} else {
+			fprintf(stream, "Web UI files: (using built-in)\n");
+		}
+		
+		fprintf(stream, "Web interface: http://%s:%d/\n",
+		       app->settings.websocketHost ? app->settings.websocketHost : "127.0.0.1",
+		       app->settings.websocketPort);
+	}
+#endif
+	
+	/* Print PID file if daemon and pidFile configured */
+	if (is_daemon && app->settings.pidFile) {
+		fprintf(stream, "PID file: %s\n", app->settings.pidFile);
+	}
+}

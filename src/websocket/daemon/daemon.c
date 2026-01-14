@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include "../../main.h"
 #include "daemon.h"
+#include "../../ui.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,15 +121,7 @@ bool BarDaemonize(BarApp_t *app) {
 	
 	/* Exit parent process */
 	if (pid > 0) {
-		/* Print info before exiting parent */
-		printf("Pianobar daemon started (PID: %d)\n", pid);
-		printf("Web interface: http://%s:%d/\n",
-		       app->settings.websocketHost ? app->settings.websocketHost : "127.0.0.1",
-		       app->settings.websocketPort);
-		
-		if (app->settings.pidFile) {
-			printf("PID file: %s\n", app->settings.pidFile);
-		}
+		BarPrintStartupInfo(app, pid, true, stdout);
 		
 		exit(EXIT_SUCCESS);
 	}

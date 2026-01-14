@@ -773,14 +773,10 @@ int main (int argc, char **argv) {
 		char ipv4_addr[INET_ADDRSTRLEN];
 		BarMainGetIPv4Address(ipv4_addr, sizeof(ipv4_addr));
 		
-		/* Output webui_path */
-		if (app.settings.webuiPath) {
-			fprintf(stderr, "Web UI files: %s\n", app.settings.webuiPath);
-		} else {
-			fprintf(stderr, "Web UI files: (using built-in)\n");
-		}
+		/* Print startup info to terminal */
+		BarPrintStartupInfo(&app, getpid(), false, stderr);
 		
-		/* Output URL with IPv4 address */
+		/* Also print the IPv4 URL variant (more useful than 127.0.0.1) */
 		if (app.settings.websocketPort > 0) {
 			fprintf(stderr, "Web interface: http://%s:%d/\n", ipv4_addr, app.settings.websocketPort);
 		}
@@ -860,14 +856,7 @@ int main (int argc, char **argv) {
 			
 			/* Print info after daemonization (stdout/stderr are redirected, but
 			 * messages may still appear if logFile is configured) */
-			fprintf(stderr, "Pianobar daemon started (PID: %d)\n", getpid());
-			fprintf(stderr, "Web interface: http://%s:%d/\n",
-			       app.settings.websocketHost ? app.settings.websocketHost : "127.0.0.1",
-			       app.settings.websocketPort);
-			
-			if (app.settings.pidFile) {
-				fprintf(stderr, "PID file: %s\n", app.settings.pidFile);
-			}
+			BarPrintStartupInfo(&app, getpid(), true, stderr);
 		} else {
 			/* Should have been relaunched earlier - this shouldn't happen */
 			fprintf(stderr, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
@@ -906,10 +895,9 @@ int main (int argc, char **argv) {
 		return 0;
 	}
 	
+	BarPrintStartupInfo(&app, getpid(), false, stdout);
 
 	if (!BarShouldSkipCliOutput(&app)) {
-		BarUiMsg (&app.settings, MSG_NONE,
-				"Welcome to " PACKAGE " (" VERSION ")! ");
 		if (app.settings.keys[BAR_KS_HELP] == BAR_KS_DISABLED) {
 			BarUiMsg (&app.settings, MSG_NONE, "\n");
 		} else {
