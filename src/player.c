@@ -991,7 +991,15 @@ if (shouldQuit(player)) {
 }
 } while (retry);
 
-	changeMode(player, PLAYER_FINISHED);
+// #region agent log
+debugPrint(DEBUG_AUDIO, "AGENT_LOG: AFTER do-while loop, about to set PLAYER_FINISHED\n");
+// #endregion
 
-	return (void *)pret;
+changeMode(player, PLAYER_FINISHED);
+
+// #region agent log
+debugPrint(DEBUG_AUDIO, "AGENT_LOG: Thread exiting normally\n");
+// #endregion
+
+return (void *)pret;
 }
