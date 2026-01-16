@@ -412,35 +412,18 @@ void BarPlayerDestroy(player_t * const p) {
 }
 
 void BarPlayerReset(player_t * const p) {
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: BarPlayerReset ENTRY soundInit=%d\n", p->soundInitialized);
-	// #endregion
-	
 	/* Clean up sound from previous song */
 	if (p->soundInitialized) {
 		/* Stop the sound (not the engine!) before uninit to prevent audio drain delay.
 		 * ma_sound_stop() stops this specific sound instance.
 		 * ma_engine_stop() would stop ALL sounds and the engine itself (wrong!).
 		 * The engine must keep running for the next song. */
-		// #region agent log
-		debugPrint(DEBUG_AUDIO, "AGENT_LOG: Calling ma_sound_stop [H1,H2]\n");
-		// #endregion
 		ma_sound_stop(&p->sound);
-		// #region agent log
-		debugPrint(DEBUG_AUDIO, "AGENT_LOG: ma_sound_stop completed [H1]\n");
-		debugPrint(DEBUG_AUDIO, "AGENT_LOG: Calling ma_sound_uninit [H2]\n");
-		// #endregion
 		
 		ma_sound_uninit(&p->sound);
-		// #region agent log
-		debugPrint(DEBUG_AUDIO, "AGENT_LOG: ma_sound_uninit completed [H2]\n");
-		// #endregion
 		debugPrint(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
 	}
 	p->soundInitialized = false;
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: BarPlayerReset EXIT\n");
-	// #endregion
 	
 	/* Free any buffered frame in the data source before zeroing */
 	if (p->dataSource.bufferedFrame != NULL) {
@@ -827,10 +810,6 @@ static bool setupSound(player_t * const player) {
 }
 
 static void cleanupSound(player_t * const player) {
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: cleanupSound ENTRY soundInit=%d [H6,H7]\n", player->soundInitialized);
-	// #endregion
-	
 	if (player->soundInitialized) {
 		ma_sound_stop(&player->sound);
 		
@@ -838,23 +817,13 @@ static void cleanupSound(player_t * const player) {
 		 * Without this, ma_sound_uninit() can hang for 15+ seconds on Ubuntu.
 		 * Same fix as in BarPlayerDestroy() (commit 1d2352d). */
 		if (player->engineInitialized) {
-			// #region agent log
-			debugPrint(DEBUG_AUDIO, "AGENT_LOG: cleanupSound calling ma_engine_stop [H6]\n");
-			// #endregion
 			ma_engine_stop(&player->engine);
-			// #region agent log
-			debugPrint(DEBUG_AUDIO, "AGENT_LOG: cleanupSound ma_engine_stop completed [H6]\n");
-			// #endregion
 		}
 		
 		ma_sound_uninit(&player->sound);
 		player->soundInitialized = false;
 		debugPrint(DEBUG_AUDIO, "Sound cleaned up\n");
 	}
-	
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: cleanupSound EXIT [H6,H7]\n");
-	// #endregion
 	
 	ffmpeg_data_source_uninit(&player->dataSource);
 }
@@ -919,15 +888,9 @@ void *BarPlayerThread(void *data) {
 		while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
 			/* Check quit first and stop audio immediately */
 			if (shouldQuit(player)) {
-				// #region agent log
-				debugPrint(DEBUG_AUDIO, "AGENT_LOG: Player thread detected quit [H4]\n");
-				// #endregion
 				debugPrint(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
 				if (player->soundInitialized) {
 					ma_sound_stop(&player->sound);
-					// #region agent log
-					debugPrint(DEBUG_AUDIO, "AGENT_LOG: Player thread stopped sound [H5]\n");
-					// #endregion
 				}
 				break;
 			}
@@ -952,16 +915,9 @@ void *BarPlayerThread(void *data) {
 			
 		/* Check quit after playback before retry logic */
 		if (shouldQuit(player)) {
-			// #region agent log
-			debugPrint(DEBUG_AUDIO, "AGENT_LOG: Quit after playback, about to break [H6]\n");
-			// #endregion
 			debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
 			break;
 		}
-		
-		// #region agent log
-		debugPrint(DEBUG_AUDIO, "AGENT_LOG: Checking retry logic [H6]\n");
-		// #endregion
 		
 		retry = (ret == AVERROR_INVALIDDATA ||
 					 ret == -ECONNRESET) &&
@@ -972,17 +928,8 @@ void *BarPlayerThread(void *data) {
 	} else {
 		pret = PLAYER_RET_SOFTFAIL;
 }
-// #region agent log
-debugPrint(DEBUG_AUDIO, "AGENT_LOG: After nested blocks, before changeMode [H6]\n");
-// #endregion
 changeMode(player, PLAYER_WAITING);
-// #region agent log
-debugPrint(DEBUG_AUDIO, "AGENT_LOG: Calling finish() [H6,H7]\n");
-// #endregion
 finish(player);
-// #region agent log
-debugPrint(DEBUG_AUDIO, "AGENT_LOG: finish() completed [H6,H7]\n");
-// #endregion
 
 /* Check quit after cleanup before retry */
 if (shouldQuit(player)) {
@@ -991,15 +938,7 @@ if (shouldQuit(player)) {
 }
 } while (retry);
 
-// #region agent log
-debugPrint(DEBUG_AUDIO, "AGENT_LOG: AFTER do-while loop, about to set PLAYER_FINISHED\n");
-// #endregion
-
 changeMode(player, PLAYER_FINISHED);
-
-// #region agent log
-debugPrint(DEBUG_AUDIO, "AGENT_LOG: Thread exiting normally\n");
-// #endregion
 
 return (void *)pret;
 }

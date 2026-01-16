@@ -62,10 +62,6 @@ THE SOFTWARE.
 static inline void BarUiDoSkipSong (player_t * const player) {
 	assert (player != NULL);
 
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: BarUiDoSkipSong START [H2,H4]\n");
-	// #endregion
-	
 	/* CRITICAL RULE: player.lock and player.aoplayLock must NEVER be held simultaneously.
 	 * This function acquires them sequentially to signal both threads.
 	 * See src/THREAD_SAFETY.md for detailed explanation of two-lock player design. */
@@ -78,26 +74,15 @@ static inline void BarUiDoSkipSong (player_t * const player) {
 	pthread_cond_broadcast (&player->cond);
 	pthread_mutex_unlock (&player->lock);
 	
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: Set player.doQuit=true, signaled [H4]\n");
-	// #endregion
-	
 	/* Immediately stop audio to clear buffered frames */
 	if (player->soundInitialized) {
 		ma_sound_stop(&player->sound);
-		// #region agent log
-		debugPrint(DEBUG_AUDIO, "AGENT_LOG: Called ma_sound_stop in skip [H5]\n");
-		// #endregion
 	}
 	
 	ASSERT_PLAYER_LOCK_NOT_HELD(player);  /* Verify lock is free before acquiring decoderLock */
 	pthread_mutex_lock (&player->decoderLock);
 	pthread_cond_broadcast (&player->decoderCond);
 	pthread_mutex_unlock (&player->decoderLock);
-	
-	// #region agent log
-	debugPrint(DEBUG_AUDIO, "AGENT_LOG: BarUiDoSkipSong END\n");
-	// #endregion
 }
 
 /*	transform station if necessary to allow changes like rename, rate, ...
