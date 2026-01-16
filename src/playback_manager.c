@@ -22,6 +22,7 @@ THE SOFTWARE.
 */
 
 /* Enable POSIX functions (pthread_kill) and BSD/GNU extensions (usleep) */
+#define _GNU_SOURCE  /* For pthread_timedjoin_np */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
@@ -58,32 +59,35 @@ static volatile bool g_running = false;
 static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeout_secs) {
 	// #region agent log
 	debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout START timeout=%ds [H3]\n", timeout_secs);
+	debugPrint(DEBUG_UI, "AGENT_LOG: Calling pthread_join directly (non-blocking check removed) [FIX]\n");
 	// #endregion
 	
-	for (int i = 0; i < timeout_secs * 10; i++) {
-		/* Check if thread is still alive using pthread_kill with signal 0 */
-		int ret = pthread_kill(thread, 0);
-		if (ret == ESRCH) {
-			/* Thread no longer exists - join to clean up */
-			pthread_join(thread, retval);
-			// #region agent log
-			debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout SUCCESS after %dms [H3]\n", i * 100);
-			// #endregion
-			return true;
-		} else if (ret != 0) {
-			/* Error checking thread status */
-			debugPrint(DEBUG_UI, "PlaybackMgr: pthread_kill error %d\n", ret);
-			// #region agent log
-			debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout ERROR ret=%d [H3]\n", ret);
-			// #endregion
-			return false;
-		}
-		usleep(100000);  /* 100ms */
+	/* On Linux, pthread_kill() doesn't reliably detect exited threads in zombie state.
+	 * The thread may have exited but pthread_kill returns 0 until pthread_join is called.
+	 * Instead, we use a simple timeout with pthread_join which returns immediately
+	 * if the thread has already exited. */
+	
+	struct timespec deadline;
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += timeout_secs;
+	
+	int ret = pthread_timedjoin_np(thread, retval, &deadline);
+	if (ret == 0) {
+		// #region agent log
+		debugPrint(DEBUG_UI, "AGENT_LOG: pthread_timedjoin_np SUCCESS [H3]\n");
+		// #endregion
+		return true;
+	} else if (ret == ETIMEDOUT) {
+		// #region agent log
+		debugPrint(DEBUG_UI, "AGENT_LOG: pthread_timedjoin_np TIMEOUT after %ds [H3]\n", timeout_secs);
+		// #endregion
+		return false;
+	} else {
+		// #region agent log
+		debugPrint(DEBUG_UI, "AGENT_LOG: pthread_timedjoin_np ERROR ret=%d [H3]\n", ret);
+		// #endregion
+		return false;
 	}
-	// #region agent log
-	debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout TIMEOUT after %ds [H3]\n", timeout_secs);
-	// #endregion
-	return false;  /* Timeout */
 }
 
 /*	Player cleanup after song finishes
