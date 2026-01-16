@@ -59,13 +59,15 @@ static volatile bool g_running = false;
 static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeout_secs) {
 	// #region agent log
 	debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout START timeout=%ds [H3]\n", timeout_secs);
-	debugPrint(DEBUG_UI, "AGENT_LOG: Calling pthread_join directly (non-blocking check removed) [FIX]\n");
 	// #endregion
 	
-	/* On Linux, pthread_kill() doesn't reliably detect exited threads in zombie state.
-	 * The thread may have exited but pthread_kill returns 0 until pthread_join is called.
-	 * Instead, we use a simple timeout with pthread_join which returns immediately
-	 * if the thread has already exited. */
+#ifdef __linux__
+	/* Linux: Use pthread_timedjoin_np for proper timeout support.
+	 * pthread_kill() doesn't reliably detect exited threads in zombie state on Linux.
+	 * The thread may have exited but pthread_kill returns 0 until pthread_join is called. */
+	// #region agent log
+	debugPrint(DEBUG_UI, "AGENT_LOG: Using pthread_timedjoin_np (Linux) [FIX]\n");
+	// #endregion
 	
 	struct timespec deadline;
 	clock_gettime(CLOCK_REALTIME, &deadline);
@@ -88,6 +90,38 @@ static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeou
 		// #endregion
 		return false;
 	}
+#else
+	/* macOS/BSD: Use pthread_kill polling.
+	 * pthread_kill() works reliably on macOS to detect exited threads. */
+	// #region agent log
+	debugPrint(DEBUG_UI, "AGENT_LOG: Using pthread_kill polling (macOS) [H3]\n");
+	// #endregion
+	
+	for (int i = 0; i < timeout_secs * 10; i++) {
+		/* Check if thread is still alive using pthread_kill with signal 0 */
+		int ret = pthread_kill(thread, 0);
+		if (ret == ESRCH) {
+			/* Thread no longer exists - join to clean up */
+			pthread_join(thread, retval);
+			// #region agent log
+			debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout SUCCESS after %dms [H3]\n", i * 100);
+			// #endregion
+			return true;
+		} else if (ret != 0) {
+			/* Error checking thread status */
+			debugPrint(DEBUG_UI, "PlaybackMgr: pthread_kill error %d\n", ret);
+			// #region agent log
+			debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout ERROR ret=%d [H3]\n", ret);
+			// #endregion
+			return false;
+		}
+		usleep(100000);  /* 100ms */
+	}
+	// #region agent log
+	debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout TIMEOUT after %ds [H3]\n", timeout_secs);
+	// #endregion
+	return false;  /* Timeout */
+#endif
 }
 
 /*	Player cleanup after song finishes
