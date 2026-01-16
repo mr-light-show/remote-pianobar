@@ -806,6 +806,14 @@ static bool setupSound(player_t * const player) {
 static void cleanupSound(player_t * const player) {
 	if (player->soundInitialized) {
 		ma_sound_stop(&player->sound);
+		
+		/* Stop engine before uninit to prevent audio drain delay on Linux (ALSA/PulseAudio).
+		 * Without this, ma_sound_uninit() can hang for 15+ seconds on Ubuntu.
+		 * Same fix as in BarPlayerDestroy() (commit 1d2352d). */
+		if (player->engineInitialized) {
+			ma_engine_stop(&player->engine);
+		}
+		
 		ma_sound_uninit(&player->sound);
 		player->soundInitialized = false;
 		debugPrint(DEBUG_AUDIO, "Sound cleaned up\n");
