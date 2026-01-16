@@ -56,20 +56,33 @@ static volatile bool g_running = false;
  *	Returns true if thread joined successfully, false if timeout expired
  */
 static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeout_secs) {
+	// #region agent log
+	debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout START timeout=%ds [H3]\n", timeout_secs);
+	// #endregion
+	
 	for (int i = 0; i < timeout_secs * 10; i++) {
 		/* Check if thread is still alive using pthread_kill with signal 0 */
 		int ret = pthread_kill(thread, 0);
 		if (ret == ESRCH) {
 			/* Thread no longer exists - join to clean up */
 			pthread_join(thread, retval);
+			// #region agent log
+			debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout SUCCESS after %dms [H3]\n", i * 100);
+			// #endregion
 			return true;
 		} else if (ret != 0) {
 			/* Error checking thread status */
 			debugPrint(DEBUG_UI, "PlaybackMgr: pthread_kill error %d\n", ret);
+			// #region agent log
+			debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout ERROR ret=%d [H3]\n", ret);
+			// #endregion
 			return false;
 		}
 		usleep(100000);  /* 100ms */
 	}
+	// #region agent log
+	debugPrint(DEBUG_UI, "AGENT_LOG: join_thread_with_timeout TIMEOUT after %ds [H3]\n", timeout_secs);
+	// #endregion
 	return false;  /* Timeout */
 }
 
