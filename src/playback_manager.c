@@ -178,19 +178,22 @@ static void *BarPlaybackManagerThread(void *data) {
 			}
 		}
 		
-		/* Song finished playing - cleanup */
-		if (mode == PLAYER_FINISHED) {
-			debugPrint(DEBUG_UI, "PlaybackMgr: Song finished\n");
-			
-			/* Check for interrupt */
-			pthread_mutex_lock(&app->player.lock);
-			if (app->player.interrupted != 0) {
-				app->doQuit = 1;
-			}
-			pthread_mutex_unlock(&app->player.lock);
-			
-			PlaybackManagerPlayerCleanup(app, &playerThread);
+	/* Song finished playing - cleanup */
+	if (mode == PLAYER_FINISHED) {
+		debugPrint(DEBUG_UI, "PlaybackMgr: Song finished\n");
+		
+		/* Only quit if app->doQuit was already set (explicit quit command or SIGINT).
+		 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
+		 * This prevents disconnect (power button) from terminating the process. */
+		pthread_mutex_lock(&app->player.lock);
+		if (app->player.interrupted != 0 && app->doQuit) {
+			/* User pressed Ctrl+C during playback - already quitting */
+			debugPrint(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
 		}
+		pthread_mutex_unlock(&app->player.lock);
+		
+		PlaybackManagerPlayerCleanup(app, &playerThread);
+	}
 		
 		/* Player idle - check for next song */
 		if (mode == PLAYER_DEAD) {
