@@ -950,29 +950,45 @@ void *BarPlayerThread(void *data) {
 			usleep(100000);  /* 100ms update interval */
 		}
 			
-			/* Check quit after playback before retry logic */
-			if (shouldQuit(player)) {
-				debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
-				break;
-			}
-			
-			retry = (ret == AVERROR_INVALIDDATA ||
-						 ret == -ECONNRESET) &&
-						!player->interrupted;
-			} else {
-				pret = PLAYER_RET_HARDFAIL;
-			}
+		/* Check quit after playback before retry logic */
+		if (shouldQuit(player)) {
+			// #region agent log
+			debugPrint(DEBUG_AUDIO, "AGENT_LOG: Quit after playback, about to break [H6]\n");
+			// #endregion
+			debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+			break;
+		}
+		
+		// #region agent log
+		debugPrint(DEBUG_AUDIO, "AGENT_LOG: Checking retry logic [H6]\n");
+		// #endregion
+		
+		retry = (ret == AVERROR_INVALIDDATA ||
+					 ret == -ECONNRESET) &&
+					!player->interrupted;
 		} else {
-			pret = PLAYER_RET_SOFTFAIL;
-	}
-	changeMode(player, PLAYER_WAITING);
-	finish(player);
-	
-	/* Check quit after cleanup before retry */
-	if (shouldQuit(player)) {
-		debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
-		break;
-	}
+			pret = PLAYER_RET_HARDFAIL;
+		}
+	} else {
+		pret = PLAYER_RET_SOFTFAIL;
+}
+// #region agent log
+debugPrint(DEBUG_AUDIO, "AGENT_LOG: After nested blocks, before changeMode [H6]\n");
+// #endregion
+changeMode(player, PLAYER_WAITING);
+// #region agent log
+debugPrint(DEBUG_AUDIO, "AGENT_LOG: Calling finish() [H6,H7]\n");
+// #endregion
+finish(player);
+// #region agent log
+debugPrint(DEBUG_AUDIO, "AGENT_LOG: finish() completed [H6,H7]\n");
+// #endregion
+
+/* Check quit after cleanup before retry */
+if (shouldQuit(player)) {
+	debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
+	break;
+}
 } while (retry);
 
 	changeMode(player, PLAYER_FINISHED);
