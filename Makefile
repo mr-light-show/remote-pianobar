@@ -80,6 +80,9 @@ LIBGCRYPT_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libgcrypt)
 LIBJSONC_CFLAGS:=$(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null || $(PKG_CONFIG) --cflags json)
 LIBJSONC_LDFLAGS:=$(shell $(PKG_CONFIG) --libs json-c 2>/dev/null || $(PKG_CONFIG) --libs json)
 
+# BLAS/LAPACK for libsphinxbase transitive dependencies
+BLAS_LAPACK_LDFLAGS:=-lblas -llapack
+
 # miniaudio is header-only, no linking required
 
 # System volume control - platform-specific
@@ -114,9 +117,9 @@ ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
 			${LIBGCRYPT_CFLAGS} ${LIBJSONC_CFLAGS} \
 			${SYSVOLUME_CFLAGS}
 ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
-			${LIBAV_LDFLAGS} ${LIBCURL_LDFLAGS} \
-			${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
-			${SYSVOLUME_LDFLAGS}
+		${LIBAV_LDFLAGS} ${LIBCURL_LDFLAGS} \
+		${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
+		${SYSVOLUME_LDFLAGS} ${BLAS_LAPACK_LDFLAGS}
 
 # Add WebSocket flags (unless disabled)
 ifneq ($(NOWEBSOCKET),1)
