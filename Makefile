@@ -81,7 +81,9 @@ LIBJSONC_CFLAGS:=$(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null || $(PKG_CONF
 LIBJSONC_LDFLAGS:=$(shell $(PKG_CONFIG) --libs json-c 2>/dev/null || $(PKG_CONFIG) --libs json)
 
 # BLAS/LAPACK for libsphinxbase transitive dependencies
-BLAS_LAPACK_LDFLAGS:=-lblas -llapack
+# Try pkg-config first, fall back to direct linking
+# On some systems (Ubuntu 24.04+), need to use :libblas.so.3 syntax or pkg-config
+BLAS_LAPACK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs blas lapack 2>/dev/null || echo "-l:libblas.so.3 -l:liblapack.so.3")
 
 # miniaudio is header-only, no linking required
 
