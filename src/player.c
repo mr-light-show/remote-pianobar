@@ -414,14 +414,11 @@ void BarPlayerDestroy(player_t * const p) {
 void BarPlayerReset(player_t * const p) {
 	/* Clean up sound from previous song */
 	if (p->soundInitialized) {
+		/* Stop the sound (not the engine!) before uninit to prevent audio drain delay.
+		 * ma_sound_stop() stops this specific sound instance.
+		 * ma_engine_stop() would stop ALL sounds and the engine itself (wrong!).
+		 * The engine must keep running for the next song. */
 		ma_sound_stop(&p->sound);
-		
-		/* Stop engine before uninit to prevent audio drain delay on Linux (ALSA/PulseAudio).
-		 * Without this, ma_sound_uninit() can hang for 15+ seconds on Ubuntu.
-		 * Same fix as in cleanupSound() and BarPlayerDestroy(). */
-		if (p->engineInitialized) {
-			ma_engine_stop(&p->engine);
-		}
 		
 		ma_sound_uninit(&p->sound);
 		debugPrint(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
