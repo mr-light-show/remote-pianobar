@@ -80,11 +80,6 @@ LIBGCRYPT_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libgcrypt)
 LIBJSONC_CFLAGS:=$(shell $(PKG_CONFIG) --cflags json-c 2>/dev/null || $(PKG_CONFIG) --cflags json)
 LIBJSONC_LDFLAGS:=$(shell $(PKG_CONFIG) --libs json-c 2>/dev/null || $(PKG_CONFIG) --libs json)
 
-# BLAS/LAPACK for libsphinxbase transitive dependencies
-# Try pkg-config first, fall back to direct linking
-# On some systems (Ubuntu 24.04+), need to use :libblas.so.3 syntax or pkg-config
-BLAS_LAPACK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs blas lapack 2>/dev/null || echo "-l:libblas.so.3 -l:liblapack.so.3")
-
 # miniaudio is header-only, no linking required
 
 # System volume control - platform-specific
@@ -93,6 +88,8 @@ ifeq (${OS},Darwin)
 	# macOS - CoreAudio is always available (requires macOS 12.0+)
 	SYSVOLUME_LDFLAGS:=-framework CoreAudio -framework AudioToolbox
 	CFLAGS+=-mmacosx-version-min=12.0 -DMAC_OS_X_VERSION_MAX_ALLOWED=260000 -DMAC_OS_VERSION_12_0=120000
+	# macOS does not need BLAS/LAPACK
+	BLAS_LAPACK_LDFLAGS:=
 else ifeq (${OS},Linux)
 	# Linux - try PulseAudio library, always link ALSA for fallback
 	HAVE_PULSEAUDIO:=$(shell $(PKG_CONFIG) --exists libpulse && echo yes)
@@ -102,6 +99,8 @@ else ifeq (${OS},Linux)
 	endif
 	# Always link ALSA on Linux (for native API fallback)
 	SYSVOLUME_LDFLAGS+=$(shell $(PKG_CONFIG) --libs alsa)
+	# BLAS/LAPACK for libsphinxbase transitive dependencies (Linux only)
+	BLAS_LAPACK_LDFLAGS:=-lblas -llapack
 endif
 
 # WebSocket library flags (unless disabled)
