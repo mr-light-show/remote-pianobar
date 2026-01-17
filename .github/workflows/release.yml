@@ -88,6 +88,8 @@ jobs:
                 libwebsockets-dev \
                 libasound2-dev \
                 check \
+                libblas-dev \
+                liblapack-dev \
                 nodejs \
                 npm && \
               make WEBSOCKET=1 clean && \
