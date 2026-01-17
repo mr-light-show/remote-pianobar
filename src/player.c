@@ -414,6 +414,12 @@ void BarPlayerDestroy(player_t * const p) {
 void BarPlayerReset(player_t * const p) {
 	/* Clean up sound from previous song */
 	if (p->soundInitialized) {
+		/* Stop the sound (not the engine!) before uninit to prevent audio drain delay.
+		 * ma_sound_stop() stops this specific sound instance.
+		 * ma_engine_stop() would stop ALL sounds and the engine itself (wrong!).
+		 * The engine must keep running for the next song. */
+		ma_sound_stop(&p->sound);
+		
 		ma_sound_uninit(&p->sound);
 		debugPrint(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
 	}
@@ -806,6 +812,13 @@ static bool setupSound(player_t * const player) {
 static void cleanupSound(player_t * const player) {
 	if (player->soundInitialized) {
 		ma_sound_stop(&player->sound);
+		
+		/* NOTE: Do NOT call ma_engine_stop() here!
+		 * The engine must keep running for the next song.
+		 * ma_engine_stop() stops the entire engine, not just this sound.
+		 * The audio drain delay on Linux is handled by pthread_timedjoin_np
+		 * in the playback manager (commit 5fe7829). */
+		
 		ma_sound_uninit(&player->sound);
 		player->soundInitialized = false;
 		debugPrint(DEBUG_AUDIO, "Sound cleaned up\n");
@@ -870,16 +883,16 @@ void *BarPlayerThread(void *data) {
 				break;
 			}
 			
-			/* Wait for playback to complete (end callback will signal) */
-			while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
-				/* Check quit first and stop audio immediately */
-				if (shouldQuit(player)) {
-					debugPrint(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
-					if (player->soundInitialized) {
-						ma_sound_stop(&player->sound);
-					}
-					break;
+		/* Wait for playback to complete (end callback will signal) */
+		while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
+			/* Check quit first and stop audio immediately */
+			if (shouldQuit(player)) {
+				debugPrint(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
+				if (player->soundInitialized) {
+					ma_sound_stop(&player->sound);
 				}
+				break;
+			}
 				
 				/* Update progress from miniaudio's cursor */
 				float cursor;
@@ -899,32 +912,32 @@ void *BarPlayerThread(void *data) {
 			usleep(100000);  /* 100ms update interval */
 		}
 			
-			/* Check quit after playback before retry logic */
-			if (shouldQuit(player)) {
-				debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
-				break;
-			}
-			
-			retry = (ret == AVERROR_INVALIDDATA ||
-						 ret == -ECONNRESET) &&
-						!player->interrupted;
-			} else {
-				pret = PLAYER_RET_HARDFAIL;
-			}
+		/* Check quit after playback before retry logic */
+		if (shouldQuit(player)) {
+			debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+			break;
+		}
+		
+		retry = (ret == AVERROR_INVALIDDATA ||
+					 ret == -ECONNRESET) &&
+					!player->interrupted;
 		} else {
-			pret = PLAYER_RET_SOFTFAIL;
-	}
-	changeMode(player, PLAYER_WAITING);
-	finish(player);
-	
-	/* Check quit after cleanup before retry */
-	if (shouldQuit(player)) {
-		debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
-		break;
-	}
+			pret = PLAYER_RET_HARDFAIL;
+		}
+	} else {
+		pret = PLAYER_RET_SOFTFAIL;
+}
+changeMode(player, PLAYER_WAITING);
+finish(player);
+
+/* Check quit after cleanup before retry */
+if (shouldQuit(player)) {
+	debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
+	break;
+}
 } while (retry);
 
-	changeMode(player, PLAYER_FINISHED);
+changeMode(player, PLAYER_FINISHED);
 
-	return (void *)pret;
+return (void *)pret;
 }

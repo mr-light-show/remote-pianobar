@@ -22,6 +22,7 @@ THE SOFTWARE.
 */
 
 /* Enable POSIX functions (pthread_kill) and BSD/GNU extensions (usleep) */
+#define _GNU_SOURCE  /* For pthread_timedjoin_np */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
@@ -56,6 +57,27 @@ static volatile bool g_running = false;
  *	Returns true if thread joined successfully, false if timeout expired
  */
 static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeout_secs) {
+#ifdef __linux__
+	/* Linux: Use pthread_timedjoin_np for proper timeout support.
+	 * pthread_kill() doesn't reliably detect exited threads in zombie state on Linux.
+	 * The thread may have exited but pthread_kill returns 0 until pthread_join is called. */
+	
+	struct timespec deadline;
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += timeout_secs;
+	
+	int ret = pthread_timedjoin_np(thread, retval, &deadline);
+	if (ret == 0) {
+		return true;
+	} else if (ret == ETIMEDOUT) {
+		return false;
+	} else {
+		return false;
+	}
+#else
+	/* macOS/BSD: Use pthread_kill polling.
+	 * pthread_kill() works reliably on macOS to detect exited threads. */
+	
 	for (int i = 0; i < timeout_secs * 10; i++) {
 		/* Check if thread is still alive using pthread_kill with signal 0 */
 		int ret = pthread_kill(thread, 0);
@@ -71,6 +93,7 @@ static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeou
 		usleep(100000);  /* 100ms */
 	}
 	return false;  /* Timeout */
+#endif
 }
 
 /*	Player cleanup after song finishes
@@ -178,19 +201,22 @@ static void *BarPlaybackManagerThread(void *data) {
 			}
 		}
 		
-		/* Song finished playing - cleanup */
-		if (mode == PLAYER_FINISHED) {
-			debugPrint(DEBUG_UI, "PlaybackMgr: Song finished\n");
-			
-			/* Check for interrupt */
-			pthread_mutex_lock(&app->player.lock);
-			if (app->player.interrupted != 0) {
-				app->doQuit = 1;
-			}
-			pthread_mutex_unlock(&app->player.lock);
-			
-			PlaybackManagerPlayerCleanup(app, &playerThread);
+	/* Song finished playing - cleanup */
+	if (mode == PLAYER_FINISHED) {
+		debugPrint(DEBUG_UI, "PlaybackMgr: Song finished\n");
+		
+		/* Only quit if app->doQuit was already set (explicit quit command or SIGINT).
+		 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
+		 * This prevents disconnect (power button) from terminating the process. */
+		pthread_mutex_lock(&app->player.lock);
+		if (app->player.interrupted != 0 && app->doQuit) {
+			/* User pressed Ctrl+C during playback - already quitting */
+			debugPrint(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
 		}
+		pthread_mutex_unlock(&app->player.lock);
+		
+		PlaybackManagerPlayerCleanup(app, &playerThread);
+	}
 		
 		/* Player idle - check for next song */
 		if (mode == PLAYER_DEAD) {
