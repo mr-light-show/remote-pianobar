@@ -42,6 +42,11 @@ THE SOFTWARE.
 #include <errno.h>
 #include <sys/time.h>
 
+/* Timeout constants */
+#define PLAYER_JOIN_TIMEOUT_SECS 10
+#define PLAYER_FORCE_JOIN_TIMEOUT_SECS 5
+#define PROGRESS_BROADCAST_INTERVAL_SECS 1
+
 /* Forward declarations of functions from main.c */
 extern void BarMainGetPlaylist(BarApp_t *app);
 extern void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread);
@@ -96,6 +101,31 @@ static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeou
 #endif
 }
 
+/*	Force join player thread with timeout, interrupt if needed
+ *	Returns true if thread joined successfully, false if had to detach
+ */
+static bool force_join_player_thread(BarApp_t *app, pthread_t *playerThread, 
+                                      void **retval, const char *context) {
+	if (!join_thread_with_timeout(*playerThread, retval, PLAYER_JOIN_TIMEOUT_SECS)) {
+		debugPrint(DEBUG_UI, "PlaybackMgr: WARNING - %s did not exit within %ds\n",
+		           context, PLAYER_JOIN_TIMEOUT_SECS);
+		
+		/* Force interrupt and try again */
+		pthread_mutex_lock(&app->player.lock);
+		app->player.interrupted = 2;
+		app->player.doQuit = true;
+		pthread_cond_broadcast(&app->player.cond);
+		pthread_mutex_unlock(&app->player.lock);
+		
+		if (!join_thread_with_timeout(*playerThread, retval, PLAYER_FORCE_JOIN_TIMEOUT_SECS)) {
+			debugPrint(DEBUG_UI, "PlaybackMgr: ERROR - %s hung, detaching\n", context);
+			pthread_detach(*playerThread);
+			return false;
+		}
+	}
+	return true;
+}
+
 /*	Player cleanup after song finishes
  */
 static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread) {
@@ -108,21 +138,8 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 	BarWsBroadcastSongStop(app);
 
 	/* Wait for player thread to complete with timeout to prevent deadlock */
-	if (!join_thread_with_timeout(*playerThread, &threadRet, 10)) {
-		debugPrint(DEBUG_UI, "PlaybackMgr: WARNING - player thread did not exit within 10s\n");
-		
-		/* Force interrupt and try again */
-		pthread_mutex_lock(&app->player.lock);
-		app->player.interrupted = 2;
-		app->player.doQuit = true;
-		pthread_cond_broadcast(&app->player.cond);
-		pthread_mutex_unlock(&app->player.lock);
-		
-		if (!join_thread_with_timeout(*playerThread, &threadRet, 5)) {
-			debugPrint(DEBUG_UI, "PlaybackMgr: ERROR - player thread hung, detaching\n");
-			pthread_detach(*playerThread);  /* Accept the leak to avoid deadlock */
-			threadRet = (void *)PLAYER_RET_HARDFAIL;
-		}
+	if (!force_join_player_thread(app, playerThread, &threadRet, "player thread")) {
+		threadRet = (void *)PLAYER_RET_HARDFAIL;
 	}
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
@@ -149,8 +166,9 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
  */
 static void *BarPlaybackManagerThread(void *data) {
 	BarApp_t *app = (BarApp_t *)data;
-	pthread_t playerThread;
-	static time_t lastProgressBroadcast = 0;
+	pthread_t playerThread = 0;
+	bool playerStarted = false;
+	time_t lastProgressBroadcast = 0;
 	
 	debugPrint(DEBUG_UI, "PlaybackMgr: Thread started\n");
 	
@@ -158,20 +176,21 @@ static void *BarPlaybackManagerThread(void *data) {
 		/* Use timed wait instead of polling - wake up on mode changes or after 1 second */
 		struct timespec timeout;
 		clock_gettime(CLOCK_REALTIME, &timeout);
-		timeout.tv_sec += 1;  /* 1 second timeout for progress broadcast */
+		timeout.tv_sec += PROGRESS_BROADCAST_INTERVAL_SECS;
 		
 		pthread_mutex_lock(&app->player.lock);
 		/* Wait for mode change or timeout (whichever comes first) */
 		pthread_cond_timedwait(&app->player.cond, &app->player.lock, &timeout);
-		/* Cache mode and pause state while holding lock */
+		/* Cache mode, pause state, and pause start time while holding lock */
 		BarPlayerMode mode = app->player.mode;
 		bool isPaused = app->player.doPause;
+		time_t pauseStart = app->player.pauseStartTime;
 		pthread_mutex_unlock(&app->player.lock);
 		
 		/* Broadcast progress updates every ~1 second while playing (and not paused) */
 		{
 			time_t now = time(NULL);
-			if ((now - lastProgressBroadcast) >= 1) {
+			if ((now - lastProgressBroadcast) >= PROGRESS_BROADCAST_INTERVAL_SECS) {
 				lastProgressBroadcast = now;
 				
 				/* Check if playing AND not paused */
@@ -182,41 +201,32 @@ static void *BarPlaybackManagerThread(void *data) {
 		}
 		
 		/* Check for pause timeout (auto-stop after configured minutes of pause) */
-		if (app->settings.pauseTimeout > 0) {
-			/* Only need to check pauseStartTime if actually paused */
-			time_t pauseStart = 0;
-			if (isPaused) {
-				pthread_mutex_lock(&app->player.lock);
-				pauseStart = app->player.pauseStartTime;
-				pthread_mutex_unlock(&app->player.lock);
+		if (app->settings.pauseTimeout > 0 && isPaused && pauseStart > 0) {
+			time_t elapsed = time(NULL) - pauseStart;
+			if (elapsed >= (time_t)(app->settings.pauseTimeout * 60)) {
+				debugPrint(DEBUG_UI, "PlaybackMgr: Pause timeout expired (%u minutes), stopping\n",
+				           app->settings.pauseTimeout);
+				BarUiDoPandoraDisconnect(app, "idle_timeout");
 			}
+		}
+		
+		/* Song finished playing - cleanup */
+		if (mode == PLAYER_FINISHED) {
+			debugPrint(DEBUG_UI, "PlaybackMgr: Song finished\n");
 			
-			if (isPaused && pauseStart > 0) {
-				time_t elapsed = time(NULL) - pauseStart;
-				if (elapsed >= (time_t)(app->settings.pauseTimeout * 60)) {
-					debugPrint(DEBUG_UI, "PlaybackMgr: Pause timeout expired (%u minutes), stopping\n",
-					           app->settings.pauseTimeout);
-					BarUiDoPandoraDisconnect(app, "idle_timeout");
-				}
+			/* Only quit if app->doQuit was already set (explicit quit command or SIGINT).
+			 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
+			 * This prevents disconnect (power button) from terminating the process. */
+			pthread_mutex_lock(&app->player.lock);
+			if (app->player.interrupted != 0 && app->doQuit) {
+				/* User pressed Ctrl+C during playback - already quitting */
+				debugPrint(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
 			}
+			pthread_mutex_unlock(&app->player.lock);
+			
+			PlaybackManagerPlayerCleanup(app, &playerThread);
+			playerStarted = false;
 		}
-		
-	/* Song finished playing - cleanup */
-	if (mode == PLAYER_FINISHED) {
-		debugPrint(DEBUG_UI, "PlaybackMgr: Song finished\n");
-		
-		/* Only quit if app->doQuit was already set (explicit quit command or SIGINT).
-		 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
-		 * This prevents disconnect (power button) from terminating the process. */
-		pthread_mutex_lock(&app->player.lock);
-		if (app->player.interrupted != 0 && app->doQuit) {
-			/* User pressed Ctrl+C during playback - already quitting */
-			debugPrint(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
-		}
-		pthread_mutex_unlock(&app->player.lock);
-		
-		PlaybackManagerPlayerCleanup(app, &playerThread);
-	}
 		
 		/* Player idle - check for next song */
 		if (mode == PLAYER_DEAD) {
@@ -252,27 +262,16 @@ static void *BarPlaybackManagerThread(void *data) {
 			if (playlist != NULL) {
 				debugPrint(DEBUG_UI, "PlaybackMgr: Starting next song\n");
 				BarMainStartPlayback(app, &playerThread);
-				BarWsBroadcastSongStart(app);
+				/* Note: BarMainStartPlayback already calls BarWsBroadcastSongStart */
+				playerStarted = true;
 			}
 		}
 	}
 	
 	/* Cleanup if player still running */
-	if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
+	if (playerStarted && BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
 		debugPrint(DEBUG_UI, "PlaybackMgr: Waiting for player to finish\n");
-		if (!join_thread_with_timeout(playerThread, NULL, 10)) {
-			debugPrint(DEBUG_UI, "PlaybackMgr: Force stopping hung player\n");
-			pthread_mutex_lock(&app->player.lock);
-			app->player.interrupted = 2;
-			app->player.doQuit = true;
-			pthread_cond_broadcast(&app->player.cond);
-			pthread_mutex_unlock(&app->player.lock);
-			
-			if (!join_thread_with_timeout(playerThread, NULL, 5)) {
-				debugPrint(DEBUG_UI, "PlaybackMgr: Detaching hung player thread\n");
-				pthread_detach(playerThread);
-			}
-		}
+		force_join_player_thread(app, &playerThread, NULL, "player thread (shutdown)");
 	}
 	
 	debugPrint(DEBUG_UI, "PlaybackMgr: Thread stopped\n");
@@ -304,8 +303,13 @@ void BarPlaybackManagerStop(BarApp_t *app) {
 	debugPrint(DEBUG_UI, "PlaybackMgr: Stopping playback manager thread\n");
 	
 	g_running = false;
+	
+	/* Wake the thread if it's waiting on condition variable */
+	pthread_mutex_lock(&app->player.lock);
+	pthread_cond_broadcast(&app->player.cond);
+	pthread_mutex_unlock(&app->player.lock);
+	
 	pthread_join(g_playbackThread, NULL);
 	
 	debugPrint(DEBUG_UI, "PlaybackMgr: Thread joined\n");
 }
-
