@@ -1,3 +1,7 @@
+Release 2.2.4
+
+- Refactored playback thread join logic and improved cleanup handling
+
 Release 2.2.3
 
 - Fixed 15-16 second skip delay on Linux/Ubuntu
