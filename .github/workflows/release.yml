@@ -239,6 +239,12 @@ jobs:
               npm run build
             "
       
+      - name: Fix APT cache permissions
+        run: |
+          sudo rm -f ~/apt-cache/lock
+          sudo rm -rf ~/apt-cache/partial
+          sudo chown -R $(id -u):$(id -g) ~/apt-cache || true
+      
       - name: Create package structure
         run: |
           mkdir -p package/usr/local/bin
