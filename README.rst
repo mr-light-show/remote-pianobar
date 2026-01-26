@@ -1,9 +1,21 @@
 pianobar
 ========
 
-.. image:: https://github.com/mr-light-show/remote-pianobar/actions/workflows/release.yml/badge.svg
-   :target: https://github.com/mr-light-show/remote-pianobar/actions
-   :alt: Build Status
+.. image:: https://img.shields.io/github/release/mr-light-show/remote-pianobar.svg
+   :target: https://github.com/mr-light-show/remote-pianobar/releases
+   :alt: GitHub Release
+
+.. image:: https://github.com/mr-light-show/remote-pianobar/actions/workflows/build.yml/badge.svg
+   :target: https://github.com/mr-light-show/remote-pianobar/actions/workflows/build.yml
+   :alt: Build
+
+.. image:: https://github.com/mr-light-show/remote-pianobar/actions/workflows/test.yml/badge.svg
+   :target: https://github.com/mr-light-show/remote-pianobar/actions/workflows/test.yml
+   :alt: Test
+
+.. image:: https://codecov.io/gh/mr-light-show/remote-pianobar/branch/master/graph/badge.svg
+   :target: https://codecov.io/gh/mr-light-show/remote-pianobar
+   :alt: codecov
 
 pianobar is a free/open-source, console-based client for the personalized
 online radio Pandora_.
