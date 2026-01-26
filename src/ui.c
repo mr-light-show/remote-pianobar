@@ -43,6 +43,7 @@ THE SOFTWARE.
 #include "debug.h"
 #include "ui_readline.h"
 #include "bar_state.h"
+#include "websocket_bridge.h"
 
 typedef int (*BarSortFunc_t) (const void *, const void *);
 
@@ -348,7 +349,10 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 						PianoErrorToStr (pRetLocal));
 				goto cleanup;
 			} else {
-				BarUiMsg (&app->settings, MSG_NONE, "Ok.\n");
+				/* Suppress "Ok." output during WebSocket action dispatch */
+				if (!BarWsIsSilentMode()) {
+					BarUiMsg (&app->settings, MSG_NONE, "Ok.\n");
+				}
 				ret = true;
 			}
 		}
