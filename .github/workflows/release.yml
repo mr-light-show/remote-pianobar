@@ -37,9 +37,19 @@ jobs:
         
       - name: Build pianobar and Web UI
         run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
+          
+          # Enable debug logging for pre-release builds
+          DEBUG_FLAGS=""
+          if [[ "$VERSION" == *"pre"* ]]; then
+            echo "Pre-release build detected, enabling debug logging"
+            DEBUG_FLAGS="-DHAVE_DEBUGLOG"
+          fi
+          
           # Build pianobar
-          make WEBSOCKET=1 clean
-          make WEBSOCKET=1
+          make WEBSOCKET=1 CFLAGS="$DEBUG_FLAGS" clean
+          make WEBSOCKET=1 CFLAGS="$DEBUG_FLAGS"
           
           # Build Web UI
           cd webui
@@ -205,11 +215,22 @@ jobs:
       
       - name: Build pianobar and Web UI
         run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
+          
+          # Enable debug logging for pre-release builds
+          DEBUG_FLAGS=""
+          if [[ "$VERSION" == *"pre"* ]]; then
+            echo "Pre-release build detected, enabling debug logging"
+            DEBUG_FLAGS="-DHAVE_DEBUGLOG"
+          fi
+          
           mkdir -p ~/apt-cache
           docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
             -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
+            -e DEBUG_FLAGS="$DEBUG_FLAGS" \
             debian:${{ matrix.docker_image }} \
             bash -c "
               apt-get update && \
@@ -232,8 +253,8 @@ jobs:
                 liblapack-dev \
                 nodejs \
                 npm && \
-              make WEBSOCKET=1 clean && \
-              make WEBSOCKET=1 && \
+              make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" clean && \
+              make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" && \
               cd webui && \
               npm ci && \
               npm run build
@@ -406,8 +427,18 @@ jobs:
       
       - name: Build Remote Pianobar
         run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
+          
+          # Enable debug logging for pre-release builds
+          DEBUG_FLAGS=""
+          if [[ "$VERSION" == *"pre"* ]]; then
+            echo "Pre-release build detected, enabling debug logging"
+            DEBUG_FLAGS="-DHAVE_DEBUGLOG"
+          fi
+          
           make WEBSOCKET=1 clean
-          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED $DEBUG_FLAGS"
           
       - name: Build Web UI
         run: |
