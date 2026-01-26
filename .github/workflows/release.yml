@@ -7,15 +7,29 @@ on:
 
 jobs:
   build-ubuntu:
-    name: Build Ubuntu 24.04 Package (${{ matrix.arch }})
-    runs-on: ubuntu-24.04
+    name: Build Linux Package (${{ matrix.pkg_name }}_${{ matrix.arch }})
+    runs-on: ubuntu-${{ matrix.ubuntu }}
     strategy:
       matrix:
         include:
+          # FFmpeg 6.x builds (Ubuntu 24.04 / libavcodec60)
           - arch: amd64
             platform: linux/amd64
+            ubuntu: "24.04"
+            pkg_name: "noble"
           - arch: arm64
             platform: linux/arm64
+            ubuntu: "24.04"
+            pkg_name: "bookworm"
+          # FFmpeg 7.x builds (Ubuntu 24.10 / libavcodec61)
+          - arch: amd64
+            platform: linux/amd64
+            ubuntu: "24.10"
+            pkg_name: "oracular"
+          - arch: arm64
+            platform: linux/arm64
+            ubuntu: "24.10"
+            pkg_name: "trixie"
     
     steps:
       - name: Checkout code
@@ -70,7 +84,7 @@ jobs:
           docker run --platform ${{ matrix.platform }} --rm \
             -v $(pwd):/workspace \
             -w /workspace \
-            ubuntu:24.04 \
+            ubuntu:${{ matrix.ubuntu }} \
             bash -c "
               apt-get update && \
               apt-get install -y \
@@ -209,7 +223,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"  # Strip leading 'v' if present
-          dpkg-deb --build package remote-pianobar_${{ matrix.arch }}.deb
+          dpkg-deb --build package remote-pianobar_${{ matrix.pkg_name }}_${{ matrix.arch }}.deb
           
       - name: Upload to release
         if: github.event_name == 'release'
