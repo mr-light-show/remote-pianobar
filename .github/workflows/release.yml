@@ -6,30 +6,16 @@ on:
   workflow_dispatch:  # Allow manual triggers
 
 jobs:
-  build-ubuntu:
-    name: Build Linux Package (${{ matrix.pkg_name }}_${{ matrix.arch }})
+  build-amd64:
+    name: Build Linux Package (${{ matrix.pkg_name }}_amd64)
     runs-on: ubuntu-${{ matrix.ubuntu }}
     strategy:
       matrix:
         include:
-          # FFmpeg 6.x builds (Ubuntu 24.04 / libavcodec60)
-          - arch: amd64
-            platform: linux/amd64
-            ubuntu: "24.04"
+          - ubuntu: "24.04"
             pkg_name: "noble"
-          - arch: arm64
-            platform: linux/arm64
-            ubuntu: "24.04"
-            pkg_name: "bookworm"
-          # FFmpeg 7.x builds (Ubuntu 24.10 / libavcodec61)
-          - arch: amd64
-            platform: linux/amd64
-            ubuntu: "24.10"
-            pkg_name: "oracular"
-          - arch: arm64
-            platform: linux/arm64
-            ubuntu: "24.10"
-            pkg_name: "trixie"
+          - ubuntu: "22.04"
+            pkg_name: "jammy"
     
     steps:
       - name: Checkout code
@@ -43,29 +29,20 @@ jobs:
           sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
       
-      - name: Set up QEMU for ARM64
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-      
-      - name: Cache and install APT packages (AMD64)
-        if: matrix.arch == 'amd64'
+      - name: Cache and install APT packages
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
           packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check libblas-dev liblapack-dev
           version: 2.0
       
-      - name: Setup Node.js with caching (AMD64)
-        if: matrix.arch == 'amd64'
+      - name: Setup Node.js with caching
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: webui/package-lock.json
         
-      - name: Build pianobar and Web UI (AMD64)
-        if: matrix.arch == 'amd64'
+      - name: Build pianobar and Web UI
         run: |
           # Build pianobar
           make WEBSOCKET=1 clean
@@ -77,42 +54,6 @@ jobs:
           npm run build
           cd ..
       
-      - name: Build in ARM64 container (ARM64)
-        if: matrix.arch == 'arm64'
-        run: |
-          # Build using Docker with ARM64 Ubuntu image
-          docker run --platform ${{ matrix.platform }} --rm \
-            -v $(pwd):/workspace \
-            -w /workspace \
-            ubuntu:${{ matrix.ubuntu }} \
-            bash -c "
-              apt-get update && \
-              apt-get install -y \
-                build-essential \
-                pkg-config \
-                libao-dev \
-                libcurl4-openssl-dev \
-                libgcrypt20-dev \
-                libjson-c-dev \
-                libavcodec-dev \
-                libavformat-dev \
-                libavfilter-dev \
-                libavutil-dev \
-                libswresample-dev \
-                libwebsockets-dev \
-                libasound2-dev \
-                check \
-                libblas-dev \
-                liblapack-dev \
-                nodejs \
-                npm && \
-              make WEBSOCKET=1 clean && \
-              make WEBSOCKET=1 && \
-              cd webui && \
-              npm ci && \
-              npm run build
-            "
-          
       - name: Create package structure
         run: |
           mkdir -p package/usr/local/bin
@@ -177,7 +118,7 @@ jobs:
           Version: $VERSION
           Section: sound
           Priority: optional
-          Architecture: ${{ matrix.arch }}
+          Architecture: amd64
           Depends: $DEPENDS
           Maintainer: Remote Pianobar <remote-pianobar@github.com>
           Homepage: https://github.com/mr-light-show/remote-pianobar
@@ -223,7 +164,261 @@ jobs:
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"  # Strip leading 'v' if present
-          dpkg-deb --build package remote-pianobar_${{ matrix.pkg_name }}_${{ matrix.arch }}.deb
+          dpkg-deb --build package remote-pianobar_${{ matrix.pkg_name }}_amd64.deb
+          
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: remote-pianobar_*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-arm64:
+    name: Build ARM64 Packages (bookworm + trixie)
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Update version from tag
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"  # Strip leading 'v' if present
+          echo "Updating version to: $VERSION"
+          sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
+          grep VERSION src/config.h
+      
+      - name: Set up QEMU for ARM64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      
+      - name: Build bookworm variant (FFmpeg 6.x / Ubuntu 24.04)
+        run: |
+          docker run --platform linux/arm64 --rm \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            ubuntu:24.04 \
+            bash -c "
+              apt-get update && \
+              apt-get install -y \
+                build-essential \
+                pkg-config \
+                libao-dev \
+                libcurl4-openssl-dev \
+                libgcrypt20-dev \
+                libjson-c-dev \
+                libavcodec-dev \
+                libavformat-dev \
+                libavfilter-dev \
+                libavutil-dev \
+                libswresample-dev \
+                libwebsockets-dev \
+                libasound2-dev \
+                check \
+                libblas-dev \
+                liblapack-dev \
+                nodejs \
+                npm && \
+              make WEBSOCKET=1 clean && \
+              make WEBSOCKET=1 && \
+              cd webui && \
+              npm ci && \
+              npm run build
+            "
+          cp pianobar pianobar-bookworm
+          
+      - name: Build trixie variant (FFmpeg 7.x / Ubuntu 24.10)
+        run: |
+          docker run --platform linux/arm64 --rm \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            ubuntu:24.10 \
+            bash -c "
+              apt-get update && \
+              apt-get install -y \
+                build-essential \
+                pkg-config \
+                libao-dev \
+                libcurl4-openssl-dev \
+                libgcrypt20-dev \
+                libjson-c-dev \
+                libavcodec-dev \
+                libavformat-dev \
+                libavfilter-dev \
+                libavutil-dev \
+                libswresample-dev \
+                libwebsockets-dev \
+                libasound2-dev \
+                check \
+                libblas-dev \
+                liblapack-dev && \
+              make WEBSOCKET=1 clean && \
+              make WEBSOCKET=1
+            "
+          cp pianobar pianobar-trixie
+      
+      - name: Create package structure
+        run: |
+          mkdir -p package/usr/local/bin
+          mkdir -p package/usr/local/share/pianobar/webui
+          mkdir -p package/usr/local/share/doc/pianobar
+          mkdir -p package/usr/local/share/man/man1
+          mkdir -p package/DEBIAN
+          
+          # Copy web UI (built once, used for both packages)
+          cp -r dist/webui/* package/usr/local/share/pianobar/webui/
+          
+          # Copy documentation
+          cp README.rst package/usr/local/share/doc/pianobar/
+          cp config.md package/usr/local/share/doc/pianobar/
+          cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
+          cp README_TESTING.md package/usr/local/share/doc/pianobar/
+          cp -r contrib package/usr/local/share/doc/pianobar/
+          
+          # Copy man page
+          cp contrib/pianobar.1 package/usr/local/share/man/man1/
+          
+      - name: Create post-install script
+        run: |
+          cat > package/DEBIAN/postinst << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          echo "Remote Pianobar installed successfully!"
+          echo ""
+          echo "To configure pianobar, create ~/.config/pianobar/config"
+          echo "Example configuration: /usr/local/share/doc/pianobar/contrib/config-example"
+          echo ""
+          echo "For WebSocket/Web UI setup, see:"
+          echo "  /usr/local/share/doc/pianobar/README.rst"
+          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo ""
+          echo "Web UI files are located at: /usr/local/share/pianobar/webui"
+          
+          exit 0
+          EOF
+          
+          chmod 755 package/DEBIAN/postinst
+      
+      - name: Build bookworm .deb package
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"  # Strip leading 'v' if present
+          
+          # Copy bookworm binary
+          cp pianobar-bookworm package/usr/local/bin/pianobar
+          
+          # Detect dependencies from bookworm binary
+          echo "=== Detecting bookworm library dependencies ==="
+          
+          # Run ldd inside ARM64 container
+          DEPS=$(docker run --platform linux/arm64 --rm \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            ubuntu:24.04 \
+            bash -c "ldd pianobar-bookworm | grep '=>' || true")
+          echo "$DEPS"
+          
+          AVCODEC=$(echo "$DEPS" | grep libavcodec | sed -n 's/.*libavcodec\.so\.\([0-9]*\).*/libavcodec\1/p')
+          AVFORMAT=$(echo "$DEPS" | grep libavformat | sed -n 's/.*libavformat\.so\.\([0-9]*\).*/libavformat\1/p')
+          AVFILTER=$(echo "$DEPS" | grep libavfilter | sed -n 's/.*libavfilter\.so\.\([0-9]*\).*/libavfilter\1/p')
+          AVUTIL=$(echo "$DEPS" | grep libavutil | sed -n 's/.*libavutil\.so\.\([0-9]*\).*/libavutil\1/p')
+          SWRESAMPLE=$(echo "$DEPS" | grep libswresample | sed -n 's/.*libswresample\.so\.\([0-9]*\).*/libswresample\1/p')
+          WEBSOCKETS=$(echo "$DEPS" | grep libwebsockets | sed -n 's/.*libwebsockets\.so\.\([0-9]*\).*/libwebsockets\1/p')
+          
+          echo "Detected: $AVCODEC $AVFORMAT $AVFILTER $AVUTIL $SWRESAMPLE $WEBSOCKETS"
+          
+          DEPENDS="libao4, libcurl4, libgcrypt20, libjson-c5"
+          [ -n "$AVCODEC" ] && DEPENDS="$DEPENDS, $AVCODEC"
+          [ -n "$AVFORMAT" ] && DEPENDS="$DEPENDS, $AVFORMAT"
+          [ -n "$AVFILTER" ] && DEPENDS="$DEPENDS, $AVFILTER"
+          [ -n "$AVUTIL" ] && DEPENDS="$DEPENDS, $AVUTIL"
+          [ -n "$SWRESAMPLE" ] && DEPENDS="$DEPENDS, $SWRESAMPLE"
+          [ -n "$WEBSOCKETS" ] && DEPENDS="$DEPENDS, $WEBSOCKETS"
+          
+          cat > package/DEBIAN/control << EOF
+          Package: remote-pianobar
+          Version: $VERSION
+          Section: sound
+          Priority: optional
+          Architecture: arm64
+          Depends: $DEPENDS
+          Maintainer: Remote Pianobar <remote-pianobar@github.com>
+          Homepage: https://github.com/mr-light-show/remote-pianobar
+          Description: Remote Pianobar - Console-based Pandora client with remote control
+           Pianobar is a free/open-source, console-based client for Pandora.
+           Remote Pianobar enables building custom UIs (web, mobile, desktop) with remote control.
+           .
+           Features:
+            - Play and manage stations
+            - Rate songs and explain why they were selected
+            - WebSocket API for custom UIs
+            - Modern web interface included
+            - Remote control via WebSocket
+          EOF
+          
+          dpkg-deb --build package remote-pianobar_bookworm_arm64.deb
+      
+      - name: Build trixie .deb package
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"  # Strip leading 'v' if present
+          
+          # Copy trixie binary
+          cp pianobar-trixie package/usr/local/bin/pianobar
+          
+          # Detect dependencies from trixie binary
+          echo "=== Detecting trixie library dependencies ==="
+          
+          DEPS=$(docker run --platform linux/arm64 --rm \
+            -v $(pwd):/workspace \
+            -w /workspace \
+            ubuntu:24.10 \
+            bash -c "ldd pianobar-trixie | grep '=>' || true")
+          echo "$DEPS"
+          
+          AVCODEC=$(echo "$DEPS" | grep libavcodec | sed -n 's/.*libavcodec\.so\.\([0-9]*\).*/libavcodec\1/p')
+          AVFORMAT=$(echo "$DEPS" | grep libavformat | sed -n 's/.*libavformat\.so\.\([0-9]*\).*/libavformat\1/p')
+          AVFILTER=$(echo "$DEPS" | grep libavfilter | sed -n 's/.*libavfilter\.so\.\([0-9]*\).*/libavfilter\1/p')
+          AVUTIL=$(echo "$DEPS" | grep libavutil | sed -n 's/.*libavutil\.so\.\([0-9]*\).*/libavutil\1/p')
+          SWRESAMPLE=$(echo "$DEPS" | grep libswresample | sed -n 's/.*libswresample\.so\.\([0-9]*\).*/libswresample\1/p')
+          WEBSOCKETS=$(echo "$DEPS" | grep libwebsockets | sed -n 's/.*libwebsockets\.so\.\([0-9]*\).*/libwebsockets\1/p')
+          
+          echo "Detected: $AVCODEC $AVFORMAT $AVFILTER $AVUTIL $SWRESAMPLE $WEBSOCKETS"
+          
+          DEPENDS="libao4, libcurl4, libgcrypt20, libjson-c5"
+          [ -n "$AVCODEC" ] && DEPENDS="$DEPENDS, $AVCODEC"
+          [ -n "$AVFORMAT" ] && DEPENDS="$DEPENDS, $AVFORMAT"
+          [ -n "$AVFILTER" ] && DEPENDS="$DEPENDS, $AVFILTER"
+          [ -n "$AVUTIL" ] && DEPENDS="$DEPENDS, $AVUTIL"
+          [ -n "$SWRESAMPLE" ] && DEPENDS="$DEPENDS, $SWRESAMPLE"
+          [ -n "$WEBSOCKETS" ] && DEPENDS="$DEPENDS, $WEBSOCKETS"
+          
+          cat > package/DEBIAN/control << EOF
+          Package: remote-pianobar
+          Version: $VERSION
+          Section: sound
+          Priority: optional
+          Architecture: arm64
+          Depends: $DEPENDS
+          Maintainer: Remote Pianobar <remote-pianobar@github.com>
+          Homepage: https://github.com/mr-light-show/remote-pianobar
+          Description: Remote Pianobar - Console-based Pandora client with remote control
+           Pianobar is a free/open-source, console-based client for Pandora.
+           Remote Pianobar enables building custom UIs (web, mobile, desktop) with remote control.
+           .
+           Features:
+            - Play and manage stations
+            - Rate songs and explain why they were selected
+            - WebSocket API for custom UIs
+            - Modern web interface included
+            - Remote control via WebSocket
+          EOF
+          
+          dpkg-deb --build package remote-pianobar_trixie_arm64.deb
           
       - name: Upload to release
         if: github.event_name == 'release'
@@ -445,4 +640,3 @@ jobs:
           files: remote-pianobar_*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
