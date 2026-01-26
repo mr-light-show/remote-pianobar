@@ -173,9 +173,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - docker_image: "24.04"
+          - docker_image: "bookworm"
             pkg_name: "bookworm"
-          - docker_image: "24.10"
+          - docker_image: "trixie"
             pkg_name: "trixie"
     
     steps:
@@ -200,7 +200,7 @@ jobs:
           docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
             -w /workspace \
-            ubuntu:${{ matrix.docker_image }} \
+            debian:${{ matrix.docker_image }} \
             bash -c "
               apt-get update && \
               apt-get install -y \
@@ -261,7 +261,7 @@ jobs:
           DEPS=$(docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
             -w /workspace \
-            ubuntu:${{ matrix.docker_image }} \
+            debian:${{ matrix.docker_image }} \
             bash -c "ldd pianobar | grep '=>' || true")
           echo "$DEPS"
           
