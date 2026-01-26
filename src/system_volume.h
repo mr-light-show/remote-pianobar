@@ -32,8 +32,9 @@ typedef enum {
 } BarVolumeModeType;
 
 /* Initialize system volume backend (call at startup)
+ * @param alsaMixer ALSA mixer element name (e.g., "Digital"), or NULL for auto-detect
  * Returns true if system volume control is available */
-bool BarSystemVolumeInit(void);
+bool BarSystemVolumeInit(const char *alsaMixer);
 
 /* Cleanup system volume resources */
 void BarSystemVolumeDestroy(void);

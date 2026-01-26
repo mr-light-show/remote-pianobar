@@ -158,6 +158,9 @@ typedef struct {
 	char *pidFile;
 	char *logFile;
 	#endif
+	
+	/* ALSA mixer control name (e.g., "Digital", "Master") */
+	char *alsaMixer;
 } BarSettings_t;
 
 #include <piano.h>

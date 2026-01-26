@@ -814,7 +814,7 @@ int main (int argc, char **argv) {
 	/* Initialize system volume control BEFORE daemonization
 	 * popen() and CoreAudio APIs require working file descriptors and user session access */
 	if (app.settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
-		if (BarSystemVolumeInit()) {
+		if (BarSystemVolumeInit(app.settings.alsaMixer)) {
 			/* In system mode, set player to configured initial gain.
 			 * Default 75% leaves headroom for ReplayGain boosts.
 			 * The OS mixer controls actual volume, not the player's gain stage.
