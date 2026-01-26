@@ -281,6 +281,24 @@ lint-test:
 test-all: test lint test-asan
 	${SILENTECHO} "   TEST  All tests passed!"
 
+# Build and run tests with coverage instrumentation
+test-coverage: clean
+	${SILENTECHO} "   TEST  Building with coverage instrumentation..."
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -g -O0" LDFLAGS="${LDFLAGS} --coverage"
+	${SILENTECHO} "   TEST  Running test suite..."
+	${SILENTCMD}./${TEST_BIN}
+	${SILENTECHO} "   COV   Generating coverage report..."
+	${SILENTCMD}lcov --capture --directory . --output-file coverage.info --rc lcov_branch_coverage=1
+	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info --rc lcov_branch_coverage=1
+	${SILENTECHO} "   COV   Coverage report: coverage.info"
+
+# Clean coverage files
+coverage-clean:
+	${SILENTECHO} " CLEAN  coverage"
+	${SILENTCMD}find . -name '*.gcno' -delete
+	${SILENTCMD}find . -name '*.gcda' -delete
+	${SILENTCMD}${RM} coverage.info
+
 # Clean test files
 test-clean:
 	${SILENTECHO} " CLEAN  tests"
@@ -323,4 +341,4 @@ clean-test-asan:
 	@true
 endif
 
-.PHONY: install install-libpiano uninstall test test-asan test-valgrind test-all lint lint-test test-clean clean-test-asan debug all
+.PHONY: install install-libpiano uninstall test test-asan test-valgrind test-all test-coverage coverage-clean lint lint-test test-clean clean-test-asan debug all

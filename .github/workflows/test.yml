@@ -17,13 +17,18 @@ jobs:
           sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
             libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
             libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
-            libblas-dev liblapack-dev check
+            libblas-dev liblapack-dev check lcov
 
-      - name: Build and test
-        run: |
-          make clean
-          make test
-          ./pianobar_test
+      - name: Build and test with coverage
+        run: make test-coverage
+
+      - name: Upload C coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.info
+          flags: c-tests
+          fail_ci_if_error: false
 
   web-tests:
     runs-on: ubuntu-latest
@@ -46,9 +51,10 @@ jobs:
       - name: Unit tests
         run: npm test -- --run --coverage
 
-      - name: Upload coverage to Codecov
+      - name: Upload web coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: webui/coverage
+          flags: web-tests
           fail_ci_if_error: false
