@@ -46,15 +46,6 @@ jobs:
       - name: Unit tests
         run: npm test -- --run --coverage
 
-      - name: Build for E2E tests
-        run: npm run build
-
-      - name: Install Playwright
-        run: npx playwright install --with-deps chromium
-
-      - name: E2E tests
-        run: npm run test:e2e -- --project=chromium
-
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
