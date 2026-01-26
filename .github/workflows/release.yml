@@ -195,10 +195,20 @@ jobs:
         with:
           platforms: arm64
       
+      - name: Cache APT packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-arm64-${{ matrix.pkg_name }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            apt-arm64-${{ matrix.pkg_name }}-
+      
       - name: Build pianobar and Web UI
         run: |
+          mkdir -p ~/apt-cache
           docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
+            -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
             debian:${{ matrix.docker_image }} \
             bash -c "
@@ -260,6 +270,7 @@ jobs:
           
           DEPS=$(docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
+            -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
             debian:${{ matrix.docker_image }} \
             bash -c "ldd pianobar | grep '=>' || true")
