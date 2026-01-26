@@ -4,6 +4,8 @@ on:
   release:
     types: [published]
   workflow_dispatch:  # Allow manual triggers
+  push:
+    branches: [main]  # Warm caches on main
 
 jobs:
   build-amd64:
