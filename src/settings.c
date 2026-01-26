@@ -147,6 +147,9 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 	free (settings->logFile);
 	#endif
 	
+	/* ALSA mixer cleanup */
+	free (settings->alsaMixer);
+	
 	/* Free station display name overrides */
 	if (settings->stationDisplayNameOverrides) {
 		for (size_t i = 0; i < settings->stationDisplayNameOverrideCount; i++) {
@@ -567,7 +570,10 @@ void BarSettingsRead (BarSettings_t *settings) {
 				free (settings->logFile);
 				settings->logFile = BarSettingsExpandTilde (val, userhome);
 			#endif
-			} else {
+		} else if (streq ("alsa_mixer", key)) {
+			free (settings->alsaMixer);
+			settings->alsaMixer = strdup (val);
+		} else {
 				BarUiMsg (settings, MSG_INFO,
 						"Unrecognized key %s at %s:%zu\n", key, path, lineNum);
 			}

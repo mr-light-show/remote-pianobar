@@ -24,6 +24,17 @@ THE SOFTWARE.
 #include "websocket_bridge.h"
 #include "system_volume.h"
 
+/* Silent mode flag - when true, CLI output is suppressed during WebSocket actions */
+static bool wsSilentMode = false;
+
+void BarWsSetSilentMode(bool silent) {
+	wsSilentMode = silent;
+}
+
+bool BarWsIsSilentMode(void) {
+	return wsSilentMode;
+}
+
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"

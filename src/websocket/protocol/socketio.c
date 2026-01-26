@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include "../../bar_state.h"
 #include "../../system_volume.h"
 #include "../../station_display.h"
+#include "../../websocket_bridge.h"
 #include "socketio.h"
 #include "error_messages.h"
 #include "../core/websocket.h"
@@ -1683,7 +1684,11 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	 * 
 	 * Lock ordering is safe: stateMutex (if needed) → player.lock (if needed)
 	 * See src/THREAD_SAFETY.md for details */
+	
+	/* Suppress CLI output (e.g., "Ok.") during WebSocket action dispatch */
+	BarWsSetSilentMode(true);
 	BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
+	BarWsSetSilentMode(false);
 	
 	/* Clear unicast target after query actions */
 	if (useUnicast) {

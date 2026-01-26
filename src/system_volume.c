@@ -42,6 +42,9 @@ static enum {
 	BACKEND_ALSA
 } activeBackend = BACKEND_NONE;
 
+/* ALSA mixer element name (configured or auto-detected) */
+static char *alsaMixerName = NULL;
+
 /*
  * ============================================================================
  * macOS Implementation
@@ -472,6 +475,9 @@ static int alsaGetVolume(void) {
 	long min, max, volume;
 	int percent;
 	
+	if (!alsaMixerName)
+		return -1;
+	
 	if (snd_mixer_open(&handle, 0) < 0)
 		return -1;
 	if (snd_mixer_attach(handle, "default") < 0)
@@ -483,7 +489,7 @@ static int alsaGetVolume(void) {
 	
 	snd_mixer_selem_id_alloca(&sid);
 	snd_mixer_selem_id_set_index(sid, 0);
-	snd_mixer_selem_id_set_name(sid, "Master");
+	snd_mixer_selem_id_set_name(sid, alsaMixerName);
 	
 	elem = snd_mixer_find_selem(handle, sid);
 	if (!elem)
@@ -509,6 +515,9 @@ static bool alsaSetVolume(int percent) {
 	snd_mixer_selem_id_t *sid;
 	long min, max, volume;
 	
+	if (!alsaMixerName)
+		return false;
+	
 	if (snd_mixer_open(&handle, 0) < 0)
 		return false;
 	if (snd_mixer_attach(handle, "default") < 0)
@@ -520,7 +529,7 @@ static bool alsaSetVolume(int percent) {
 	
 	snd_mixer_selem_id_alloca(&sid);
 	snd_mixer_selem_id_set_index(sid, 0);
-	snd_mixer_selem_id_set_name(sid, "Master");
+	snd_mixer_selem_id_set_name(sid, alsaMixerName);
 	
 	elem = snd_mixer_find_selem(handle, sid);
 	if (!elem)
@@ -538,8 +547,70 @@ error:
 	return false;
 }
 
+/* ALSA: Try to find a working mixer element
+ * @param mixerName specific mixer name to use, or NULL for auto-detect
+ * Returns true if a working mixer was found */
+static bool alsaInit(const char *mixerName) {
+	snd_mixer_t *handle;
+	snd_mixer_elem_t *elem;
+	snd_mixer_selem_id_t *sid;
+	
+	/* Mixer names to try in order of preference */
+	static const char *mixerNames[] = {
+		"Digital",    /* HiFiBerry DACs */
+		"Master",     /* Most desktop systems */
+		"PCM",        /* Common on Raspberry Pi */
+		"Analogue",   /* HiFiBerry analog stage */
+		"Headphone",  /* Pi 3.5mm jack */
+		NULL
+	};
+	
+	if (snd_mixer_open(&handle, 0) < 0)
+		return false;
+	if (snd_mixer_attach(handle, "default") < 0) {
+		snd_mixer_close(handle);
+		return false;
+	}
+	if (snd_mixer_selem_register(handle, NULL, NULL) < 0) {
+		snd_mixer_close(handle);
+		return false;
+	}
+	if (snd_mixer_load(handle) < 0) {
+		snd_mixer_close(handle);
+		return false;
+	}
+	
+	snd_mixer_selem_id_alloca(&sid);
+	snd_mixer_selem_id_set_index(sid, 0);
+	
+	if (mixerName) {
+		/* Use specified mixer name */
+		snd_mixer_selem_id_set_name(sid, mixerName);
+		elem = snd_mixer_find_selem(handle, sid);
+		if (elem) {
+			alsaMixerName = strdup(mixerName);
+			snd_mixer_close(handle);
+			return true;
+		}
+	} else {
+		/* Auto-detect: try each mixer name in order */
+		for (const char **name = mixerNames; *name; name++) {
+			snd_mixer_selem_id_set_name(sid, *name);
+			elem = snd_mixer_find_selem(handle, sid);
+			if (elem) {
+				alsaMixerName = strdup(*name);
+				snd_mixer_close(handle);
+				return true;
+			}
+		}
+	}
+	
+	snd_mixer_close(handle);
+	return false;
+}
+
 /* Linux initialization - try backends in order of preference */
-static bool linuxInit(void) {
+static bool linuxInit(const char *mixerName) {
 #ifdef HAVE_PULSEAUDIO
 	/* Try libpulse first */
 	if (pulseaudioInit()) {
@@ -559,9 +630,8 @@ static bool linuxInit(void) {
 		return true;
 	}
 	
-	/* Fall back to ALSA */
-	testVol = alsaGetVolume();
-	if (testVol >= 0) {
+	/* Fall back to ALSA - init with configured or auto-detected mixer */
+	if (alsaInit(mixerName)) {
 		activeBackend = BACKEND_ALSA;
 		return true;
 	}
@@ -605,6 +675,9 @@ static void linuxDestroy(void) {
 		pulseaudioDestroy();
 	}
 #endif
+	/* Free ALSA mixer name */
+	free(alsaMixerName);
+	alsaMixerName = NULL;
 }
 
 #endif /* __linux__ */
@@ -615,13 +688,15 @@ static void linuxDestroy(void) {
  * ============================================================================
  */
 
-bool BarSystemVolumeInit(void) {
+bool BarSystemVolumeInit(const char *alsaMixer) {
 #ifdef __APPLE__
+	(void)alsaMixer;  /* unused on macOS */
 	return macosInit();
 #elif defined(__linux__)
-	return linuxInit();
+	return linuxInit(alsaMixer);
 #else
 	/* Unsupported platform */
+	(void)alsaMixer;
 	return false;
 #endif
 }

@@ -1,3 +1,84 @@
+Release 2.2.4
+
+- Refactored playback thread join logic and improved cleanup handling
+
+Release 2.2.3
+
+- Fixed 15-16 second skip delay on Linux/Ubuntu
+- Fixed audio buffer drain on skip/disconnect
+- Fixed audio playback on song transitions
+- Fixed ARM64 build with BLAS/LAPACK dependencies
+- Fixed macOS pthread compatibility
+
+Release 2.2.2
+
+- Added WebSocket auto-reconnect with exponential backoff
+- Unified startup info printing
+- Fixed build dependencies and compiler warnings
+
+Release 2.2.1
+
+- Fixed slow exit on Ubuntu/Linux
+- Fixed segfault when station name is NULL
+- Fixed NULL pointer bugs and POSIX function warnings
+- Improved quit handling throughout player thread
+- Added timestamps to debug output
+
+Release 2.2.0
+
+- Fixed station_display_name_overrides for new/renamed stations
+
+Release 2.1.6
+
+- Fixed macOS web mode with fork+exec relaunch for CoreAudio compatibility
+- Fixed fscanf return value warning
+
+Release 2.1.5
+
+- Added station display name override feature
+
+Release 2.1.4
+
+- Switched digital volume control from FFmpeg to miniaudio
+- Added configurable system volume gain
+- Optimized playback code and improved compile time
+
+Release 2.1.3
+
+- Fixed usleep implicit declaration warnings
+
+Release 2.1.2
+
+- Migrated audio backend from FFmpeg to miniaudio
+- Fixed quit hang bugs
+
+Release 2.1.1
+
+- Fixed daemon mode startup with system volume init
+
+Release 2.1.0
+
+- Fixed race conditions and assertion failures
+- Fixed CLI output pollution from WebSocket requests
+- Fixed memory corruption in song explanation feature
+- Added mutex lock assertions and thread safety documentation
+
+Release 2.0.0
+
+- Added system volume control support via native ALSA API
+- Added Pandora disconnect/reconnect commands
+- Unicast explain/upcoming responses to requesting client only
+
+Release 1.2.1
+
+- Added WebSocket server and web UI for remote control
+- Added responsive web UI with mobile viewport support
+- Added station management (create, rename, delete, QuickMix)
+- Added song rating and feedback management
+- Added CLI-to-WebUI state synchronization
+- Added playback manager thread for CLI/WebSocket independence
+- Fixed various deadlocks and synchronization issues
+
 Release 2024.12.21
 
 - Improved network error retrying

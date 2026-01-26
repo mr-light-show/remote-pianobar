@@ -4,18 +4,13 @@ on:
   release:
     types: [published]
   workflow_dispatch:  # Allow manual triggers
+  push:
+    branches: [main]  # Warm caches on main
 
 jobs:
-  build-ubuntu:
-    name: Build Ubuntu 24.04 Package (${{ matrix.arch }})
+  build-amd64:
+    name: Build Linux Package (noble_amd64)
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-          - arch: arm64
-            platform: linux/arm64
     
     steps:
       - name: Checkout code
@@ -29,33 +24,34 @@ jobs:
           sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
       
-      - name: Set up QEMU for ARM64
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-      
-      - name: Cache and install APT packages (AMD64)
-        if: matrix.arch == 'amd64'
+      - name: Cache and install APT packages
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
           packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check libblas-dev liblapack-dev
           version: 2.0
       
-      - name: Setup Node.js with caching (AMD64)
-        if: matrix.arch == 'amd64'
+      - name: Setup Node.js with caching
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: webui/package-lock.json
         
-      - name: Build pianobar and Web UI (AMD64)
-        if: matrix.arch == 'amd64'
+      - name: Build pianobar and Web UI
         run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
+          
+          # Enable debug logging for pre-release builds
+          DEBUG_FLAGS=""
+          if [[ "$VERSION" == *"pre"* ]]; then
+            echo "Pre-release build detected, enabling debug logging"
+            DEBUG_FLAGS="-DHAVE_DEBUGLOG"
+          fi
+          
           # Build pianobar
-          make WEBSOCKET=1 clean
-          make WEBSOCKET=1
+          make WEBSOCKET=1 CFLAGS="$DEBUG_FLAGS" clean
+          make WEBSOCKET=1 CFLAGS="$DEBUG_FLAGS"
           
           # Build Web UI
           cd webui
@@ -63,42 +59,6 @@ jobs:
           npm run build
           cd ..
       
-      - name: Build in ARM64 container (ARM64)
-        if: matrix.arch == 'arm64'
-        run: |
-          # Build using Docker with ARM64 Ubuntu image
-          docker run --platform ${{ matrix.platform }} --rm \
-            -v $(pwd):/workspace \
-            -w /workspace \
-            ubuntu:24.04 \
-            bash -c "
-              apt-get update && \
-              apt-get install -y \
-                build-essential \
-                pkg-config \
-                libao-dev \
-                libcurl4-openssl-dev \
-                libgcrypt20-dev \
-                libjson-c-dev \
-                libavcodec-dev \
-                libavformat-dev \
-                libavfilter-dev \
-                libavutil-dev \
-                libswresample-dev \
-                libwebsockets-dev \
-                libasound2-dev \
-                check \
-                libblas-dev \
-                liblapack-dev \
-                nodejs \
-                npm && \
-              make WEBSOCKET=1 clean && \
-              make WEBSOCKET=1 && \
-              cd webui && \
-              npm ci && \
-              npm run build
-            "
-          
       - name: Create package structure
         run: |
           mkdir -p package/usr/local/bin
@@ -163,7 +123,7 @@ jobs:
           Version: $VERSION
           Section: sound
           Priority: optional
-          Architecture: ${{ matrix.arch }}
+          Architecture: amd64
           Depends: $DEPENDS
           Maintainer: Remote Pianobar <remote-pianobar@github.com>
           Homepage: https://github.com/mr-light-show/remote-pianobar
@@ -209,13 +169,214 @@ jobs:
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"  # Strip leading 'v' if present
-          dpkg-deb --build package remote-pianobar_${{ matrix.arch }}.deb
+          dpkg-deb --build package remote-pianobar_noble_amd64.deb
           
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
           files: remote-pianobar_*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-arm64:
+    name: Build ARM64 Package (${{ matrix.pkg_name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - docker_image: "bookworm"
+            pkg_name: "bookworm"
+          - docker_image: "trixie"
+            pkg_name: "trixie"
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Update version from tag
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"  # Strip leading 'v' if present
+          echo "Updating version to: $VERSION"
+          sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
+          grep VERSION src/config.h
+      
+      - name: Set up QEMU for ARM64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      
+      - name: Cache APT packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-arm64-${{ matrix.pkg_name }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            apt-arm64-${{ matrix.pkg_name }}-
+      
+      - name: Build pianobar and Web UI
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
+          
+          # Enable debug logging for pre-release builds
+          DEBUG_FLAGS=""
+          if [[ "$VERSION" == *"pre"* ]]; then
+            echo "Pre-release build detected, enabling debug logging"
+            DEBUG_FLAGS="-DHAVE_DEBUGLOG"
+          fi
+          
+          mkdir -p ~/apt-cache
+          docker run --platform linux/arm64 --rm \
+            -v $(pwd):/workspace \
+            -v ~/apt-cache:/var/cache/apt/archives \
+            -w /workspace \
+            -e DEBUG_FLAGS="$DEBUG_FLAGS" \
+            debian:${{ matrix.docker_image }} \
+            bash -c "
+              apt-get update && \
+              apt-get install -y \
+                build-essential \
+                pkg-config \
+                libao-dev \
+                libcurl4-openssl-dev \
+                libgcrypt20-dev \
+                libjson-c-dev \
+                libavcodec-dev \
+                libavformat-dev \
+                libavfilter-dev \
+                libavutil-dev \
+                libswresample-dev \
+                libwebsockets-dev \
+                libasound2-dev \
+                check \
+                libblas-dev \
+                liblapack-dev \
+                nodejs \
+                npm && \
+              make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" clean && \
+              make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" && \
+              cd webui && \
+              npm ci && \
+              npm run build
+            "
+      
+      - name: Fix APT cache permissions
+        run: |
+          sudo rm -f ~/apt-cache/lock
+          sudo rm -rf ~/apt-cache/partial
+          sudo chown -R $(id -u):$(id -g) ~/apt-cache || true
+      
+      - name: Create package structure
+        run: |
+          mkdir -p package/usr/local/bin
+          mkdir -p package/usr/local/share/pianobar/webui
+          mkdir -p package/usr/local/share/doc/pianobar
+          mkdir -p package/usr/local/share/man/man1
+          mkdir -p package/DEBIAN
+          
+          # Copy binary
+          cp pianobar package/usr/local/bin/
+          
+          # Copy web UI
+          cp -r dist/webui/* package/usr/local/share/pianobar/webui/
+          
+          # Copy documentation
+          cp README.rst package/usr/local/share/doc/pianobar/
+          cp config.md package/usr/local/share/doc/pianobar/
+          cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
+          cp README_TESTING.md package/usr/local/share/doc/pianobar/
+          cp -r contrib package/usr/local/share/doc/pianobar/
+          
+          # Copy man page
+          cp contrib/pianobar.1 package/usr/local/share/man/man1/
+          
+      - name: Create Debian control file
+        run: |
+          # Detect dependencies by running ldd inside ARM64 container
+          echo "=== Detecting library dependencies ==="
+          
+          DEPS=$(docker run --platform linux/arm64 --rm \
+            -v $(pwd):/workspace \
+            -v ~/apt-cache:/var/cache/apt/archives \
+            -w /workspace \
+            debian:${{ matrix.docker_image }} \
+            bash -c "ldd pianobar | grep '=>' || true")
+          echo "$DEPS"
+          
+          AVCODEC=$(echo "$DEPS" | grep libavcodec | sed -n 's/.*libavcodec\.so\.\([0-9]*\).*/libavcodec\1/p')
+          AVFORMAT=$(echo "$DEPS" | grep libavformat | sed -n 's/.*libavformat\.so\.\([0-9]*\).*/libavformat\1/p')
+          AVFILTER=$(echo "$DEPS" | grep libavfilter | sed -n 's/.*libavfilter\.so\.\([0-9]*\).*/libavfilter\1/p')
+          AVUTIL=$(echo "$DEPS" | grep libavutil | sed -n 's/.*libavutil\.so\.\([0-9]*\).*/libavutil\1/p')
+          SWRESAMPLE=$(echo "$DEPS" | grep libswresample | sed -n 's/.*libswresample\.so\.\([0-9]*\).*/libswresample\1/p')
+          WEBSOCKETS=$(echo "$DEPS" | grep libwebsockets | sed -n 's/.*libwebsockets\.so\.\([0-9]*\).*/libwebsockets\1/p')
+          
+          echo "Detected: $AVCODEC $AVFORMAT $AVFILTER $AVUTIL $SWRESAMPLE $WEBSOCKETS"
+          
+          DEPENDS="libao4, libcurl4, libgcrypt20, libjson-c5"
+          [ -n "$AVCODEC" ] && DEPENDS="$DEPENDS, $AVCODEC"
+          [ -n "$AVFORMAT" ] && DEPENDS="$DEPENDS, $AVFORMAT"
+          [ -n "$AVFILTER" ] && DEPENDS="$DEPENDS, $AVFILTER"
+          [ -n "$AVUTIL" ] && DEPENDS="$DEPENDS, $AVUTIL"
+          [ -n "$SWRESAMPLE" ] && DEPENDS="$DEPENDS, $SWRESAMPLE"
+          [ -n "$WEBSOCKETS" ] && DEPENDS="$DEPENDS, $WEBSOCKETS"
+          
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"  # Strip leading 'v' if present
+          
+          cat > package/DEBIAN/control << EOF
+          Package: remote-pianobar
+          Version: $VERSION
+          Section: sound
+          Priority: optional
+          Architecture: arm64
+          Depends: $DEPENDS
+          Maintainer: Remote Pianobar <remote-pianobar@github.com>
+          Homepage: https://github.com/mr-light-show/remote-pianobar
+          Description: Remote Pianobar - Console-based Pandora client with remote control
+           Pianobar is a free/open-source, console-based client for Pandora.
+           Remote Pianobar enables building custom UIs (web, mobile, desktop) with remote control.
+           .
+           Features:
+            - Play and manage stations
+            - Rate songs and explain why they were selected
+            - WebSocket API for custom UIs
+            - Modern web interface included
+            - Remote control via WebSocket
+          EOF
+          
+      - name: Create post-install script
+        run: |
+          cat > package/DEBIAN/postinst << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          echo "Remote Pianobar installed successfully!"
+          echo ""
+          echo "To configure pianobar, create ~/.config/pianobar/config"
+          echo "Example configuration: /usr/local/share/doc/pianobar/contrib/config-example"
+          echo ""
+          echo "For WebSocket/Web UI setup, see:"
+          echo "  /usr/local/share/doc/pianobar/README.rst"
+          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo ""
+          echo "Web UI files are located at: /usr/local/share/pianobar/webui"
+          
+          exit 0
+          EOF
+          
+          chmod 755 package/DEBIAN/postinst
+          
+      - name: Build .deb package
+        run: |
+          dpkg-deb --build package remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
+          
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -268,8 +429,18 @@ jobs:
       
       - name: Build Remote Pianobar
         run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION#v}"
+          
+          # Enable debug logging for pre-release builds
+          DEBUG_FLAGS=""
+          if [[ "$VERSION" == *"pre"* ]]; then
+            echo "Pre-release build detected, enabling debug logging"
+            DEBUG_FLAGS="-DHAVE_DEBUGLOG"
+          fi
+          
           make WEBSOCKET=1 clean
-          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED $DEBUG_FLAGS"
           
       - name: Build Web UI
         run: |
@@ -431,4 +602,3 @@ jobs:
           files: remote-pianobar_*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

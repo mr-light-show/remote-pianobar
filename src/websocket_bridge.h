@@ -33,6 +33,10 @@ THE SOFTWARE.
 bool BarIsWebOnlyMode(const BarApp_t *app);
 bool BarShouldSkipCliOutput(const BarApp_t *app);
 
+/* Silent mode - suppresses CLI output during WebSocket action dispatch */
+void BarWsSetSilentMode(bool silent);
+bool BarWsIsSilentMode(void);
+
 /* Event broadcasts */
 void BarWsBroadcastVolume(BarApp_t *app);
 void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation);
