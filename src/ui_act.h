@@ -73,6 +73,6 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason);
 /* Transform station if shared (for WebSocket use) */
 int BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
-/* Silent version of BarTransformIfShared for WebSocket thread */
-int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station, char **errorMsg);
+/* Logged version of BarTransformIfShared for WebSocket thread */
+int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 

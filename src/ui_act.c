@@ -107,11 +107,10 @@ int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	return 1;
 }
 
-/*	Silent version of BarTransformIfShared for WebSocket thread
- *	Does not write to terminal (no BarUiMsg calls)
- *	Returns error message via errorMsg parameter
+/*	Logged version of BarTransformIfShared for WebSocket thread
+ *	Prints action to stdout/log
  */
-int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station, char **errorMsg) {
+int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 
@@ -120,8 +119,8 @@ int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station, char **error
 	/* shared stations must be transformed */
 	if (!station->isCreator) {
 		debugPrint(DEBUG_WEBSOCKET, "Transforming shared station...\n");
-		if (!BarWsPianoCall (app, PIANO_REQUEST_TRANSFORM_STATION, station,
-				&pRet, &wRet, errorMsg)) {
+		if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
+				"Transforming station", &pRet, &wRet)) {
 			return 0;
 		}
 	}
@@ -359,16 +358,13 @@ BarUiActCallback(BarUiActExplain) {
 		BarUiMsg (&app->settings, MSG_INFO, "Receiving explanation... ");
 		callSuccess = BarUiActDefaultPianoCall(PIANO_REQUEST_EXPLAIN, &reqData);
 	} else {
-		/* WebSocket request - use silent API call */
+		/* WebSocket request - use logged API call */
+		callSuccess = BarUiPianoCallLogged(app, PIANO_REQUEST_EXPLAIN, &reqData,
+				"Receiving explanation", &pRet, &wRet);
 		#ifdef WEBSOCKET_ENABLED
-		char *errorMsg = NULL;
-		callSuccess = BarWsPianoCall(app, PIANO_REQUEST_EXPLAIN, &reqData, &pRet, &wRet, &errorMsg);
-		if (!callSuccess && errorMsg) {
-			BarSocketIoEmitError("song.explain", errorMsg);
-			free(errorMsg);
+		if (!callSuccess) {
+			BarSocketIoEmitError("song.explain", "Failed to receive explanation");
 		}
-		#else
-		callSuccess = false;
 		#endif
 	}
 
@@ -635,6 +631,9 @@ BarUiActCallback(BarUiActSelectStation) {
 	PianoStation_t *newStation = BarUiSelectStation (app, BarStateGetStationList(app),
 			"Select station: ", NULL, app->settings.autoselect);
 	if (newStation != NULL) {
+		/* Clear saved station - user made explicit choice */
+		free(app->lastStationId);
+		app->lastStationId = NULL;
 		BarStateSetNextStation(app, newStation);
 		drainPlaylist (app);
 	}
@@ -773,6 +772,11 @@ BarUiActCallback(BarUiActQuit) {
  *	@param reason "user" for manual stop, "idle_timeout" for pause timeout
  */
 void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
+	/* Save station ID for auto-resume on reconnect */
+	PianoStation_t *curStation = BarStateGetCurrentStation(app);
+	free(app->lastStationId);
+	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
+	
 	/* Stop current playback */
 	BarUiDoSkipSong(&app->player);
 	
@@ -1228,6 +1232,17 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	
 	/* Broadcast updated stations to WebSocket clients */
 	BarWsBroadcastStations(app);
+	
+	/* Auto-resume last station if saved and no station explicitly pending */
+	if (app->lastStationId && BarStateGetNextStation(app) == NULL) {
+		PianoStation_t *station = BarStateFindStationById(app, app->lastStationId);
+		if (station) {
+			BarUiMsg(&app->settings, MSG_INFO, "Resuming station: %s\n", station->name);
+			BarStateSetNextStation(app, station);
+		}
+		free(app->lastStationId);
+		app->lastStationId = NULL;
+	}
 	
 	BarUiMsg(&app->settings, MSG_INFO, "Reconnected to Pandora.\n");
 }

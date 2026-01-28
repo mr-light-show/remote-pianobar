@@ -45,6 +45,7 @@ typedef struct {
 	sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
+	char *lastStationId;  /* Station ID to auto-resume after reconnect */
 	
 	/* WebSocket support (conditional compilation) */
 	#ifdef WEBSOCKET_ENABLED

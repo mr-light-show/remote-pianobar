@@ -349,10 +349,7 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 						PianoErrorToStr (pRetLocal));
 				goto cleanup;
 			} else {
-				/* Suppress "Ok." output during WebSocket action dispatch */
-				if (!BarWsIsSilentMode()) {
-					BarUiMsg (&app->settings, MSG_NONE, "Ok.\n");
-				}
+				BarUiMsg (&app->settings, MSG_NONE, "Ok.\n");
 				ret = true;
 			}
 		}
@@ -369,90 +366,14 @@ cleanup:
 	return ret;
 }
 
-/*	Silent version of BarUiPianoCall for WebSocket thread
- *	Does not write to terminal (no BarUiMsg calls)
- *	Returns error message via errorMsg parameter
+/*	Logged version of BarUiPianoCall for WebSocket handlers
+ *	Prints action name before calling API
  */
-bool BarWsPianoCall (BarApp_t * const app, const PianoRequestType_t type,
-		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet,
-		char **errorMsg) {
-	PianoReturn_t pRetLocal = PIANO_RET_OK;
-	CURLcode wRetLocal = CURLE_OK;
-	bool ret = false;
-
-	/* repeat as long as there are http requests to do */
-	do {
-		PianoRequest_t req = { .data = data, .responseData = NULL };
-
-		pRetLocal = PianoRequest (&app->ph, &req, type);
-		if (pRetLocal != PIANO_RET_OK) {
-			if (errorMsg) {
-				*errorMsg = strdup(PianoErrorToStr (pRetLocal));
-			}
-			debugPrint(DEBUG_WEBSOCKET, "Piano API Error: %s\n",
-					PianoErrorToStr (pRetLocal));
-			goto cleanup;
-		}
-
-		wRetLocal = BarPianoHttpRequest (app->http, &app->settings, &req);
-		if (wRetLocal == CURLE_ABORTED_BY_CALLBACK) {
-			if (errorMsg) {
-				*errorMsg = strdup("Request interrupted");
-			}
-			debugPrint(DEBUG_WEBSOCKET, "Request interrupted\n");
-			goto cleanup;
-		} else if (wRetLocal != CURLE_OK) {
-			if (errorMsg) {
-				*errorMsg = strdup(curl_easy_strerror (wRetLocal));
-			}
-			debugPrint(DEBUG_WEBSOCKET, "Network error: %s\n",
-					curl_easy_strerror (wRetLocal));
-			goto cleanup;
-		}
-
-		pRetLocal = PianoResponse (&app->ph, &req);
-		if (pRetLocal != PIANO_RET_CONTINUE_REQUEST) {
-			/* checking for request type avoids infinite loops */
-			if (pRetLocal == PIANO_RET_P_INVALID_AUTH_TOKEN &&
-					type != PIANO_REQUEST_LOGIN) {
-				/* reauthenticate */
-				PianoRequestDataLogin_t reqData;
-				reqData.user = app->settings.username;
-				reqData.password = app->settings.password;
-				reqData.step = 0;
-
-				debugPrint(DEBUG_WEBSOCKET, "Reauthentication required...\n");
-				if (!BarWsPianoCall (app, PIANO_REQUEST_LOGIN, &reqData,
-						&pRetLocal, &wRetLocal, errorMsg)) {
-					goto cleanup;
-				} else {
-					/* try again */
-					pRetLocal = PIANO_RET_CONTINUE_REQUEST;
-					debugPrint(DEBUG_WEBSOCKET, "Trying again...\n");
-				}
-			} else if (pRetLocal != PIANO_RET_OK) {
-				if (errorMsg) {
-					*errorMsg = strdup(PianoErrorToStr (pRetLocal));
-				}
-				debugPrint(DEBUG_WEBSOCKET, "Error: %s\n",
-						PianoErrorToStr (pRetLocal));
-				goto cleanup;
-			} else {
-				debugPrint(DEBUG_WEBSOCKET, "Ok.\n");
-				ret = true;
-			}
-		}
-
-cleanup:
-		/* persistent data is stored in req.data */
-		free (req.responseData);
-		PianoDestroyRequest (&req);
-	} while (pRetLocal == PIANO_RET_CONTINUE_REQUEST);
-
-	*pRet = pRetLocal;
-	*wRet = wRetLocal;
-
-	return ret;
+bool BarUiPianoCallLogged (BarApp_t * const app, const PianoRequestType_t type,
+		void * const data, const char *actionName,
+		PianoReturn_t * const pRet, CURLcode * const wRet) {
+	BarUiMsg (&app->settings, MSG_INFO, "%s... ", actionName);
+	return BarUiPianoCall (app, type, data, pRet, wRet);
 }
 
 /*	Station sorting functions */

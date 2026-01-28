@@ -983,6 +983,7 @@ int main (int argc, char **argv) {
 	curl_easy_cleanup (app.http);
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);
+	free (app.lastStationId);
 	
 	/* Cleanup WebSocket server */
 	BarWsDestroy(&app);
