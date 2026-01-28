@@ -23,6 +23,23 @@ export class ModalBase extends LitElement {
     this.dispatchEvent(new CustomEvent('cancel'));
   }
   
+  private _resettingState = false;
+  
+  /**
+   * Reset state when modal opens (transitions from closed to open).
+   * This ensures multi-step modals always start from the first step.
+   */
+  updated(changedProperties: Map<string, unknown>) {
+    if (changedProperties.has('open') && this.open && changedProperties.get('open') === false) {
+      // Prevent re-entry if onCancel() modifies properties that trigger another update
+      if (!this._resettingState) {
+        this._resettingState = true;
+        this.onCancel();
+        this._resettingState = false;
+      }
+    }
+  }
+  
   protected renderLoading(message = 'Loading...') {
     return html`<div class="loading">${message}</div>`;
   }

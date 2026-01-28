@@ -302,5 +302,87 @@ describe('RenameStationModal', () => {
       expect(stationList).toBeTruthy();
     });
   });
+
+  describe('state reset on reopen', () => {
+    it('resets to initial state when reopening after successful action', async () => {
+      const element: RenameStationModal = await fixture(html`
+        <rename-station-modal open .stations=${mockStations}></rename-station-modal>
+      `);
+
+      // Select station and go to enter-name stage
+      const stationItems = element.shadowRoot!.querySelectorAll('.station-item');
+      const rockStation = Array.from(stationItems).find(item =>
+        item.textContent?.includes('Rock Station')
+      );
+      const radio = rockStation!.querySelector('input[type="radio"]') as HTMLInputElement;
+      radio.click();
+      await element.updateComplete;
+
+      const nextButton = element.shadowRoot!.querySelector('.button-confirm') as HTMLButtonElement;
+      nextButton.click();
+      await element.updateComplete;
+
+      // Verify we're on the enter-name stage
+      const nameInput = element.shadowRoot!.querySelector('.name-input') as HTMLInputElement;
+      expect(nameInput).toBeTruthy();
+
+      // Enter a new name and click Rename (simulate successful action)
+      nameInput.value = 'New Rock Station';
+      nameInput.dispatchEvent(new Event('input'));
+      await element.updateComplete;
+
+      const renameButton = element.shadowRoot!.querySelector('.button-confirm') as HTMLButtonElement;
+      renameButton.click();
+      await element.updateComplete;
+
+      // Close modal (simulating parent handling the event)
+      element.open = false;
+      await element.updateComplete;
+
+      // Reopen modal
+      element.open = true;
+      await element.updateComplete;
+      // Wait for state reset to complete (onCancel sets title which schedules another update)
+      await element.updateComplete;
+
+      // Should be back on the first stage (station selection)
+      const title = element.shadowRoot!.querySelector('.modal-title');
+      expect(title!.textContent).toBe('Rename Station');
+
+      const stationList = element.shadowRoot!.querySelector('.station-list');
+      expect(stationList).toBeTruthy();
+
+      // Name input should not be visible (we're on step 1)
+      const nameInputAfterReopen = element.shadowRoot!.querySelector('.name-input');
+      expect(nameInputAfterReopen).toBeFalsy();
+    });
+
+    it('resets selected station when reopening', async () => {
+      const element: RenameStationModal = await fixture(html`
+        <rename-station-modal open .stations=${mockStations}></rename-station-modal>
+      `);
+
+      // Select a station
+      const radio = element.shadowRoot!.querySelector('input[type="radio"]') as HTMLInputElement;
+      radio.click();
+      await element.updateComplete;
+
+      // Next button should be enabled
+      let nextButton = element.shadowRoot!.querySelector('.button-confirm') as HTMLButtonElement;
+      expect(nextButton.disabled).toBe(false);
+
+      // Close and reopen
+      element.open = false;
+      await element.updateComplete;
+      element.open = true;
+      await element.updateComplete;
+      // Wait for state reset to complete
+      await element.updateComplete;
+
+      // Next button should be disabled again (no station selected)
+      nextButton = element.shadowRoot!.querySelector('.button-confirm') as HTMLButtonElement;
+      expect(nextButton.disabled).toBe(true);
+    });
+  });
 });
 

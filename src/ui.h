@@ -54,8 +54,8 @@ void BarUiStartEventCmd (const BarSettings_t *, const char *,
 		PianoStation_t *, PianoReturn_t, CURLcode);
 bool BarUiPianoCall (BarApp_t * const, const PianoRequestType_t,
 		void *, PianoReturn_t *, CURLcode *);
-bool BarWsPianoCall (BarApp_t * const, const PianoRequestType_t,
-		void *, PianoReturn_t *, CURLcode *, char **);
+bool BarUiPianoCallLogged (BarApp_t * const, const PianoRequestType_t,
+		void *, const char *, PianoReturn_t *, CURLcode *);
 void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song);
 void BarUiCustomFormat (char *dest, size_t destSize, const char *format,
 		const char *formatChars, const char **formatVals);

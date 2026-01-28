@@ -26,6 +26,7 @@ export class QuickMixModal extends ModalBase {
   }
   
   updated(changedProperties: Map<string, any>) {
+    super.updated(changedProperties);
     if (changedProperties.has('stations') || changedProperties.has('open')) {
       this.initializeSelection();
     }
