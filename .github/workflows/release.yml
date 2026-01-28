@@ -4,8 +4,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:  # Allow manual triggers
-  push:
-    branches: [main]  # Warm caches on main
 
 jobs:
   build-amd64:
@@ -207,14 +205,6 @@ jobs:
         with:
           platforms: arm64
       
-      - name: Cache APT packages
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-cache
-          key: apt-arm64-${{ matrix.pkg_name }}-${{ hashFiles('.github/workflows/release.yml') }}
-          restore-keys: |
-            apt-arm64-${{ matrix.pkg_name }}-
-      
       - name: Build pianobar and Web UI
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
@@ -227,10 +217,8 @@ jobs:
             DEBUG_FLAGS="-DHAVE_DEBUGLOG"
           fi
           
-          mkdir -p ~/apt-cache
           docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
-            -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
             -e DEBUG_FLAGS="$DEBUG_FLAGS" \
             debian:${{ matrix.docker_image }} \
@@ -261,12 +249,6 @@ jobs:
               npm ci && \
               npm run build
             "
-      
-      - name: Fix APT cache permissions
-        run: |
-          sudo rm -f ~/apt-cache/lock
-          sudo rm -rf ~/apt-cache/partial
-          sudo chown -R $(id -u):$(id -g) ~/apt-cache || true
       
       - name: Create package structure
         run: |
@@ -299,7 +281,6 @@ jobs:
           
           DEPS=$(docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
-            -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
             debian:${{ matrix.docker_image }} \
             bash -c "ldd pianobar | grep '=>' || true")
