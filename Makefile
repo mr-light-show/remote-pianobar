@@ -13,7 +13,8 @@ DYNLINK:=0
 CFLAGS?=-O2 -DNDEBUG
 
 # Feature test macros for POSIX/BSD/GNU functions (flock, usleep, clock_gettime, etc.)
-CFLAGS+=-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE
+# Use 'override' so these are always included even when CFLAGS is set on command line
+override CFLAGS+=-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE
 
 ifeq (${CC},cc)
 	OS := $(shell uname)
