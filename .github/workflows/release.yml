@@ -362,6 +362,11 @@ jobs:
   build-macos:
     name: Build macOS 14 Package
     runs-on: macos-14
+    env:
+      # Homebrew paths for M1 (/opt/homebrew) and Intel (/usr/local)
+      PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+      CPATH: /opt/homebrew/include:/usr/local/include
+      LIBRARY_PATH: /opt/homebrew/lib:/usr/local/lib
     
     steps:
       - name: Checkout code
@@ -398,6 +403,8 @@ jobs:
             libwebsockets \
             node \
             create-dmg
+          # Ensure packages are linked (cache may restore Cellar but not symlinks)
+          brew link --overwrite ffmpeg json-c libwebsockets libgcrypt libao || true
       
       - name: Setup Node.js with caching
         uses: actions/setup-node@v4
@@ -410,11 +417,6 @@ jobs:
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"
-          
-          # Set paths for Homebrew (M1 uses /opt/homebrew, Intel uses /usr/local)
-          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-          export CPATH="/opt/homebrew/include:/usr/local/include:$CPATH"
-          export LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:$LIBRARY_PATH"
           
           # Enable debug logging for pre-release builds
           DEBUG_FLAGS=""
