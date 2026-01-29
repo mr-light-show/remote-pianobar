@@ -21,8 +21,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#define _GNU_SOURCE  /* For pthread_timedjoin_np on Linux */
-
 /* Playback state machine - runs in dedicated thread for WebSocket modes */
 
 #include "playback_manager.h"
