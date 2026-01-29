@@ -103,8 +103,8 @@ else ifeq (${OS},Linux)
 	endif
 	# Always link ALSA on Linux (for native API fallback)
 	SYSVOLUME_LDFLAGS+=$(shell $(PKG_CONFIG) --libs alsa)
-	# BLAS/LAPACK for libsphinxbase transitive dependencies (Linux only)
-	BLAS_LAPACK_LDFLAGS:=-lblas -llapack
+	# No BLAS/LAPACK needed (sphinxbase removed)
+	BLAS_LAPACK_LDFLAGS:=
 endif
 
 # WebSocket library flags (unless disabled)

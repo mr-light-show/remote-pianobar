@@ -18,8 +18,6 @@ jobs:
       with:
         packages: libao-dev libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libcurl4-gnutls-dev libgcrypt20-dev libjson-c-dev libpth-dev libasound2-dev libwebsockets-dev pkg-config build-essential
         version: 2.1
-    - name: Install BLAS/LAPACK (not cached due to symlink issues)
-      run: sudo apt-get install -y libblas-dev liblapack-dev
     - name: Build pianobar
       run: make
 
