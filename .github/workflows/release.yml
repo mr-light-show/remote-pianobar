@@ -25,8 +25,8 @@ jobs:
       - name: Cache and install APT packages
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check
-          version: 2.2
+          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check
+          version: 2.3
       
       - name: Setup Node.js with caching
         uses: actions/setup-node@v4
@@ -238,6 +238,8 @@ jobs:
                 libswresample-dev \
                 libwebsockets-dev \
                 libasound2-dev \
+                libblas-dev \
+                liblapack-dev \
                 check \
                 nodejs \
                 npm && \

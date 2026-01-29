@@ -16,8 +16,8 @@ jobs:
     - name: Cache and install APT packages
       uses: awalsh128/cache-apt-pkgs-action@latest
       with:
-        packages: libao-dev libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libcurl4-gnutls-dev libgcrypt20-dev libjson-c-dev libpth-dev libasound2-dev libwebsockets-dev pkg-config build-essential
-        version: 2.1
+        packages: libao-dev libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libcurl4-gnutls-dev libgcrypt20-dev libjson-c-dev libpth-dev libasound2-dev libwebsockets-dev libblas-dev liblapack-dev pkg-config build-essential
+        version: 2.2
     - name: Build pianobar
       run: make
 
