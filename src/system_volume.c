@@ -21,9 +21,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-/* Enable POSIX functions (popen, pclose, usleep) */
-#define _POSIX_C_SOURCE 200809L
-
 #include "system_volume.h"
 #include "debug.h"
 #include <stdio.h>
