@@ -39,11 +39,33 @@ bool BarDaemonWritePidFile(BarApp_t *app);
 /* Remove PID file */
 void BarDaemonRemovePidFile(BarApp_t *app);
 
-/* Check if already running */
+/* Check if already running (legacy PID file method) */
 bool BarDaemonIsRunning(const char *pidFile);
 
-/* Kill a running pianobar instance by reading PID from file */
+/* Kill a running pianobar instance by reading PID from file (legacy) */
 bool BarDaemonKillRunning(const char *pidFile);
+
+/* === New flock-based instance detection === */
+
+/* Get the default lock file path (~/.config/pianobar/pianobar.lock)
+ * Returns a newly allocated string that must be freed by the caller */
+char *BarDaemonGetLockFilePath(void);
+
+/* Try to acquire exclusive lock on the lock file
+ * Returns file descriptor on success (keep open to hold lock), -1 on failure */
+int BarDaemonAcquireLock(void);
+
+/* Read PID from lock file (for killing old instance)
+ * Returns PID on success, -1 on failure */
+pid_t BarDaemonReadLockPid(void);
+
+/* Write current PID to lock file (call after acquiring lock)
+ * Returns true on success */
+bool BarDaemonWriteLockPid(int lockFd);
+
+/* Kill existing instance using lock file PID
+ * Returns true if instance was killed or no instance running */
+bool BarDaemonKillExistingInstance(void);
 
 #endif /* _DAEMON_H */
 

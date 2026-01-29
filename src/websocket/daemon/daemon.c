@@ -20,15 +20,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-/* Must be defined before any includes that might use it */
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE
-#endif
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
-
-/* Include unistd.h first to ensure _POSIX_C_SOURCE takes effect */
 #include <unistd.h>
 
 #include "../../main.h"
@@ -38,12 +29,14 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <time.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <pwd.h>
 
 /* Perform daemonization steps without forking (for relaunched processes) */
 bool BarDaemonizeSteps(BarApp_t *app) {
@@ -262,3 +255,154 @@ bool BarDaemonKillRunning(const char *pidFile) {
 	return false;
 }
 
+/* === New flock-based instance detection === */
+
+/* Get the default lock file path (~/.config/pianobar/pianobar.lock) */
+char *BarDaemonGetLockFilePath(void) {
+	const char *home = getenv("HOME");
+	if (!home) {
+		struct passwd *pw = getpwuid(getuid());
+		if (pw) {
+			home = pw->pw_dir;
+		}
+	}
+	if (!home) {
+		return NULL;
+	}
+	
+	/* Allocate space for path: home + /.config/pianobar/pianobar.lock + null */
+	size_t len = strlen(home) + strlen("/.config/pianobar/pianobar.lock") + 1;
+	char *path = malloc(len);
+	if (!path) {
+		return NULL;
+	}
+	
+	snprintf(path, len, "%s/.config/pianobar/pianobar.lock", home);
+	return path;
+}
+
+/* Try to acquire exclusive lock on the lock file */
+int BarDaemonAcquireLock(void) {
+	char *lockPath = BarDaemonGetLockFilePath();
+	if (!lockPath) {
+		return -1;
+	}
+	
+	/* Open or create the lock file */
+	int fd = open(lockPath, O_RDWR | O_CREAT, 0644);
+	free(lockPath);
+	
+	if (fd < 0) {
+		return -1;
+	}
+	
+	/* Try to acquire exclusive non-blocking lock */
+	if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+		/* Lock failed - another instance holds the lock */
+		close(fd);
+		return -1;
+	}
+	
+	return fd;
+}
+
+/* Read PID from lock file */
+pid_t BarDaemonReadLockPid(void) {
+	char *lockPath = BarDaemonGetLockFilePath();
+	if (!lockPath) {
+		return -1;
+	}
+	
+	FILE *fp = fopen(lockPath, "r");
+	free(lockPath);
+	
+	if (!fp) {
+		return -1;
+	}
+	
+	pid_t pid = -1;
+	if (fscanf(fp, "%d", &pid) != 1) {
+		pid = -1;
+	}
+	fclose(fp);
+	
+	return pid;
+}
+
+/* Write current PID to lock file */
+bool BarDaemonWriteLockPid(int lockFd) {
+	if (lockFd < 0) {
+		return false;
+	}
+	
+	/* Truncate file and write new PID */
+	if (ftruncate(lockFd, 0) < 0) {
+		return false;
+	}
+	if (lseek(lockFd, 0, SEEK_SET) < 0) {
+		return false;
+	}
+	
+	char buf[32];
+	int len = snprintf(buf, sizeof(buf), "%d\n", getpid());
+	if (write(lockFd, buf, len) != len) {
+		return false;
+	}
+	
+	return true;
+}
+
+/* Kill existing instance using lock file PID */
+bool BarDaemonKillExistingInstance(void) {
+	pid_t oldPid = BarDaemonReadLockPid();
+	if (oldPid <= 0) {
+		/* No PID in file or can't read - try to acquire lock anyway */
+		return true;
+	}
+	
+	/* Check if process is still running */
+	errno = 0;
+	if (kill(oldPid, 0) != 0) {
+		/* Process doesn't exist - lock will be released */
+		return true;
+	}
+	
+	fprintf(stderr, "Pianobar already running (PID: %d). Stopping it...\n", (int)oldPid);
+	
+	/* Send SIGTERM for graceful shutdown */
+	if (kill(oldPid, SIGTERM) != 0) {
+		fprintf(stderr, "Failed to send SIGTERM to PID %d\n", (int)oldPid);
+		return false;
+	}
+	
+	/* Wait for process to terminate gracefully (up to 5 seconds) */
+	int wait_count = 0;
+	const int max_wait = 10; /* 10 * 0.5s = 5 seconds */
+	
+	while (wait_count < max_wait) {
+		usleep(500000); /* Wait 0.5 seconds */
+		errno = 0;
+		if (kill(oldPid, 0) != 0) {
+			/* Process terminated */
+			return true;
+		}
+		wait_count++;
+	}
+	
+	/* Process didn't terminate gracefully, force kill */
+	fprintf(stderr, "Process didn't respond to SIGTERM, sending SIGKILL...\n");
+	if (kill(oldPid, SIGKILL) != 0) {
+		return false;
+	}
+	
+	/* Wait a bit more for SIGKILL to take effect */
+	usleep(500000);
+	errno = 0;
+	if (kill(oldPid, 0) != 0) {
+		/* Process terminated */
+		return true;
+	}
+	
+	fprintf(stderr, "Warning: Failed to kill existing instance (PID: %d)\n", (int)oldPid);
+	return false;
+}

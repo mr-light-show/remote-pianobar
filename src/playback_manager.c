@@ -21,10 +21,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-/* Enable POSIX functions (pthread_kill) and BSD/GNU extensions (usleep) */
-#define _GNU_SOURCE  /* For pthread_timedjoin_np */
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
+#define _GNU_SOURCE  /* For pthread_timedjoin_np on Linux */
 
 /* Playback state machine - runs in dedicated thread for WebSocket modes */
 

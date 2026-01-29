@@ -7,14 +7,6 @@
 #define VERSION "dev"
 #endif
 
-/* glibc feature test macros, define _before_ including other files */
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE
-#endif
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
-
 /* ffmpeg/libav quirks detection
  * ffmpeg’s micro versions always start at 100, that’s how we can distinguish
  * ffmpeg and libav */

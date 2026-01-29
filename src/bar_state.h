@@ -23,16 +23,6 @@ THE SOFTWARE.
 
 #pragma once
 
-/* Enable POSIX/GNU functions before ANY includes */
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 200809L
-#endif
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE
-#endif
-#endif
-
 #include "main.h"
 #include <piano.h>
 

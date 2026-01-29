@@ -12,6 +12,9 @@ MANDIR:=${PREFIX}/share/man
 DYNLINK:=0
 CFLAGS?=-O2 -DNDEBUG
 
+# Feature test macros for POSIX/BSD functions (flock, usleep, etc.)
+CFLAGS+=-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE
+
 ifeq (${CC},cc)
 	OS := $(shell uname)
 	ifeq (${OS},Darwin)
