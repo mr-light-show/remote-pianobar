@@ -413,6 +413,11 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION="${VERSION#v}"
           
+          # Set paths for Homebrew (M1 uses /opt/homebrew, Intel uses /usr/local)
+          export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CPATH="/opt/homebrew/include:/usr/local/include:$CPATH"
+          export LIBRARY_PATH="/opt/homebrew/lib:/usr/local/lib:$LIBRARY_PATH"
+          
           # Enable debug logging for pre-release builds
           DEBUG_FLAGS=""
           if [[ "$VERSION" == *"pre"* ]]; then

@@ -154,8 +154,8 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 			/* End of stream */
 			av_frame_free(&newFrame);
 			pFFmpeg->reachedEnd = true;
-			debugPrint(DEBUG_AUDIO, "FFmpeg data source reached EOF at frame %" PRIu64 "\n", 
-			           pFFmpeg->cursor);
+		debugPrint(DEBUG_AUDIO, "FFmpeg data source reached EOF at frame %llu\n", 
+		           (unsigned long long)pFFmpeg->cursor);
 			break;
 		} else if (ret == AVERROR(EAGAIN)) {
 			/* No data available yet - wait for decoder to produce more */
@@ -301,8 +301,8 @@ static ma_result ffmpeg_data_source_init(ffmpeg_data_source_t* pFFmpeg, player_t
 	double durationSecs = av_q2d(player->st->time_base) * (double)player->st->duration;
 	pFFmpeg->totalFrames = (ma_uint64)(durationSecs * pFFmpeg->sampleRate);
 	
-	debugPrint(DEBUG_AUDIO, "FFmpeg data source initialized: %u Hz, %u channels, %" PRIu64 " total frames (%.1f sec)\n",
-	           pFFmpeg->sampleRate, pFFmpeg->channels, pFFmpeg->totalFrames, durationSecs);
+	debugPrint(DEBUG_AUDIO, "FFmpeg data source initialized: %u Hz, %u channels, %llu total frames (%.1f sec)\n",
+	           pFFmpeg->sampleRate, pFFmpeg->channels, (unsigned long long)pFFmpeg->totalFrames, durationSecs);
 	
 	return MA_SUCCESS;
 }
