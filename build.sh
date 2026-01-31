@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Build script for Remote Pianobar
-# Usage: ./build.sh [debug]
+# Usage: ./build.sh [debug <level>]
 
 set -e  # Exit on error
 
@@ -106,11 +106,12 @@ deploy_webui() {
 }
 
 # Function to run pianobar with crash capture only
+# Uses PIANOBAR_DEBUG from environment (set by caller)
 run_with_crash_capture() {
     local timestamp=$(date +%Y%m%d-%H%M%S)
     local crash_file="pianobar-crash-${timestamp}.log"
     
-    echo "Running pianobar with debug output..."
+    echo "Running pianobar with debug level ${PIANOBAR_DEBUG:-0}..."
     echo "  (Crash info will be saved if crash occurs)"
     echo ""
     
@@ -119,7 +120,8 @@ run_with_crash_capture() {
     
     # Run pianobar with debug output - normal CLI interaction
     # Note: pianobar daemonizes, so parent exits immediately
-    PIANOBAR_DEBUG=8 ./pianobar
+    # PIANOBAR_DEBUG is inherited from environment
+    ./pianobar
     local exit_code=$?
     
     # Wait a moment for crash reports to be generated (macOS ReportCrash is async)
@@ -166,9 +168,47 @@ run_with_crash_capture() {
     fi
 }
 
+# Show debug level help
+show_debug_help() {
+    echo "Usage: ./build.sh debug <level>"
+    echo ""
+    echo "Debug levels (can be combined by adding values):"
+    echo ""
+    echo "  1   NETWORK    - Network/API requests and responses"
+    echo "  2   AUDIO      - Audio playback, FFmpeg, miniaudio, memory stats"
+    echo "  4   UI         - User interface events and actions"
+    echo "  8   WEBSOCKET  - WebSocket server messages"
+    echo "  16  WS_PROGRESS - WebSocket progress updates (very noisy)"
+    echo ""
+    echo "Common combinations:"
+    echo "  2   - Audio only (memory leak debugging)"
+    echo "  8   - WebSocket only"
+    echo "  10  - Audio + WebSocket (2+8)"
+    echo "  15  - All except progress (1+2+4+8)"
+    echo "  31  - Everything (1+2+4+8+16)"
+    echo ""
+    echo "Example: ./build.sh debug 2"
+    exit 1
+}
+
 # Check if debug mode is requested
 if [ "$1" = "debug" ]; then
+    # Require debug level parameter
+    if [ -z "$2" ]; then
+        show_debug_help
+    fi
+    
+    # Validate debug level is a number
+    if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: Debug level must be a number"
+        echo ""
+        show_debug_help
+    fi
+    
+    DEBUG_LEVEL="$2"
+    
     echo "=== Building Remote Pianobar with Debug support ==="
+    echo "Debug level: $DEBUG_LEVEL"
     echo ""
     
     # Clean previous build
@@ -182,9 +222,6 @@ if [ "$1" = "debug" ]; then
     echo ""
     
     echo "✓ Debug build complete!"
-    echo ""
-    echo "Debug output enabled. Run with:"
-    echo "  PIANOBAR_DEBUG=8 ./pianobar"
     echo ""
 else
     echo "=== Building Remote Pianobar ==="
@@ -254,8 +291,9 @@ fi
 
 # If debug mode, run with crash capture
 if [ "$1" = "debug" ]; then
-    echo "Starting pianobar with debug output and crash capture..."
+    echo "Starting pianobar with debug level $DEBUG_LEVEL and crash capture..."
     echo ""
+    export PIANOBAR_DEBUG="$DEBUG_LEVEL"
     run_with_crash_capture
 else    
     echo "Starting pianobar..."
