@@ -12,6 +12,10 @@ MANDIR:=${PREFIX}/share/man
 DYNLINK:=0
 CFLAGS?=-O2 -DNDEBUG
 
+# Feature test macros for POSIX/BSD/GNU functions (flock, usleep, clock_gettime, etc.)
+# Use 'override' so these are always included even when CFLAGS is set on command line
+override CFLAGS+=-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE
+
 ifeq (${CC},cc)
 	OS := $(shell uname)
 	ifeq (${OS},Darwin)
@@ -99,7 +103,7 @@ else ifeq (${OS},Linux)
 	endif
 	# Always link ALSA on Linux (for native API fallback)
 	SYSVOLUME_LDFLAGS+=$(shell $(PKG_CONFIG) --libs alsa)
-	# BLAS/LAPACK for libsphinxbase transitive dependencies (Linux only)
+	# BLAS/LAPACK for libsphinxbase transitive dependencies (pulled in by FFmpeg/PulseAudio on Ubuntu)
 	BLAS_LAPACK_LDFLAGS:=-lblas -llapack
 endif
 

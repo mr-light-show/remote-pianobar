@@ -727,33 +727,8 @@ int main (int argc, char **argv) {
 	BarSettingsInit (&app.settings);
 	BarSettingsRead (&app.settings);
 
-	/* Check if pianobar is already running in web mode and kill it if so */
-#ifdef WEBSOCKET_ENABLED
-	if (app.settings.uiMode == BAR_UI_MODE_WEB && app.settings.pidFile) {
-		if (BarDaemonIsRunning(app.settings.pidFile)) {
-			/* Read PID for message */
-			FILE *fp = fopen(app.settings.pidFile, "r");
-			pid_t old_pid = 0;
-			if (fp) {
-				int scanned = fscanf(fp, "%d", &old_pid);
-				(void)scanned;  /* Ignore scan result - just for message */
-				fclose(fp);
-			}
-			
-			fprintf(stderr, "Pianobar is already running (PID: %d). Stopping it and starting a new instance...\n", 
-			        (int)old_pid);
-			
-			if (BarDaemonKillRunning(app.settings.pidFile)) {
-				/* Wait a moment for process to fully terminate */
-				usleep(500000); /* 0.5 seconds */
-			} else {
-				fprintf(stderr, "Warning: Failed to kill running instance. Continuing anyway...\n");
-			}
-		}
-	}
-#endif
-
-	/* On macOS with ui_mode=web, relaunch using fork+exec to avoid CoreAudio XPC issues */
+	/* On macOS with ui_mode=web, relaunch using fork+exec to avoid CoreAudio XPC issues.
+	 * Do this BEFORE acquiring lock so the daemon process is the one that holds the lock. */
 #ifdef __APPLE__
 	#ifdef WEBSOCKET_ENABLED
 	if (!launched_as_daemon && app.settings.uiMode == BAR_UI_MODE_WEB) {
@@ -761,6 +736,34 @@ int main (int argc, char **argv) {
 		/* If we get here, relaunch failed - continue anyway */
 	}
 	#endif
+#endif
+
+	/* Check for and kill any existing pianobar instance using flock.
+	 * This happens AFTER relaunch so the daemon process holds the lock. */
+#ifdef WEBSOCKET_ENABLED
+	app.lockFd = -1;
+	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
+		/* Try to acquire the lock */
+		app.lockFd = BarDaemonAcquireLock();
+		if (app.lockFd < 0) {
+			/* Lock held by another instance - kill it and retry */
+			BarDaemonKillExistingInstance();
+			
+			/* Wait for lock to be released, retry multiple times */
+			for (int i = 0; i < 10 && app.lockFd < 0; i++) {
+				usleep(500000); /* 0.5 seconds */
+				app.lockFd = BarDaemonAcquireLock();
+			}
+			
+			if (app.lockFd < 0) {
+				fprintf(stderr, "Error: Could not acquire lock. Another instance may still be running.\n");
+				return 1;
+			}
+		}
+		
+		/* Write our PID to the lock file */
+		BarDaemonWriteLockPid(app.lockFd);
+	}
 #endif
 
 	/* Output UI path and URL before starting in web or both mode
@@ -988,7 +991,13 @@ int main (int argc, char **argv) {
 	/* Cleanup WebSocket server */
 	BarWsDestroy(&app);
 	
-	/* Remove PID file if we created one */
+	/* Release lock file (closes fd which releases flock) */
+	if (app.lockFd >= 0) {
+		close(app.lockFd);
+		app.lockFd = -1;
+	}
+	
+	/* Remove PID file if we created one (user-configured pid_file only) */
 	BarWsRemovePidFile(&app);
 	
 	/* Cleanup system volume control */

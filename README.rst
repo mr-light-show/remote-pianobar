@@ -501,6 +501,20 @@ Create ``~/.config/systemd/user/pianobar.service``:
     # Check status
     systemctl --user status pianobar
 
+**Step 4: Enable lingering for headless systems**
+
+On headless systems (no GUI login), the user's systemd manager only starts after login, which never happens. Enable "lingering" to start the user manager at boot:
+
+.. code:: bash
+
+    # Required for headless systems (e.g., Raspberry Pi without desktop)
+    loginctl enable-linger $USER
+    
+    # Verify lingering is enabled
+    loginctl show-user $USER | grep Linger
+
+Skip this step if you always log in via GUI or SSH before needing pianobar.
+
 **Managing the daemon:**
 
 .. code:: bash

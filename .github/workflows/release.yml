@@ -4,8 +4,6 @@ on:
   release:
     types: [published]
   workflow_dispatch:  # Allow manual triggers
-  push:
-    branches: [main]  # Warm caches on main
 
 jobs:
   build-amd64:
@@ -27,8 +25,8 @@ jobs:
       - name: Cache and install APT packages
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
-          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev check libblas-dev liblapack-dev
-          version: 2.0
+          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check
+          version: 2.3
       
       - name: Setup Node.js with caching
         uses: actions/setup-node@v4
@@ -207,14 +205,6 @@ jobs:
         with:
           platforms: arm64
       
-      - name: Cache APT packages
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-cache
-          key: apt-arm64-${{ matrix.pkg_name }}-${{ hashFiles('.github/workflows/release.yml') }}
-          restore-keys: |
-            apt-arm64-${{ matrix.pkg_name }}-
-      
       - name: Build pianobar and Web UI
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
@@ -227,10 +217,8 @@ jobs:
             DEBUG_FLAGS="-DHAVE_DEBUGLOG"
           fi
           
-          mkdir -p ~/apt-cache
           docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
-            -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
             -e DEBUG_FLAGS="$DEBUG_FLAGS" \
             debian:${{ matrix.docker_image }} \
@@ -250,9 +238,9 @@ jobs:
                 libswresample-dev \
                 libwebsockets-dev \
                 libasound2-dev \
-                check \
                 libblas-dev \
                 liblapack-dev \
+                check \
                 nodejs \
                 npm && \
               make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" clean && \
@@ -261,12 +249,6 @@ jobs:
               npm ci && \
               npm run build
             "
-      
-      - name: Fix APT cache permissions
-        run: |
-          sudo rm -f ~/apt-cache/lock
-          sudo rm -rf ~/apt-cache/partial
-          sudo chown -R $(id -u):$(id -g) ~/apt-cache || true
       
       - name: Create package structure
         run: |
@@ -299,7 +281,6 @@ jobs:
           
           DEPS=$(docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
-            -v ~/apt-cache:/var/cache/apt/archives \
             -w /workspace \
             debian:${{ matrix.docker_image }} \
             bash -c "ldd pianobar | grep '=>' || true")
@@ -383,6 +364,11 @@ jobs:
   build-macos:
     name: Build macOS 14 Package
     runs-on: macos-14
+    env:
+      # Homebrew paths for M1 (/opt/homebrew) and Intel (/usr/local)
+      PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+      CPATH: /opt/homebrew/include:/usr/local/include
+      LIBRARY_PATH: /opt/homebrew/lib:/usr/local/lib
     
     steps:
       - name: Checkout code
@@ -419,6 +405,8 @@ jobs:
             libwebsockets \
             node \
             create-dmg
+          # Ensure packages are linked (cache may restore Cellar but not symlinks)
+          brew link --overwrite ffmpeg json-c libwebsockets libgcrypt libao || true
       
       - name: Setup Node.js with caching
         uses: actions/setup-node@v4
