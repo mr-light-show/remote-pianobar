@@ -56,6 +56,10 @@ THE SOFTWARE.
 #include <libavutil/opt.h>
 #include <libavutil/frame.h>
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
+
 #include "player.h"
 #include "debug.h"
 #include "ui.h"
@@ -63,6 +67,42 @@ THE SOFTWARE.
 
 /* default sample format */
 const enum AVSampleFormat avformat = AV_SAMPLE_FMT_S16;
+
+/*
+ * Memory debugging counters for tracking frame allocations.
+ * Enable with PIANOBAR_DEBUG=2 to see frame allocation stats.
+ */
+static volatile long g_framesAllocated = 0;
+static volatile long g_framesFreed = 0;
+
+/* Get current RSS (Resident Set Size) in KB for memory tracking */
+static long getCurrentRSSKB(void) {
+#ifdef __APPLE__
+	/* Use Mach API on macOS */
+	struct mach_task_basic_info info;
+	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, 
+	              (task_info_t)&info, &count) == KERN_SUCCESS) {
+		return info.resident_size / 1024;
+	}
+	return -1;
+#else
+	/* Linux: read from /proc/self/status */
+	FILE *f = fopen("/proc/self/status", "r");
+	if (!f) return -1;
+	
+	char line[256];
+	long rss = -1;
+	while (fgets(line, sizeof(line), f)) {
+		if (strncmp(line, "VmRSS:", 6) == 0) {
+			sscanf(line + 6, "%ld", &rss);
+			break;
+		}
+	}
+	fclose(f);
+	return rss;  /* Already in KB */
+#endif
+}
 
 /* Forward declarations */
 static bool shouldQuit(player_t * const player);
@@ -136,6 +176,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 				av_frame_free(&pFFmpeg->bufferedFrame);
 				pFFmpeg->bufferedFrame = NULL;
 				pFFmpeg->bufferedFrameOffset = 0;
+				g_framesFreed++;
 			}
 			
 			continue;  /* Check if we need more data */
@@ -185,6 +226,14 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		/* Got a new frame - store it as the buffered frame for consumption */
 		pFFmpeg->bufferedFrame = newFrame;
 		pFFmpeg->bufferedFrameOffset = 0;
+		g_framesAllocated++;
+		
+		/* Log frame stats periodically (every 1000 frames) */
+		if (g_framesAllocated % 1000 == 0) {
+			debugPrint(DEBUG_AUDIO, "Frame stats: alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
+			           g_framesAllocated, g_framesFreed, 
+			           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
+		}
 		/* Loop will consume from it on next iteration */
 	}
 	
@@ -312,6 +361,7 @@ static void ffmpeg_data_source_uninit(ffmpeg_data_source_t* pFFmpeg) {
 	if (pFFmpeg->bufferedFrame != NULL) {
 		av_frame_free(&pFFmpeg->bufferedFrame);
 		pFFmpeg->bufferedFrame = NULL;
+		g_framesFreed++;
 	}
 	ma_data_source_uninit(&pFFmpeg->base);
 	memset(pFFmpeg, 0, sizeof(*pFFmpeg));
@@ -429,6 +479,7 @@ void BarPlayerReset(player_t * const p) {
 	if (p->dataSource.bufferedFrame != NULL) {
 		av_frame_free(&p->dataSource.bufferedFrame);
 		p->dataSource.bufferedFrame = NULL;
+		g_framesFreed++;
 	}
 	
 	/* Reset all fields */
@@ -520,8 +571,10 @@ static bool openStream(player_t * const player) {
 
 	assert(player->url != NULL);
 	if ((ret = avformat_open_input(&player->fctx, player->url, NULL, &options)) < 0) {
+		av_dict_free(&options);
 		softfail("Unable to open audio file");
 	}
+	av_dict_free(&options);  /* Free any remaining options not consumed by FFmpeg */
 
 	if ((ret = avformat_find_stream_info(player->fctx, NULL)) < 0) {
 		softfail("find_stream_info");
@@ -828,23 +881,52 @@ static void cleanupSound(player_t * const player) {
 }
 
 static void finish(player_t * const player) {
+	debugPrint(DEBUG_AUDIO, "RSS at finish() start: %ld KB\n", getCurrentRSSKB());
+	
 	/* Clean up miniaudio sound */
 	cleanupSound(player);
+	debugPrint(DEBUG_AUDIO, "RSS after cleanupSound: %ld KB\n", getCurrentRSSKB());
+	
+	/* Drain any remaining frames from buffersink before freeing graph.
+	 * Frames can accumulate if playback stops mid-song or if miniaudio
+	 * didn't consume all decoded frames. */
+	if (player->fbufsink != NULL) {
+		AVFrame *drainFrame = av_frame_alloc();
+		if (drainFrame) {
+			int drainCount = 0;
+			while (av_buffersink_get_frame(player->fbufsink, drainFrame) >= 0) {
+				av_frame_unref(drainFrame);
+				drainCount++;
+			}
+			av_frame_free(&drainFrame);
+			if (drainCount > 0) {
+				debugPrint(DEBUG_AUDIO, "Drained %d frames from buffersink\n", drainCount);
+			}
+		}
+	}
+	debugPrint(DEBUG_AUDIO, "RSS after drain: %ld KB\n", getCurrentRSSKB());
 	
 	/* Clean up ffmpeg resources */
 	if (player->fgraph != NULL) {
 		avfilter_graph_free(&player->fgraph);
 		player->fgraph = NULL;
 	}
+	debugPrint(DEBUG_AUDIO, "RSS after avfilter_graph_free: %ld KB\n", getCurrentRSSKB());
+	
 	if (player->cctx != NULL) {
 		avcodec_free_context(&player->cctx);
 		player->cctx = NULL;
 	}
+	debugPrint(DEBUG_AUDIO, "RSS after avcodec_free_context: %ld KB\n", getCurrentRSSKB());
+	
 	if (player->fctx != NULL) {
 		avformat_close_input(&player->fctx);
 	}
+	debugPrint(DEBUG_AUDIO, "RSS after avformat_close_input: %ld KB\n", getCurrentRSSKB());
 	
-	debugPrint(DEBUG_AUDIO, "Finish cleanup complete\n");
+	debugPrint(DEBUG_AUDIO, "Song cleanup complete: frames alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
+	           g_framesAllocated, g_framesFreed, 
+	           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
 }
 
 /*
@@ -869,17 +951,25 @@ void *BarPlayerThread(void *data) {
 			break;
 		}
 		
+		debugPrint(DEBUG_AUDIO, "RSS before openStream: %ld KB\n", getCurrentRSSKB());
+		
 		if (openStream(player)) {
+			debugPrint(DEBUG_AUDIO, "RSS after openStream: %ld KB\n", getCurrentRSSKB());
+			
 			if (openFilter(player) && setupSound(player)) {
+				debugPrint(DEBUG_AUDIO, "RSS after openFilter+setupSound: %ld KB\n", getCurrentRSSKB());
+				
 				changeMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
 				
 			/* Run decoder - feeds frames to filter chain which miniaudio reads from */
 			const int ret = decode(player);
+			debugPrint(DEBUG_AUDIO, "RSS after decode: %ld KB\n", getCurrentRSSKB());
 			
 			/* Check quit after decode completes */
 			if (shouldQuit(player)) {
 				debugPrint(DEBUG_AUDIO, "Player: Quit detected after decode\n");
+				finish(player);
 				break;
 			}
 			
@@ -915,6 +1005,7 @@ void *BarPlayerThread(void *data) {
 		/* Check quit after playback before retry logic */
 		if (shouldQuit(player)) {
 			debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+			finish(player);
 			break;
 		}
 		

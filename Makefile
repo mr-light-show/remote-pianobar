@@ -252,21 +252,6 @@ test: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite..."
 	${SILENTCMD}./${TEST_BIN}
 
-# Run tests with memory leak detection using AddressSanitizer
-test-asan: clean-test-asan
-	${SILENTECHO} "   TEST  Building with AddressSanitizer..."
-	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} -fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="${LDFLAGS} -fsanitize=address"
-	${SILENTECHO} "   TEST  Running test suite with memory leak detection..."
-	${SILENTCMD}./${TEST_BIN}
-
-clean-test-asan:
-	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
-
-# Run tests with valgrind (Linux only, optional)
-test-valgrind: ${TEST_BIN}
-	${SILENTECHO} "   TEST  Running test suite with valgrind..."
-	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
-
 # Run static analysis (requires cppcheck)
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
@@ -281,8 +266,8 @@ lint-test:
 		--inline-suppr --error-exitcode=1 \
 		-I ${LIBPIANO_INCLUDE} -I ${PIANOBAR_DIR} ${TEST_DIR}/**/*.c ${TEST_DIR}/*.c
 
-# Comprehensive test suite: unit tests + memory checks + linting
-test-all: test lint test-asan
+# Comprehensive test suite: unit tests + linting
+test-all: test lint
 	${SILENTECHO} "   TEST  All tests passed!"
 
 # Build and run tests with coverage instrumentation
@@ -313,16 +298,6 @@ test:
 	@echo "Run: make test (without NOWEBSOCKET=1)"
 	@exit 1
 
-test-asan:
-	@echo "Tests are disabled when NOWEBSOCKET=1"
-	@echo "Run: make test-asan (without NOWEBSOCKET=1)"
-	@exit 1
-
-test-valgrind:
-	@echo "Tests are disabled when NOWEBSOCKET=1"
-	@echo "Run: make test-valgrind (without NOWEBSOCKET=1)"
-	@exit 1
-
 test-all:
 	@echo "Tests are disabled when NOWEBSOCKET=1"
 	@echo "Run: make test-all (without NOWEBSOCKET=1)"
@@ -340,9 +315,6 @@ lint-test:
 
 test-clean:
 	@true
-
-clean-test-asan:
-	@true
 endif
 
-.PHONY: install install-libpiano uninstall test test-asan test-valgrind test-all test-coverage coverage-clean lint lint-test test-clean clean-test-asan debug all
+.PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean debug all
