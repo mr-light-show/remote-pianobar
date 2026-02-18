@@ -304,6 +304,70 @@ When using ``web`` mode, pianobar runs as a daemon and you should specify::
 
 Then start pianobar and it will run in the background. Open ``http://localhost:8080`` in your browser.
 
+Log file rotation
+++++++++++++++++++
+
+When using ``log_file`` in daemon mode, the log grows indefinitely. On Linux you
+can use logrotate to rotate it by size so the file stays small and rotation is
+automatic.
+
+1. **Confirm your log file path.** In your pianobar config
+   (``~/.config/pianobar/config`` or ``~/.pianobar/config``), find the
+   ``log_file`` setting. You need the **absolute** path for logrotate (e.g.
+   ``/home/pi/.config/pianobar/pianobar.log``). If you use ``~``, run
+   ``echo ~/.config/pianobar/pianobar.log`` and use the output.
+
+2. **Install logrotate (if needed).** On Debian/Ubuntu/Raspberry Pi OS it is
+   often already installed. Check with ``which logrotate``. If missing::
+
+	sudo apt update && sudo apt install logrotate
+
+3. **Create the logrotate config.** Create
+   ``/etc/logrotate.d/pianobar``::
+
+	sudo nano /etc/logrotate.d/pianobar
+
+   Paste the following. Replace ``/path/to/pianobar.log`` with your absolute
+   log path from step 1. Replace ``USER`` and ``GROUP`` with the owner of the
+   log file. The ``su`` directive is required when the log is in a
+   world-writable directory (e.g. ``/tmp``)::
+
+	/path/to/pianobar.log {
+	    su USER GROUP
+	    size 5M
+	    copytruncate
+	    rotate 3
+	    missingok
+	}
+
+   To find USER and GROUP: run ``ls -l /path/to/pianobar.log`` (third and
+   fourth columns), or ``id -un`` and ``id -gn``.
+
+4. **Set permissions.** Logrotate ignores configs writable by group/others::
+
+	sudo chmod 644 /etc/logrotate.d/pianobar
+
+5. **Test (dry-run).** Check for errors without rotating::
+
+	sudo logrotate -d /etc/logrotate.d/pianobar
+
+   If the log file does not exist yet, that is fine (``missingok`` allows that).
+
+6. **Optional: force one rotation.** To confirm it works::
+
+	sudo logrotate -f /etc/logrotate.d/pianobar
+
+   The pianobar daemon keeps running without restart.
+
+7. **Automatic runs.** logrotate is usually run daily by cron (e.g.
+   ``/etc/cron.daily/logrotate``). When your log reaches 5 MB (or on the daily
+   run), it will be rotated automatically; up to 3 old files are kept.
+
+**Troubleshooting:** If rotation never runs, check that the daily job exists
+(``ls /etc/cron.daily/logrotate``) and that the config is not ignored
+(permissions 0644; correct ``su`` when the log is in ``/tmp``). Run
+``sudo logrotate -f /etc/logrotate.d/pianobar`` to force a rotation.
+
 Included Web UI
 +++++++++++++++
 
