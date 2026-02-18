@@ -228,12 +228,13 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		pFFmpeg->bufferedFrameOffset = 0;
 		g_framesAllocated++;
 		
-		/* Log frame stats periodically (every 1000 frames) */
+		/* Periodic frame stats logging - uncomment to debug memory leaks
 		if (g_framesAllocated % 1000 == 0) {
 			debugPrint(DEBUG_AUDIO, "Frame stats: alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
 			           g_framesAllocated, g_framesFreed, 
 			           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
 		}
+		*/
 		/* Loop will consume from it on next iteration */
 	}
 	
