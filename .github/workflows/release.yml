@@ -73,7 +73,7 @@ jobs:
           
           # Copy documentation
           cp README.rst package/usr/local/share/doc/pianobar/
-          cp config.md package/usr/local/share/doc/pianobar/
+          cp CONFIG.md package/usr/local/share/doc/pianobar/
           cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
           cp README_TESTING.md package/usr/local/share/doc/pianobar/
           cp -r contrib package/usr/local/share/doc/pianobar/
@@ -154,7 +154,7 @@ jobs:
           echo ""
           echo "For WebSocket/Web UI setup, see:"
           echo "  /usr/local/share/doc/pianobar/README.rst"
-          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo "  /usr/local/share/doc/pianobar/CONFIG.md"
           echo ""
           echo "Web UI files are located at: /usr/local/share/pianobar/webui"
           
@@ -266,7 +266,7 @@ jobs:
           
           # Copy documentation
           cp README.rst package/usr/local/share/doc/pianobar/
-          cp config.md package/usr/local/share/doc/pianobar/
+          cp CONFIG.md package/usr/local/share/doc/pianobar/
           cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
           cp README_TESTING.md package/usr/local/share/doc/pianobar/
           cp -r contrib package/usr/local/share/doc/pianobar/
@@ -340,7 +340,7 @@ jobs:
           echo ""
           echo "For WebSocket/Web UI setup, see:"
           echo "  /usr/local/share/doc/pianobar/README.rst"
-          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo "  /usr/local/share/doc/pianobar/CONFIG.md"
           echo ""
           echo "Web UI files are located at: /usr/local/share/pianobar/webui"
           
@@ -456,7 +456,7 @@ jobs:
           
           # Copy documentation
           cp README.rst "${APP_NAME}/share/doc/pianobar/"
-          cp config.md "${APP_NAME}/share/doc/pianobar/"
+          cp CONFIG.md "${APP_NAME}/share/doc/pianobar/"
           cp DEVELOPMENT.md "${APP_NAME}/share/doc/pianobar/"
           cp README_TESTING.md "${APP_NAME}/share/doc/pianobar/"
           cp -r contrib "${APP_NAME}/share/doc/pianobar/"

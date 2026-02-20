@@ -329,6 +329,8 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	} else if (strcmp(eventName, "station.deleteFeedback") == 0) {
 		/* Delete feedback */
 		BarSocketIoHandleDeleteFeedback(app, data);
+	} else if (strcmp(eventName, "ping") == 0) {
+		/* Client keepalive no-op; no response needed */
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
 	}
@@ -664,6 +666,10 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 
 /* Emit 'error' event (error notification) */
 void BarSocketIoEmitError(const char *operation, const char *message) {
+	BarSocketIoEmitErrorEx(operation, message, NULL);
+}
+
+void BarSocketIoEmitErrorEx(const char *operation, const char *message, const char *stationId) {
 	json_object *data;
 	const char *friendlyMessage;
 	
@@ -679,9 +685,58 @@ void BarSocketIoEmitError(const char *operation, const char *message) {
 	                       json_object_new_string(operation));
 	json_object_object_add(data, "message", 
 	                       json_object_new_string(friendlyMessage));
+	if (stationId && *stationId) {
+		json_object_object_add(data, "stationId", json_object_new_string(stationId));
+	}
 	
 	BarSocketIoEmit("error", data);
 	json_object_put(data);
+}
+
+/* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", "connection_lost", etc.) */
+void BarSocketIoEmitPandoraDisconnected(const char *reason) {
+	json_object *data;
+	if (!reason) {
+		reason = "unknown";
+	}
+	data = json_object_new_object();
+	json_object_object_add(data, "reason", json_object_new_string(reason));
+	BarSocketIoEmit("pandora.disconnected", data);
+	json_object_put(data);
+}
+
+/* If Piano request failed with auth/connection error, notify clients (reactive disconnect) */
+static void BarSocketIoOnPandoraRequestFailed(PianoReturn_t pRet) {
+	switch (pRet) {
+	case PIANO_RET_INVALID_LOGIN:
+	case PIANO_RET_P_INVALID_AUTH_TOKEN:
+	case PIANO_RET_P_LISTENER_NOT_AUTHORIZED:
+	case PIANO_RET_P_USER_NOT_AUTHORIZED:
+	case PIANO_RET_P_DEVICE_NOT_FOUND:
+	case PIANO_RET_P_INSUFFICIENT_CONNECTIVITY:
+		BarSocketIoEmitPandoraDisconnected("connection_lost");
+		break;
+	default:
+		break;
+	}
+}
+
+/* Wrapper: call Piano API with logging; on failure, log + BarSocketIoOnPandoraRequestFailed + BarSocketIoEmitError. Messages derived from actionName. */
+static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
+	void *data, const char *actionName,
+	const char *operation,
+	PianoReturn_t *pRet, CURLcode *wRet) {
+	bool ok = BarUiPianoCallLogged(app, type, data, actionName, pRet, wRet);
+	if (ok) {
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: %s\n", actionName);
+		return true;
+	}
+	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed: %s\n", actionName);
+	BarSocketIoOnPandoraRequestFailed(*pRet);
+	char buf[256];
+	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
+	BarSocketIoEmitError(operation, buf);
+	return false;
 }
 
 /* Emit 'playState' event (paused/resumed state) */
@@ -794,10 +849,8 @@ void BarSocketIoHandleGetGenres(BarApp_t *app) {
 	/* Fetch genre stations if not already cached */
 	if (app->ph.genreStations == NULL) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Fetching genre stations from API\n");
-		if (!BarUiPianoCallLogged(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
-				"Receiving genre stations", &pRet, &wRet)) {
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to fetch genre stations\n");
-			BarSocketIoEmitError("station.getGenres", "Failed to fetch genre stations");
+		if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
+				"Receiving genre stations", "station.getGenres", &pRet, &wRet)) {
 			return;
 		}
 	}
@@ -839,16 +892,10 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
 	reqData.type = PIANO_MUSICTYPE_INVALID;
 	
 	/* Create the station */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_CREATE_STATION, &reqData,
-			"Adding genre station", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Genre station created successfully\n");
-		/* Update display names for newly created station */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_CREATE_STATION, &reqData,
+			"Adding genre station", "station.addGenre", &pRet, &wRet)) {
 		BarUpdateStationDisplayNames(app);
-		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to create genre station\n");
-		BarSocketIoEmitError("station.addGenre", "Failed to create genre station");
 	}
 }
 
@@ -893,16 +940,10 @@ void BarSocketIoHandleAddShared(BarApp_t *app, json_object *data) {
 	reqData.type = PIANO_MUSICTYPE_INVALID;
 	
 	/* Create the station */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_CREATE_STATION, &reqData,
-			"Adding shared station", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Shared station added successfully\n");
-		/* Update display names for newly created station */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_CREATE_STATION, &reqData,
+			"Adding shared station", "station.addShared", &pRet, &wRet)) {
 		BarUpdateStationDisplayNames(app);
-		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to add shared station\n");
-		BarSocketIoEmitError("station.addShared", "Failed to add shared station");
 	}
 }
 
@@ -956,13 +997,8 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	reqData.station = station;
 	
 	/* Add music to station */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_ADD_SEED, &reqData,
-			"Adding music to station", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Music added successfully\n");
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to add music\n");
-		BarSocketIoEmitError("station.addMusic", "Failed to add music");
-	}
+	BarSocketIoPianoCallLogged(app, PIANO_REQUEST_ADD_SEED, &reqData,
+			"Adding music to station", "station.addMusic", &pRet, &wRet);
 }
 
 /* Handle 'station.rename' event from client */
@@ -1015,16 +1051,10 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	reqData.newName = (char *)newName;
 	
 	/* Rename station */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_RENAME_STATION, &reqData,
-			"Renaming station", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station renamed successfully\n");
-		/* Update display names after rename */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_RENAME_STATION, &reqData,
+			"Renaming station", "station.rename", &pRet, &wRet)) {
 		BarUpdateStationDisplayNames(app);
-		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to rename station\n");
-		BarSocketIoEmitError("station.rename", "Failed to rename station");
 	}
 }
 
@@ -1069,14 +1099,9 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
 	/* Fetch station modes */
 	memset(&reqData, 0, sizeof(reqData));
 	reqData.station = station;
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_GET_STATION_MODES, &reqData,
-			"Fetching station modes", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station modes fetched successfully\n");
-		/* Emit modes to client */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_MODES, &reqData,
+			"Fetching station modes", "station.getStationModes", &pRet, &wRet)) {
 		BarSocketIoEmitStationModes(app, &reqData);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to fetch station modes\n");
-		BarSocketIoEmitError("station.getStationModes", "Failed to fetch station modes");
 	}
 	
 	PianoDestroyStationMode(reqData.retModes);
@@ -1150,14 +1175,8 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	reqData.station = station;
 	reqData.id = modeId;
 	
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_SET_STATION_MODE, &reqData,
-			"Setting station mode", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station mode set successfully\n");
-		/* Note: Mode change requires playlist drain - client should handle this */
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to set station mode\n");
-		BarSocketIoEmitError("station.setStationMode", "Failed to set station mode");
-	}
+	BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SET_STATION_MODE, &reqData,
+			"Setting station mode", "station.setStationMode", &pRet, &wRet);
 }
 
 /* Handle 'station.getInfo' event - fetch station info for seed/feedback management */
@@ -1193,14 +1212,9 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
 	memset(&reqData, 0, sizeof(reqData));
 	reqData.station = station;
 	
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &reqData,
-			"Fetching station info", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station info fetched successfully\n");
-		/* Emit info to client */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &reqData,
+			"Fetching station info", "station.getStationInfo", &pRet, &wRet)) {
 		BarSocketIoEmitStationInfo(app, &reqData);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to fetch station info\n");
-		BarSocketIoEmitError("station.getStationInfo", "Failed to fetch station info");
 	}
 	
 	PianoDestroyStationInfo(&reqData.info);
@@ -1309,10 +1323,8 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	memset(&infoReqData, 0, sizeof(infoReqData));
 	infoReqData.station = station;
 	
-	if (!BarUiPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData,
-			"Fetching station info", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - failed to fetch station info\n");
-		BarSocketIoEmitError("station.deleteSeed", "Failed to fetch station info");
+	if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData,
+			"Fetching station info", "station.deleteSeed", &pRet, &wRet)) {
 		return;
 	}
 	
@@ -1329,10 +1341,8 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 		}
 		if (reqData.artist != NULL) {
 			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting artist seed\n");
-			if (!BarUiPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
-					"Deleting artist seed", &pRet, &wRet)) {
-				BarSocketIoEmitError("station.deleteSeed", "Failed to delete artist seed");
-			}
+			BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
+					"Deleting artist seed", "station.deleteSeed", &pRet, &wRet);
 		}
 	} else if (strcmp(seedType, "song") == 0) {
 		PianoSong_t *song = infoReqData.info.songSeeds;
@@ -1344,10 +1354,8 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 		}
 		if (reqData.song != NULL) {
 			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting song seed\n");
-			if (!BarUiPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
-					"Deleting song seed", &pRet, &wRet)) {
-				BarSocketIoEmitError("station.deleteSeed", "Failed to delete song seed");
-			}
+			BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
+					"Deleting song seed", "station.deleteSeed", &pRet, &wRet);
 		}
 	} else if (strcmp(seedType, "station") == 0) {
 		PianoStation_t *seedStation = infoReqData.info.stationSeeds;
@@ -1359,10 +1367,8 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 		}
 		if (reqData.station != NULL) {
 			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting station seed\n");
-			if (!BarUiPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
-					"Deleting station seed", &pRet, &wRet)) {
-				BarSocketIoEmitError("station.deleteSeed", "Failed to delete station seed");
-			}
+			BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
+					"Deleting station seed", "station.deleteSeed", &pRet, &wRet);
 		}
 	}
 	
@@ -1405,10 +1411,8 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	memset(&infoReqData, 0, sizeof(infoReqData));
 	infoReqData.station = station;
 	
-	if (!BarUiPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData,
-			"Fetching station info", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - failed to fetch station info\n");
-		BarSocketIoEmitError("station.deleteFeedback", "Failed to fetch station info");
+	if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData,
+			"Fetching station info", "station.deleteFeedback", &pRet, &wRet)) {
 		return;
 	}
 	
@@ -1423,10 +1427,8 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	
 	if (feedbackSong != NULL) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting feedback\n");
-		if (!BarUiPianoCallLogged(app, PIANO_REQUEST_DELETE_FEEDBACK, feedbackSong,
-				"Deleting feedback", &pRet, &wRet)) {
-			BarSocketIoEmitError("station.deleteFeedback", "Failed to delete feedback");
-		}
+		BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_FEEDBACK, feedbackSong,
+				"Deleting feedback", "station.deleteFeedback", &pRet, &wRet);
 	}
 	
 	PianoDestroyStationInfo(&infoReqData.info);
@@ -1536,18 +1538,10 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
 	memset(&reqData.searchResult, 0, sizeof(reqData.searchResult));
 	
 	/* Perform the search */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_SEARCH, &reqData,
-			"Searching", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Search completed successfully\n");
-		
-		/* Emit search results to client */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SEARCH, &reqData,
+			"Searching", "music.search", &pRet, &wRet)) {
 		BarSocketIoEmitSearchResults(app, &reqData.searchResult);
-		
-		/* Clean up search results */
 		PianoDestroySearchResult(&reqData.searchResult);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Search failed\n");
-		BarSocketIoEmitError("music.search", "Search failed");
 	}
 }
 
@@ -1619,6 +1613,12 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	PianoSong_t *currentSong = BarStateGetPlaylist(app);
 	if (currentSong) {
 		context |= BAR_DC_SONG;
+	}
+	
+	/* When Pandora is disconnected, treat playback.play as reconnect so clients can always send "play" */
+	if (actionId == BAR_KS_PLAY && (context & BAR_DC_PANDORA_DISCONNECTED)) {
+		actionId = BAR_KS_PANDORA_RECONNECT;
+		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
 	}
 	
 	/* Check if action can be executed in current context */
@@ -1701,7 +1701,7 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
 		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
-		BarSocketIoEmitError("station.change", "Station not found");
+		BarSocketIoEmitErrorEx("station.change", "Station not found", stationId);
 	}
 }
 
@@ -1753,15 +1753,9 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 	/* Call Pandora API to save QuickMix settings */
 	PianoReturn_t pRet;
 	CURLcode wRet;
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_SET_QUICKMIX, NULL,
-			"Setting QuickMix stations", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: QuickMix settings saved successfully\n");
-		
-		/* Emit updated station list to all clients */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SET_QUICKMIX, NULL,
+			"Setting QuickMix stations", "station.setQuickMix", &pRet, &wRet)) {
 		BarSocketIoEmitStations(app);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to save QuickMix settings\n");
-		BarSocketIoEmitError("station.setQuickMix", "Failed to save QuickMix settings");
 	}
 }
 
@@ -1815,16 +1809,12 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 	wasCurrentStation = (station == BarStateGetCurrentStation(app));
 	
 	/* Delete the station */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_DELETE_STATION, station,
-			"Deleting station", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station deleted successfully\n");
-		
-		/* If we deleted the current station, switch to QuickMix */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_STATION, station,
+			"Deleting station", "station.delete", &pRet, &wRet)) {
 		if (wasCurrentStation) {
 			PianoStation_t *quickMixStation = NULL;
 			PianoStation_t *curStation = BarStateGetStationList(app);
 			
-			/* Find QuickMix station */
 			while (curStation != NULL) {
 				if (curStation->isQuickMix) {
 					quickMixStation = curStation;
@@ -1838,15 +1828,10 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 				BarUiSwitchStation(app, quickMixStation);
 			}
 			
-			/* Clear curStation as the struct was destroyed */
 			BarStateSetCurrentStation(app, NULL);
 		}
 		
-		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to delete station\n");
-		BarSocketIoEmitError("station.delete", "Failed to delete station");
 	}
 }
 
@@ -1894,16 +1879,10 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	}
 	
 	/* Create the station */
-	if (BarUiPianoCallLogged(app, PIANO_REQUEST_CREATE_STATION, &reqData,
-			"Creating station", &pRet, &wRet)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station created successfully\n");
-		/* Update display names for newly created station */
+	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_CREATE_STATION, &reqData,
+			"Creating station", "station.createFrom", &pRet, &wRet)) {
 		BarUpdateStationDisplayNames(app);
-		/* Emit updated station list to all clients */
 		BarSocketIoEmitStations(app);
-	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed to create station\n");
-		BarSocketIoEmitError("station.createFrom", "Failed to create station");
 	}
 }
 

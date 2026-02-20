@@ -38,11 +38,14 @@ See `contrib/config-example` for a template configuration file.
 | `audio_quality` | `high` | Audio quality: `low`, `medium`, or `high` |
 | `audio_backend` | `auto` | Audio backend: `auto`, `pulseaudio`, `alsa`, `jack`, `coreaudio` (macOS), `wasapi` (Windows). Auto-detection recommended. |
 | `volume` | `50` | Initial volume (0-100 linear scale) |
+| `volume_mode` | `player` | Volume control: `player` (digital gain) or `system` (OS mixer; uses `system_volume_player_gain`) |
 | `system_volume_player_gain` | `75` | Player gain for system volume mode (0-100). Lower values leave more headroom for ReplayGain boosts. |
 | `gain_mul` | `1.0` | ReplayGain multiplier (scales the track's ReplayGain value) -- Reduce if clipping occurs on some songs|
+| `max_gain` | `10` | Maximum gain in dB (clamps ReplayGain so volume does not exceed this) |
 | `sample_rate` | `0` (stream default) | Force specific sample rate (Hz) |
 | `buffer_seconds` | `5` | Audio buffer size in seconds |
 | `audio_pipe` | (none) | Path to audio output pipe |
+| `alsa_mixer` | (none) | ALSA mixer control name (e.g., `Digital`, `Master`) for system volume mode when using ALSA backend |
 
 ### Audio Backend Selection
 
@@ -63,7 +66,7 @@ The `auto` setting is recommended for most users. Miniaudio will automatically d
 
 The volume system uses a simple linear 0-100 scale:
 - **Player mode** (`volume_mode = player`): Volume slider controls digital gain (0-100%)
-- **System mode** (`volume_mode = system`): Volume slider controls OS mixer; player uses `initial_player_gain`
+- **System mode** (`volume_mode = system`): Volume slider controls OS mixer; player uses `system_volume_player_gain`
 
 ReplayGain is applied on top of the volume setting. The default `system_volume_player_gain` of 75% leaves headroom for ReplayGain to boost quiet tracks without clipping.
 
@@ -167,13 +170,13 @@ station_display_name_override = /Playlist/Channel/
 
 ## Message Formats
 
-These control the prefix for different message types in the CLI.
+These control the **prefix** (and optional postfix) for different message types in the CLI (e.g. the `|>  ` before the now-playing line). They are separate from the Format Strings above, which define the *content* of lines (e.g. `format_nowplaying_song`).
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `format_msg_none` | (none) | Prefix for MSG_NONE |
 | `format_msg_info` | `(i) ` | Prefix for info messages |
-| `format_msg_playing` | `\|>  ` | Prefix for playing messages |
+| `format_msg_nowplaying` | `\|>  ` | Prefix for now-playing messages |
 | `format_msg_time` | `#   ` | Prefix for time messages |
 | `format_msg_err` | `/!\\ ` | Prefix for error messages |
 | `format_msg_question` | `[?] ` | Prefix for question prompts |
@@ -282,6 +285,13 @@ All keyboard shortcuts are configurable. To disable a keybinding, set it to an e
 | `act_upcoming` | `u` | Show upcoming songs |
 | `act_settings` | `!` | Change settings |
 | `act_debug` | `$` | Debug info (hidden) |
+
+### Pandora Connection
+
+| Config Key | Default | Action |
+|------------|---------|--------|
+| `act_pandoradisconnect` | `D` | Disconnect from Pandora |
+| `act_pandorareconnect` | `R` | Reconnect to Pandora (when disconnected) |
 
 ## Pandora API Settings (Advanced)
 

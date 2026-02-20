@@ -60,6 +60,8 @@ export class PianobarApp extends LitElement {
   @state() private stationSeedsModalOpen = false;
   @state() private stationInfo: any = null;
   @state() private infoLoading = false;
+  /** True until backend emits pandora.disconnected; set true again on process (reconnected). */
+  @state() private pandoraConnected = true;
   
   static styles = css`
     :host {
@@ -222,9 +224,10 @@ export class PianobarApp extends LitElement {
       this.connected = connected;
       
       if (!connected) {
-        // Reset state when disconnected
+        // Reset playback state only; keep stations so list remains on reconnect
         this.albumArt = '';
         this.playing = false;
+        this.paused = false;
         this.currentTime = 0;
         this.totalTime = 0;
       }
@@ -292,6 +295,9 @@ export class PianobarApp extends LitElement {
       // Backend sends stations pre-sorted according to user's sort setting
       const oldStationIds = new Set(this.stations.map(s => s.id));
       this.stations = Array.isArray(data) ? data : [];
+      if (this.stations.length > 0) {
+        this.pandoraConnected = true;
+      }
       
       // If we were creating a station, find the new one
       if (this.creatingStationFrom) {
@@ -325,8 +331,29 @@ export class PianobarApp extends LitElement {
       this.infoLoading = false;
     });
     
+    this.socket.on('pandora.disconnected', (_data: { reason?: string }) => {
+      this.pandoraConnected = false;
+      // Clear currently playing song / playback state; keep stations
+      this.albumArt = '';
+      this.songTitle = 'Not Playing';
+      this.albumName = '';
+      this.artistName = '—';
+      this.playing = false;
+      this.paused = false;
+      this.currentTime = 0;
+      this.totalTime = 0;
+      this.rating = 0;
+      this.songStationName = '';
+      this.currentTrackToken = '';
+    });
+
     this.socket.on('process', (data) => {
       console.log('Received process event:', data);
+      // Only treat as "connected to Pandora" when we have active session state (song, playing, or non-empty station)
+      // Avoid setting true on empty/stopped state so pandora.disconnected is not overwritten
+      if (data.song != null || data.playing === true || (data.station && String(data.station).trim() !== '')) {
+        this.pandoraConnected = true;
+      }
       
       // Update pause state
       if (data.paused !== undefined) {
@@ -403,9 +430,38 @@ export class PianobarApp extends LitElement {
     });
     
     // Error event
-    this.socket.on('error', (data) => {
+    this.socket.on('error', (data: { operation?: string; message?: string; stationId?: string }) => {
       console.error('Received error:', data);
       const message = data.message || 'An error occurred';
+      const operation = data.operation || '';
+      if (operation === 'station.change' && (message.toLowerCase().includes('not found') || data.stationId)) {
+        const stationId = data.stationId || this.currentStationId;
+        this.showToast('Station was deleted or is no longer available');
+        if (stationId) {
+          this.stations = this.stations.filter((s: { id: string }) => s.id !== stationId);
+          if (this.currentStationId === stationId) {
+            this.currentStation = '';
+            this.currentStationId = '';
+          }
+        }
+        return;
+      }
+      if (operation === 'app.pandora-reconnect' && message.toLowerCase().includes('last station')) {
+        const stationId = data.stationId;
+        this.showToast('Last station was deleted. Please select a station.');
+        if (stationId) {
+          this.stations = this.stations.filter((s: { id: string }) => s.id !== stationId);
+          if (this.currentStationId === stationId) {
+            this.currentStation = '';
+            this.currentStationId = '';
+          }
+        }
+        this.playing = false;
+        return;
+      }
+      if (operation === 'playback.play' || operation === 'app.pandora-reconnect') {
+        this.playing = false;
+      }
       this.showToast(`❌ ${message}`);
     });
   }
@@ -413,11 +469,11 @@ export class PianobarApp extends LitElement {
   handlePlayPause() {
     if (this.playing) {
       this.socket.emit('action', 'playback.pause');
+      this.playing = false;
     } else {
       this.socket.emit('action', 'playback.play');
+      this.playing = true;
     }
-    // Optimistic UI update for immediate feedback
-    this.playing = !this.playing;
   }
   
   handleNext() {
@@ -452,12 +508,17 @@ export class PianobarApp extends LitElement {
   }
   
   handlePandoraReconnect() {
-    this.socket.emit('action', 'app.pandora-reconnect');
+    if (!this.playing) {
+      this.socket.emit('action', 'playback.play');
+      this.playing = true;
+    }
   }
 
-  /** Check if connected to WebSocket but logged out from Pandora */
+  /** Check if connected to WebSocket but Pandora is disconnected (explicit event or no stations/playback) */
   private get isLoggedOutFromPandora(): boolean {
-    return this.connected && this.stations.length === 0 && !this.playing;
+    if (!this.connected) return false;
+    if (!this.pandoraConnected) return true;
+    return this.stations.length === 0 && !this.playing;
   }
 
   toggleMenu() {
@@ -813,44 +874,56 @@ export class PianobarApp extends LitElement {
           total="${this.connected ? this.totalTime : 0}"
         ></progress-bar>
         
-        ${this.connected && !this.isLoggedOutFromPandora ? html`
-          <volume-control
-            .volume="${this.volume}"
-            @volume-change=${this.handleVolumeChange}
-          ></volume-control>
-          
-          <div class="controls-container">
-            <div class="rating-container">
-              <button 
-                class="rating-button ${this.rating === 1 ? 'loved' : ''}"
-                ?disabled="${!this.currentStationId}"
-                @click=${this.toggleRatingMenu}
-                title="${!this.currentStationId ? 'Select a station first' : (this.rating === 1 ? 'Loved' : 'Rate this song')}"
-              >
-                <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
-                  ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
-                </span>
-              </button>
-              <song-actions-menu
-                rating="${this.rating}"
-                @love=${this.handleLove}
-                @ban=${this.handleBan}
-                @tired=${this.handleTired}
-              ></song-actions-menu>
-            </div>
+        ${this.connected ? html`
+          ${!this.isLoggedOutFromPandora ? html`
+            <volume-control
+              .volume="${this.volume}"
+              @volume-change=${this.handleVolumeChange}
+            ></volume-control>
             
-            <playback-controls 
-              ?playing="${this.playing}"
-              ?paused="${this.paused}"
-              ?disabled="${!this.currentStationId}"
-              @play=${this.handlePlayPause}
-              @next=${this.handleNext}
-            ></playback-controls>
-          </div>
+            <div class="controls-container">
+              <div class="rating-container">
+                <button 
+                  class="rating-button ${this.rating === 1 ? 'loved' : ''}"
+                  ?disabled="${!this.currentStationId}"
+                  @click=${this.toggleRatingMenu}
+                  title="${!this.currentStationId ? 'Select a station first' : (this.rating === 1 ? 'Loved' : 'Rate this song')}"
+                >
+                  <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
+                    ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
+                  </span>
+                </button>
+                <song-actions-menu
+                  rating="${this.rating}"
+                  @love=${this.handleLove}
+                  @ban=${this.handleBan}
+                  @tired=${this.handleTired}
+                ></song-actions-menu>
+              </div>
+              
+              <playback-controls 
+                ?playing="${this.playing}"
+                ?paused="${this.paused}"
+                ?disabled="${!this.currentStationId}"
+                @play=${this.handlePlayPause}
+                @next=${this.handleNext}
+              ></playback-controls>
+            </div>
+          ` : html`
+            <div class="controls-container">
+              <playback-controls 
+                ?playing="${false}"
+                ?paused="${false}"
+                ?disabled="${false}"
+                @play=${this.handlePlayPause}
+                @next=${() => {}}
+              ></playback-controls>
+            </div>
+          `}
         ` : ''}
       </div>
       
-      ${this.connected && !this.isLoggedOutFromPandora ? html`
+      ${this.connected ? html`
         <bottom-toolbar
           .stations="${this.stations}"
           currentStation="${this.currentStation}"

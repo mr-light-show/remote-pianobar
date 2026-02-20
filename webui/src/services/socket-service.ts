@@ -1,3 +1,5 @@
+const PING_INTERVAL_MS = 25000;
+
 export class SocketService {
   private ws: WebSocket;
   private listeners: Map<string, Function[]> = new Map();
@@ -5,10 +7,18 @@ export class SocketService {
   public isConnected = false;
   private reconnectAttempt = 0;
   private reconnectTimer: number | null = null;
+  private pingIntervalId: number | null = null;
   private readonly maxReconnectDelay = 60000; // 60 seconds max
   
   constructor() {
     this.connect();
+  }
+  
+  private clearPingInterval() {
+    if (this.pingIntervalId !== null) {
+      clearInterval(this.pingIntervalId);
+      this.pingIntervalId = null;
+    }
   }
   
   private connect() {
@@ -25,6 +35,14 @@ export class SocketService {
       
       // Request full state including stations on connect
       this.emit('query', null);
+      
+      // Keepalive: send ping every 25s so proxies don't close idle connection
+      this.clearPingInterval();
+      this.pingIntervalId = window.setInterval(() => {
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.emit('ping', null);
+        }
+      }, PING_INTERVAL_MS);
     };
     
     this.ws.onmessage = (event) => {
@@ -56,6 +74,7 @@ export class SocketService {
     };
     
     this.ws.onclose = () => {
+      this.clearPingInterval();
       console.log('WebSocket disconnected');
       this.isConnected = false;
       this.notifyConnectionChange(false);
@@ -130,6 +149,7 @@ export class SocketService {
   
   disconnect() {
     this.stopReconnecting(); // Cancel auto-reconnect when manually disconnecting
+    this.clearPingInterval();
     this.ws.close();
   }
 }

@@ -483,8 +483,12 @@ Create ``/etc/nginx/sites-available/pianobar``:
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
         }
     }
+
+Use long timeouts (e.g. 3600s) for ``proxy_read_timeout`` and ``proxy_send_timeout`` so the proxy does not close idle WebSocket connections before the server or clients do.
 
 Enable the site:
 

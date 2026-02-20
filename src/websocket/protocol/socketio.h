@@ -80,8 +80,12 @@ void BarSocketIoEmitProcess(BarApp_t *app);
 /* Emit 'song.explanation' event (explanation text) */
 void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation);
 
-/* Emit 'error' event (error notification) */
+/* Emit 'error' event (error notification). stationId optional (e.g. for station.change "not found"). */
 void BarSocketIoEmitError(const char *operation, const char *message);
+void BarSocketIoEmitErrorEx(const char *operation, const char *message, const char *stationId);
+
+/* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", or "connection_lost") */
+void BarSocketIoEmitPandoraDisconnected(const char *reason);
 
 /* Emit 'playState' event (paused/resumed state) */
 void BarSocketIoEmitPlayState(BarApp_t *app);
