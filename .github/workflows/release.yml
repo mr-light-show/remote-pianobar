@@ -3,21 +3,52 @@ name: Build and Release
 on:
   release:
     types: [published]
-  workflow_dispatch:  # Allow manual triggers
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g. v1.2.3). Create the tag in the repo first, then run this workflow and enter the same tag.'
+        required: true
+        type: string
 
 jobs:
+  prepare:
+    name: Set version and tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.set.outputs.version }}
+      release_tag: ${{ steps.set.outputs.release_tag }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+          else
+            RELEASE_TAG="${{ github.event.inputs.tag }}"
+          fi
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "::error::No tag: provide tag input for workflow_dispatch or publish a release for release event"
+            exit 1
+          fi
+          VERSION="${RELEASE_TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
   build-amd64:
     name: Build Linux Package (noble_amd64)
     runs-on: ubuntu-24.04
-    
+    needs: prepare
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - name: Update version from tag
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
           echo "Updating version to: $VERSION"
           sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
@@ -37,9 +68,6 @@ jobs:
         
       - name: Build pianobar and Web UI
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"
-          
           # Enable debug logging for pre-release builds
           DEBUG_FLAGS=""
           if [[ "$VERSION" == *"pre"* ]]; then
@@ -73,7 +101,7 @@ jobs:
           
           # Copy documentation
           cp README.rst package/usr/local/share/doc/pianobar/
-          cp config.md package/usr/local/share/doc/pianobar/
+          cp CONFIG.md package/usr/local/share/doc/pianobar/
           cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
           cp README_TESTING.md package/usr/local/share/doc/pianobar/
           cp -r contrib package/usr/local/share/doc/pianobar/
@@ -113,9 +141,6 @@ jobs:
           
           echo "Final dependencies: $DEPENDS"
           
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
-          
           cat > package/DEBIAN/control << EOF
           Package: remote-pianobar
           Version: $VERSION
@@ -154,7 +179,7 @@ jobs:
           echo ""
           echo "For WebSocket/Web UI setup, see:"
           echo "  /usr/local/share/doc/pianobar/README.rst"
-          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo "  /usr/local/share/doc/pianobar/CONFIG.md"
           echo ""
           echo "Web UI files are located at: /usr/local/share/pianobar/webui"
           
@@ -164,15 +189,13 @@ jobs:
           chmod 755 package/DEBIAN/postinst
           
       - name: Build .deb package
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
-          dpkg-deb --build package remote-pianobar_noble_amd64.deb
-          
+        run: dpkg-deb --build package remote-pianobar_noble_amd64.deb
+
       - name: Upload to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: remote-pianobar_*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -180,6 +203,10 @@ jobs:
   build-arm64:
     name: Build ARM64 Package (${{ matrix.pkg_name }})
     runs-on: ubuntu-24.04
+    needs: prepare
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
     strategy:
       matrix:
         include:
@@ -191,11 +218,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       
       - name: Update version from tag
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
           echo "Updating version to: $VERSION"
           sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
@@ -207,9 +234,6 @@ jobs:
       
       - name: Build pianobar and Web UI
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"
-          
           # Enable debug logging for pre-release builds
           DEBUG_FLAGS=""
           if [[ "$VERSION" == *"pre"* ]]; then
@@ -266,7 +290,7 @@ jobs:
           
           # Copy documentation
           cp README.rst package/usr/local/share/doc/pianobar/
-          cp config.md package/usr/local/share/doc/pianobar/
+          cp CONFIG.md package/usr/local/share/doc/pianobar/
           cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
           cp README_TESTING.md package/usr/local/share/doc/pianobar/
           cp -r contrib package/usr/local/share/doc/pianobar/
@@ -303,9 +327,6 @@ jobs:
           [ -n "$SWRESAMPLE" ] && DEPENDS="$DEPENDS, $SWRESAMPLE"
           [ -n "$WEBSOCKETS" ] && DEPENDS="$DEPENDS, $WEBSOCKETS"
           
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
-          
           cat > package/DEBIAN/control << EOF
           Package: remote-pianobar
           Version: $VERSION
@@ -340,7 +361,7 @@ jobs:
           echo ""
           echo "For WebSocket/Web UI setup, see:"
           echo "  /usr/local/share/doc/pianobar/README.rst"
-          echo "  /usr/local/share/doc/pianobar/config.md"
+          echo "  /usr/local/share/doc/pianobar/CONFIG.md"
           echo ""
           echo "Web UI files are located at: /usr/local/share/pianobar/webui"
           
@@ -350,13 +371,13 @@ jobs:
           chmod 755 package/DEBIAN/postinst
           
       - name: Build .deb package
-        run: |
-          dpkg-deb --build package remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
+        run: dpkg-deb --build package remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
           
       - name: Upload to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -364,7 +385,10 @@ jobs:
   build-macos:
     name: Build macOS 14 Package
     runs-on: macos-14
+    needs: prepare
     env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
       # Homebrew paths for M1 (/opt/homebrew) and Intel (/usr/local)
       PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
       CPATH: /opt/homebrew/include:/usr/local/include
@@ -373,11 +397,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
         
       - name: Update version from tag
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
           echo "Updating version to: $VERSION"
           sed -i '' 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
@@ -417,9 +441,6 @@ jobs:
       
       - name: Build Remote Pianobar
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"
-          
           # Enable debug logging for pre-release builds
           DEBUG_FLAGS=""
           if [[ "$VERSION" == *"pre"* ]]; then
@@ -439,8 +460,6 @@ jobs:
           
       - name: Create app bundle structure
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
           APP_NAME="Remote-Pianobar-${VERSION}"
           
           mkdir -p "${APP_NAME}/bin"
@@ -456,7 +475,7 @@ jobs:
           
           # Copy documentation
           cp README.rst "${APP_NAME}/share/doc/pianobar/"
-          cp config.md "${APP_NAME}/share/doc/pianobar/"
+          cp CONFIG.md "${APP_NAME}/share/doc/pianobar/"
           cp DEVELOPMENT.md "${APP_NAME}/share/doc/pianobar/"
           cp README_TESTING.md "${APP_NAME}/share/doc/pianobar/"
           cp -r contrib "${APP_NAME}/share/doc/pianobar/"
@@ -560,8 +579,6 @@ jobs:
           
       - name: Create DMG
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION#v}"  # Strip leading 'v' if present
           APP_NAME="Remote-Pianobar-${VERSION}"
           DMG_NAME="remote-pianobar_macos14.dmg"
           
@@ -584,9 +601,10 @@ jobs:
           fi
           
       - name: Upload to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: remote-pianobar_*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

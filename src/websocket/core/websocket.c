@@ -39,6 +39,16 @@ THE SOFTWARE.
 #include <libwebsockets.h>
 #include <json-c/json.h>
 
+/* Idle/keepalive policy: send PING after 25s idle, hang up if no response in 60s */
+static const lws_retry_bo_t keepalive_policy = {
+	.retry_ms_table = NULL,
+	.retry_ms_table_count = 0,
+	.conceal_count = 0,
+	.secs_since_valid_ping = 25,
+	.secs_since_valid_hangup = 60,
+	.jitter_percent = 0,
+};
+
 /* Global context for broadcast callback */
 static BarWsContext_t *g_wsContext = NULL;
 
@@ -655,6 +665,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	info.protocols = protocols;
 	info.user = app;
 	info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+	info.retry_and_idle_policy = &keepalive_policy;
 	/* Removed LWS_SERVER_OPTION_HTTP_HEADERS_SECURITY_BEST_PRACTICES_ENFORCE
 	 * so we can use custom CSP for Google Fonts */
 	

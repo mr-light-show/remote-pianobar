@@ -798,8 +798,10 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
 	PianoInit(&app->ph, app->settings.partnerUser, app->settings.partnerPassword,
 	          app->settings.device, app->settings.inkey, app->settings.outkey);
 	
-	/* Disconnect all WebSocket clients - they'll reconnect with fresh state */
-	BarWsDisconnectAllClients(app);
+#ifdef WEBSOCKET_ENABLED
+	/* Notify connected clients; do not close WebSocket so UI can show "Not Connected to Pandora" */
+	BarSocketIoEmitPandoraDisconnected(reason);
+#endif
 	
 	if (strcmp(reason, "idle_timeout") == 0) {
 		BarUiMsg(&app->settings, MSG_INFO, "Playback stopped due to inactivity.\n");
@@ -1206,6 +1208,9 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	if (app->settings.username == NULL || app->settings.password == NULL) {
 		BarUiMsg(&app->settings, MSG_ERR, 
 			"Cannot reconnect: No credentials configured.\n");
+#ifdef WEBSOCKET_ENABLED
+		BarSocketIoEmitError("app.pandora-reconnect", "No credentials configured");
+#endif
 		return;
 	}
 	
@@ -1239,6 +1244,10 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 		if (station) {
 			BarUiMsg(&app->settings, MSG_INFO, "Resuming station: %s\n", station->name);
 			BarStateSetNextStation(app, station);
+		} else {
+#ifdef WEBSOCKET_ENABLED
+			BarSocketIoEmitErrorEx("app.pandora-reconnect", "Last station was deleted", app->lastStationId);
+#endif
 		}
 		free(app->lastStationId);
 		app->lastStationId = NULL;

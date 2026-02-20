@@ -187,6 +187,50 @@ __ https://6xq.net/pianobar/pianobar-2010.08.21.tar.bz2.sha1
 Install
 -------
 
+Install from GitHub releases
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Pre-built packages are available on the `Releases`_ page. If you have the
+original pianobar installed, remove it first to avoid conflicts.
+
+**Linux (Debian/Ubuntu .deb)**
+
+1. Remove existing pianobar if installed::
+
+   sudo apt remove pianobar
+   # or, if you installed a .deb named pianobar:
+   # sudo dpkg --remove pianobar
+
+2. Open https://github.com/mr-light-show/remote-pianobar/releases and
+   download the .deb that matches your system:
+
+   - Ubuntu 24.04 (Noble), amd64: ``remote-pianobar_noble_amd64.deb``
+   - Debian Bookworm or similar, arm64: ``remote-pianobar_bookworm_arm64.deb``
+   - Debian Trixie or similar, arm64: ``remote-pianobar_trixie_arm64.deb``
+
+3. Install (substitute your file name)::
+
+   sudo dpkg -i remote-pianobar_noble_amd64.deb
+   # If you see dependency errors:
+   sudo apt install -f
+
+**macOS (.dmg)**
+
+1. Remove existing pianobar if installed via Homebrew::
+
+   brew uninstall pianobar
+
+2. Open https://github.com/mr-light-show/remote-pianobar/releases and
+   download ``remote-pianobar_macos14.dmg``.
+
+3. Open the DMG, then run the included ``install.sh`` (with sudo) or copy
+   the app to your desired location (see INSTALL.txt in the DMG).
+
+.. _Releases: https://github.com/mr-light-show/remote-pianobar/releases
+
+Build from source
+^^^^^^^^^^^^^^^^^
+
 You need the following software to build pianobar:
 
 - GNU make
@@ -483,8 +527,12 @@ Create ``/etc/nginx/sites-available/pianobar``:
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";
             proxy_set_header Host $host;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
         }
     }
+
+Use long timeouts (e.g. 3600s) for ``proxy_read_timeout`` and ``proxy_send_timeout`` so the proxy does not close idle WebSocket connections before the server or clients do.
 
 Enable the site:
 
