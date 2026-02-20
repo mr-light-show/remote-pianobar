@@ -338,6 +338,34 @@ START_TEST(test_socketio_handle_query) {
 }
 END_TEST
 
+/* Test: Client keepalive "ping" event is a no-op (no crash, no broadcast) */
+START_TEST(test_socketio_ping_keepalive_noop) {
+	BarApp_t app;
+	BarSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&settings, 0, sizeof(settings));
+	app.settings = settings;
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	#ifdef WEBSOCKET_ENABLED
+	pthread_mutex_init(&app.stateMutex, NULL);
+	#endif
+
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
+
+	/* Socket.IO EVENT packet: 2["ping"] - client keepalive; server must not respond */
+	BarSocketIoHandleMessage(&app, "2[\"ping\"]", NULL);
+
+	/* Ping is explicitly a no-op: no broadcast should be sent */
+	ck_assert_ptr_null(lastBroadcastMessage);
+
+	#ifdef WEBSOCKET_ENABLED
+	pthread_mutex_destroy(&app.stateMutex);
+	#endif
+	clearBroadcastMock();
+}
+END_TEST
+
 /* Test: Rating commands emit state update */
 START_TEST(test_socketio_rating_emits_state) {
 	BarApp_t app;
@@ -420,6 +448,7 @@ Suite *socketio_suite(void) {
 	/* Event handler tests */
 	tc_handle = tcase_create("Event Handlers");
 	tcase_add_test(tc_handle, test_socketio_handle_query);
+	tcase_add_test(tc_handle, test_socketio_ping_keepalive_noop);
 	tcase_add_test(tc_handle, test_socketio_rating_emits_state);
 	suite_add_tcase(s, tc_handle);
 	
