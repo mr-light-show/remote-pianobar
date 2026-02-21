@@ -102,8 +102,13 @@ else ifeq (${OS},Linux)
 	endif
 	# Always link ALSA on Linux (for native API fallback)
 	SYSVOLUME_LDFLAGS+=$(shell $(PKG_CONFIG) --libs alsa)
-	# BLAS/LAPACK for libsphinxbase transitive dependencies (pulled in by FFmpeg/PulseAudio on Ubuntu)
+	# BLAS/LAPACK for libsphinxbase transitive dependencies (optional; only if installed)
+	HAVE_BLAS_LAPACK:=$(shell echo 'int main(void){return 0;}' | $(CC) -x c - -lblas -llapack -o /dev/null 2>/dev/null && echo yes)
+	ifeq ($(HAVE_BLAS_LAPACK),yes)
 	BLAS_LAPACK_LDFLAGS:=-lblas -llapack
+	else
+	BLAS_LAPACK_LDFLAGS:=
+	endif
 endif
 
 # WebSocket library flags (unless disabled)
