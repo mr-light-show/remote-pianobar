@@ -220,17 +220,17 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	json_object *data = NULL;
 	
 	if (!app || !message) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: HandleMessage called with null app or message\n");
+		debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with null app or message\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: HandleMessage called with: %.100s%s\n", 
+	debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.100s%s\n", 
 	           message, strlen(message) > 100 ? "..." : "");
 	
 	/* Parse Socket.IO message */
 	type = BarSocketIoParse(message, &eventName, &data);
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Parsed message - type=%d, eventName=%s\n", 
+	debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Parsed message - type=%d, eventName=%s\n", 
 	           type, eventName ? eventName : "(null)");
 	
 	if (type == SOCKETIO_CONNECT) {
@@ -438,13 +438,13 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 	if (g_broadcastCallback) {
 		debugPrint(dbgFlag, "Socket.IO: Calling broadcast callback\n");
 		g_broadcastCallback(message, strlen(message));
-		debugPrint(dbgFlag, "Socket.IO: Broadcast callback returned\n");
+		debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Broadcast callback returned\n");
 	} else {
 		debugPrint(dbgFlag, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
 	}
 	
 	free(message);
-	debugPrint(dbgFlag, "Socket.IO: Emit complete for event '%s'\n", event);
+	debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
 /* Emit 'start' event (song started) */
@@ -1652,11 +1652,11 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	/* Execute action directly by ID in WebSocket thread
 	 * 
 	 * THREAD SAFETY: This call may trigger state lock acquisition via:
-	 * - BarStateGetCurrentStation() acquires/releases stateMutex
-	 * - BarStateGetPlaylist() acquires/releases stateMutex
+	 * - BarStateGetCurrentStation() acquires/releases stateRwlock (read)
+	 * - BarStateGetPlaylist() acquires/releases stateRwlock (read)
 	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
 	 * 
-	 * Lock ordering is safe: stateMutex (if needed) → player.lock (if needed)
+	 * Lock ordering is safe: stateRwlock (if needed) → player.lock (if needed)
 	 * See src/THREAD_SAFETY.md for details */
 	BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
 	
