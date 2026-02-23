@@ -51,7 +51,7 @@ typedef struct {
 	#ifdef WEBSOCKET_ENABLED
 	void *wsContext;  /* BarWsContext_t */
 	pthread_t playbackThread;  /* Playback manager thread */
-	pthread_mutex_t stateMutex;  /* Protects playlist, curStation, nextStation, ph.stations */
+	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: read for getters, write for setters and BarStateCallPandora */
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
 	#endif
 } BarApp_t;

@@ -30,23 +30,19 @@ THE SOFTWARE.
 #include <string.h>
 #include <stdarg.h>
 
-/*	Lock state mutex with logging (only in BOTH mode when WebSocket enabled)
- *
+/*	State rwlock: read for getters, write for setters and BarStateCallPandora.
  *	LOCK HIERARCHY: This is Lock #1 in the hierarchy
  *	Must be acquired BEFORE player.lock if both are needed
- *	
  *	PROTECTS: Pandora state (stations, playlist, curStation, nextStation, ph)
  *	DURATION: Should be held for microseconds, not milliseconds
  *	NO I/O: Never hold this lock during network calls, disk I/O, or console output
- *	
  *	See src/THREAD_SAFETY.md for complete documentation
  */
-static void state_mutex_lock_internal(const BarApp_t *app, const char *operation) {
+static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operation) {
 	#ifdef WEBSOCKET_ENABLED
-	/* Only lock in BOTH mode - CLI and Web threads both accessing state */
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
-		pthread_mutex_lock((pthread_mutex_t *)&app->stateMutex);
-		debugPrint(DEBUG_UI, "State: Lock acquired (%s)\n", operation);
+		pthread_rwlock_rdlock((pthread_rwlock_t *)&app->stateRwlock);
+		debugPrint(DEBUG_UI, "State: Lock acquired (%s) (read)\n", operation);
 	}
 	#else
 	(void)app;
@@ -54,13 +50,22 @@ static void state_mutex_lock_internal(const BarApp_t *app, const char *operation
 	#endif
 }
 
-/*	Unlock state mutex with logging (only in BOTH mode when WebSocket enabled)
- */
-__attribute__((format(printf, 3, 4)))
-static void state_mutex_unlock_internal(const BarApp_t *app, const char *operation, 
-                                        const char *format, ...) {
+static void state_rwlock_wrlock_internal(const BarApp_t *app, const char *operation) {
 	#ifdef WEBSOCKET_ENABLED
-	/* Only unlock in BOTH mode */
+	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+		pthread_rwlock_wrlock((pthread_rwlock_t *)&app->stateRwlock);
+		debugPrint(DEBUG_UI, "State: Lock acquired (%s) (write)\n", operation);
+	}
+	#else
+	(void)app;
+	(void)operation;
+	#endif
+}
+
+__attribute__((format(printf, 3, 4)))
+static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operation,
+                                         const char *format, ...) {
+	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		if (format) {
 			va_list args;
@@ -68,10 +73,10 @@ static void state_mutex_unlock_internal(const BarApp_t *app, const char *operati
 			char buffer[256];
 			vsnprintf(buffer, sizeof(buffer), format, args);
 			va_end(args);
-			debugPrint(DEBUG_UI, "State: %s\n", buffer);
+			debugPrint(DEBUG_UI, "%s", buffer);
 		}
-		debugPrint(DEBUG_UI, "State: Lock released (%s)\n", operation);
-		pthread_mutex_unlock((pthread_mutex_t *)&app->stateMutex);
+		debugPrint(DEBUG_UI, "State: Lock released\n");
+		pthread_rwlock_unlock((pthread_rwlock_t *)&app->stateRwlock);
 	}
 	#else
 	(void)app;
@@ -80,55 +85,54 @@ static void state_mutex_unlock_internal(const BarApp_t *app, const char *operati
 	#endif
 }
 
-/*	Macro for executing code with state lock (void operations with optional debug)
- *  Usage: WITH_STATE_LOCK(app, "OperationName", "Debug: %s", context) {
- *             // your code here
- *         }
+/*	Macro for executing code with state write lock (void operations with optional debug)
+ *  Usage: WITH_STATE_LOCK(app, "OperationName", "Debug: %s", context) { ... }
  *  Or: WITH_STATE_LOCK(app, "OperationName", NULL) { ... }
  */
 #define WITH_STATE_LOCK(app, op_name, fmt, ...) \
-	for (int _lock_held = (state_mutex_lock_internal(app, op_name), \
+	for (int _lock_held = (state_rwlock_wrlock_internal(app, op_name), \
 	                        (fmt ? debugPrint(DEBUG_UI, fmt, ##__VA_ARGS__) : (void)0), 0); \
 	     !_lock_held; \
-	     state_mutex_unlock_internal(app, op_name, NULL), _lock_held = 1)
+	     state_rwlock_unlock_internal(app, op_name, NULL), _lock_held = 1)
 
-/*	Macro for executing code with state lock (operations with return value)
- *  Usage: PianoStation_t *result;
- *         WITH_STATE_LOCK_RETURN(app, "OperationName", result, "-> %s", result_description) {
- *             result = app->nextStation;
- *         }
- *         return result;
+/*	Macro for read-lock + return value (getters)
  */
 #define WITH_STATE_LOCK_RETURN(app, op_name, result_var, fmt, ...) \
-	for (int _lock_held = (state_mutex_lock_internal(app, op_name), 0); \
+	for (int _lock_held = (state_rwlock_rdlock_internal(app, op_name), 0); \
 	     !_lock_held; \
-	     state_mutex_unlock_internal(app, op_name, fmt, ##__VA_ARGS__), \
+	     state_rwlock_unlock_internal(app, op_name, fmt, ##__VA_ARGS__), \
 	     _lock_held = 1)
 
-/*	Initialize state mutex (only in BOTH mode)
+/*	Macro for write-lock + return value (e.g. BarStateCallPandora)
+ */
+#define WITH_STATE_LOCK_WRITE_RETURN(app, op_name, result_var, fmt, ...) \
+	for (int _lock_held = (state_rwlock_wrlock_internal(app, op_name), 0); \
+	     !_lock_held; \
+	     state_rwlock_unlock_internal(app, op_name, fmt, ##__VA_ARGS__), \
+	     _lock_held = 1)
+
+/*	Initialize state rwlock (only in BOTH mode)
  */
 void BarStateInit(BarApp_t *app) {
 	assert(app != NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	/* Only initialize mutex in BOTH mode */
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
-		pthread_mutex_init(&app->stateMutex, NULL);
-		debugPrint(DEBUG_UI, "State: Mutex initialized\n");
+		pthread_rwlock_init(&app->stateRwlock, NULL);
+		debugPrint(DEBUG_UI, "State: Rwlock initialized\n");
 	}
 	#endif
 }
 
-/*	Destroy state mutex (only in BOTH mode)
+/*	Destroy state rwlock (only in BOTH mode)
  */
 void BarStateDestroy(BarApp_t *app) {
 	assert(app != NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	/* Only destroy mutex in BOTH mode */
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
-		pthread_mutex_destroy(&app->stateMutex);
-		debugPrint(DEBUG_UI, "State: Mutex destroyed\n");
+		pthread_rwlock_destroy(&app->stateRwlock);
+		debugPrint(DEBUG_UI, "State: Rwlock destroyed\n");
 	}
 	#endif
 }
@@ -140,7 +144,7 @@ PianoStation_t *BarStateGetNextStation(const BarApp_t *app) {
 	
 	PianoStation_t *station;
 	WITH_STATE_LOCK_RETURN(app, "GetNextStation", station,
-	                       "-> %s", station ? station->name : "null") {
+	                       "State: GetNextStation -> %s\n", station ? station->name : "null") {
 		station = app->nextStation;
 	}
 	return station;
@@ -151,7 +155,7 @@ PianoStation_t *BarStateGetNextStation(const BarApp_t *app) {
 void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SetNextStation", "<- %s", station ? station->name : "null") {
+	WITH_STATE_LOCK(app, "SetNextStation", "State: SetNextStation <- %s\n", station ? station->name : "null") {
 		app->nextStation = station;
 	}
 }
@@ -163,7 +167,7 @@ PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app) {
 	
 	PianoStation_t *station;
 	WITH_STATE_LOCK_RETURN(app, "GetCurrentStation", station,
-	                       "-> %s", station ? station->name : "null") {
+	                       "State: GetCurrentStation -> %s\n", station ? station->name : "null") {
 		station = app->curStation;
 	}
 	return station;
@@ -174,7 +178,7 @@ PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app) {
 void BarStateSetCurrentStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SetCurrentStation", "<- %s", station ? station->name : "null") {
+	WITH_STATE_LOCK(app, "SetCurrentStation", "State: SetCurrentStation <- %s\n", station ? station->name : "null") {
 		app->curStation = station;
 	}
 }
@@ -186,7 +190,7 @@ PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id) {
 	
 	PianoStation_t *station;
 	WITH_STATE_LOCK_RETURN(app, "FindStationById", station,
-	                       "id=%s -> %s", id ? id : "null", station ? station->name : "null") {
+	                       "State: FindStationById id=%s -> %s\n", id ? id : "null", station ? station->name : "null") {
 		/* After app.stop, stations may be NULL - handle gracefully */
 		if (app->ph.stations == NULL) {
 			station = NULL;
@@ -216,7 +220,7 @@ PianoSong_t *BarStateGetPlaylist(const BarApp_t *app) {
 	
 	PianoSong_t *playlist;
 	WITH_STATE_LOCK_RETURN(app, "GetPlaylist", playlist,
-	                       "-> %s", playlist ? playlist->title : "null") {
+	                       "State: GetPlaylist -> %s\n", playlist ? playlist->title : "null") {
 		playlist = app->playlist;
 	}
 	return playlist;
@@ -227,7 +231,7 @@ PianoSong_t *BarStateGetPlaylist(const BarApp_t *app) {
 void BarStateSetPlaylist(BarApp_t *app, PianoSong_t *playlist) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SetPlaylist", "<- %s", playlist ? playlist->title : "null") {
+	WITH_STATE_LOCK(app, "SetPlaylist", "State: SetPlaylist <- %s\n", playlist ? playlist->title : "null") {
 		app->playlist = playlist;
 	}
 }
@@ -250,7 +254,7 @@ void BarStateDrainPlaylist(BarApp_t *app) {
 void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SwitchStation", "<- %s", station ? station->name : "null") {
+	WITH_STATE_LOCK(app, "SwitchStation", "State: SwitchStation <- %s\n", station ? station->name : "null") {
 		/* Drain current playlist */
 		if (app->playlist != NULL) {
 			PianoDestroyPlaylist(app->playlist);
@@ -266,7 +270,7 @@ void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 BarPlayerMode BarStateGetPlayerMode(const BarApp_t *app) {
 	assert(app != NULL);
 	
-	/* Player mode uses player->lock, not stateMutex */
+	/* Player mode uses player->lock, not stateRwlock */
 	return BarPlayerGetMode((player_t *)&app->player);
 }
 
@@ -275,7 +279,7 @@ BarPlayerMode BarStateGetPlayerMode(const BarApp_t *app) {
 void BarStateGetPlayerTime(const BarApp_t *app, unsigned int *played, unsigned int *duration) {
 	assert(app != NULL);
 	
-	/* Player time uses player->lock, not stateMutex */
+	/* Player time uses player->lock, not stateRwlock */
 	pthread_mutex_lock((pthread_mutex_t *)&app->player.lock);
 	if (played != NULL) {
 		*played = app->player.songPlayed;
@@ -291,7 +295,7 @@ void BarStateGetPlayerTime(const BarApp_t *app, unsigned int *played, unsigned i
 bool BarStateGetPlayerPaused(const BarApp_t *app) {
 	assert(app != NULL);
 	
-	/* Player pause state uses player->lock, not stateMutex */
+	/* Player pause state uses player->lock, not stateRwlock */
 	pthread_mutex_lock((pthread_mutex_t *)&app->player.lock);
 	bool paused = app->player.doPause;
 	pthread_mutex_unlock((pthread_mutex_t *)&app->player.lock);
@@ -300,7 +304,7 @@ bool BarStateGetPlayerPaused(const BarApp_t *app) {
 
 /*	Make Pandora API call (thread-safe)
  *	
- *	IMPORTANT: This function holds stateMutex during network I/O.
+ *	IMPORTANT: This function holds stateRwlock (write) during network I/O.
  *	This is the ONE documented exception to the "no I/O under lock" rule.
  *	
  *	Why this is necessary:
@@ -330,8 +334,8 @@ bool BarStateCallPandora(BarApp_t *app, PianoRequestType_t type,
 	assert(app != NULL);
 	
 	bool result;
-	WITH_STATE_LOCK_RETURN(app, "CallPandora", result,
-	                       "type=%d -> %s", type, result ? "true" : "false") {
+	WITH_STATE_LOCK_WRITE_RETURN(app, "CallPandora", result,
+	                             "State: CallPandora type=%d -> %s\n", type, result ? "true" : "false") {
 		result = BarUiPianoCall(app, type, data, pRet, wRet);
 	}
 	return result;

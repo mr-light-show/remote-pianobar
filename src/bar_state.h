@@ -31,31 +31,30 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <errno.h>
 
-/* Assert that stateMutex is currently held by calling thread.
- * Only works in BOTH mode (when mutex is actually initialized).
- * In CLI-only mode or without WEBSOCKET_ENABLED, this is a no-op. */
+/* Assert that stateRwlock is held by some thread (cannot distinguish calling thread with rwlock).
+ * Only works in BOTH mode. Uses trywrlock: EBUSY => someone holds it; 0 => was free, unlock and fail. */
 #ifdef WEBSOCKET_ENABLED
 #define ASSERT_STATE_LOCK_HELD(app) \
 	do { \
 		if ((app)->settings.uiMode == BAR_UI_MODE_BOTH) { \
-			int _trylock_result = pthread_mutex_trylock(&(app)->stateMutex); \
+			int _trylock_result = pthread_rwlock_trywrlock((pthread_rwlock_t *)&(app)->stateRwlock); \
 			if (_trylock_result == 0) { \
-				pthread_mutex_unlock(&(app)->stateMutex); \
-				assert(0 && "stateMutex is NOT held (expected to be held)"); \
+				pthread_rwlock_unlock((pthread_rwlock_t *)&(app)->stateRwlock); \
+				assert(0 && "stateRwlock is NOT held (expected to be held)"); \
 			} else { \
-				assert(_trylock_result == EBUSY && "stateMutex should be held"); \
+				assert(_trylock_result == EBUSY && "stateRwlock should be held"); \
 			} \
 		} \
 	} while (0)
 
-/* Assert that stateMutex is NOT currently held by calling thread */
+/* Assert that stateRwlock is NOT currently held (trywrlock succeeds => was free; then unlock). */
 #define ASSERT_STATE_LOCK_NOT_HELD(app) \
 	do { \
 		if ((app)->settings.uiMode == BAR_UI_MODE_BOTH) { \
-			int _trylock_result = pthread_mutex_trylock(&(app)->stateMutex); \
-			assert(_trylock_result == 0 && "stateMutex is held (expected to be free)"); \
+			int _trylock_result = pthread_rwlock_trywrlock((pthread_rwlock_t *)&(app)->stateRwlock); \
+			assert(_trylock_result == 0 && "stateRwlock is held (expected to be free)"); \
 			if (_trylock_result == 0) { \
-				pthread_mutex_unlock(&(app)->stateMutex); \
+				pthread_rwlock_unlock((pthread_rwlock_t *)&(app)->stateRwlock); \
 			} \
 		} \
 	} while (0)

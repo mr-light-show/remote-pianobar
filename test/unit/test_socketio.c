@@ -150,7 +150,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 	app.settings = settings;
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	/* Create mock WebSocket context (no queue needed - commands execute directly) */
@@ -166,7 +166,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 	BarSocketIoHandleAction(&app, "playback.toggle", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	/* If we reach here without crashing, the test passes */
@@ -182,7 +182,7 @@ START_TEST(test_socketio_translate_song_commands) {
 	app.settings = settings;
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	BarWsContext_t ctx;
@@ -199,7 +199,7 @@ START_TEST(test_socketio_translate_song_commands) {
 	BarSocketIoHandleAction(&app, "song.tired", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	/* If we reach here without crashing, the test passes */
@@ -219,7 +219,7 @@ START_TEST(test_socketio_translate_volume_commands) {
 	app.player = player;
 	pthread_mutex_init(&app.player.lock, NULL);
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	BarWsContext_t ctx;
@@ -234,7 +234,7 @@ START_TEST(test_socketio_translate_volume_commands) {
 	
 	pthread_mutex_destroy(&app.player.lock);
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	/* If we reach here without crashing, the test passes */
@@ -250,7 +250,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 	app.settings = settings;
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	BarWsContext_t ctx;
@@ -261,7 +261,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 	BarSocketIoHandleAction(&app, "invalid.command", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	/* If we reach here without crashing, the test passes */
@@ -277,7 +277,7 @@ START_TEST(test_socketio_reject_single_letter) {
 	app.settings = settings;
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	BarWsContext_t ctx;
@@ -288,7 +288,7 @@ START_TEST(test_socketio_reject_single_letter) {
 	BarSocketIoHandleAction(&app, "n", NULL, NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	/* If we reach here without crashing, the test passes */
@@ -316,7 +316,7 @@ START_TEST(test_socketio_handle_query) {
 	app.settings.sortOrder = 0;  /* BAR_SORT_NAME_AZ */
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
@@ -331,7 +331,7 @@ START_TEST(test_socketio_handle_query) {
 	          strstr(lastBroadcastMessage, "stations") != NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	clearBroadcastMock();
@@ -347,7 +347,7 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	app.settings = settings;
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);
+	pthread_rwlock_init(&app.stateRwlock, NULL);
 	#endif
 
 	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
@@ -360,7 +360,7 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	ck_assert_ptr_null(lastBroadcastMessage);
 
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	clearBroadcastMock();
 }
@@ -395,7 +395,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	app.settings = settings;
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_init(&app.stateMutex, NULL);  /* Initialize mutex for safety */
+	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
 	
 	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
@@ -412,7 +412,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	ck_assert(strstr(lastBroadcastMessage, "1") != NULL);  /* PIANO_RATE_LOVE = 1 */
 	
 	#ifdef WEBSOCKET_ENABLED
-	pthread_mutex_destroy(&app.stateMutex);
+	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
 	
 	clearBroadcastMock();

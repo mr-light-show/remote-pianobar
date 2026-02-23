@@ -1652,11 +1652,11 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	/* Execute action directly by ID in WebSocket thread
 	 * 
 	 * THREAD SAFETY: This call may trigger state lock acquisition via:
-	 * - BarStateGetCurrentStation() acquires/releases stateMutex
-	 * - BarStateGetPlaylist() acquires/releases stateMutex
+	 * - BarStateGetCurrentStation() acquires/releases stateRwlock (read)
+	 * - BarStateGetPlaylist() acquires/releases stateRwlock (read)
 	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
 	 * 
-	 * Lock ordering is safe: stateMutex (if needed) → player.lock (if needed)
+	 * Lock ordering is safe: stateRwlock (if needed) → player.lock (if needed)
 	 * See src/THREAD_SAFETY.md for details */
 	BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
 	

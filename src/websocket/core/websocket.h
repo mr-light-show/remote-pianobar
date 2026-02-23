@@ -69,7 +69,7 @@ typedef struct {
 	/* Threading */
 	pthread_t thread;             /* WebSocket service thread */
 	bool threadRunning;           /* Thread lifecycle flag */
-	/* Note: stateMutex removed - use player->lock as single source of truth */
+	/* Note: stateRwlock lives in BarApp_t; use player->lock as single source of truth here */
 	
 	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
 	BarWsBucket_t buckets[BUCKET_COUNT];

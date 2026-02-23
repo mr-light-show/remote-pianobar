@@ -53,7 +53,7 @@ Pianobar uses **multiple independent locks** that protect different data:
 
 | Lock | Purpose | Scope | File |
 |------|---------|-------|------|
-| `app->stateMutex` | Protects Pandora state (stations, playlist, curStation, nextStation) | Only in `BAR_UI_MODE_BOTH` | [`bar_state.c`](bar_state.c) |
+| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and `BarStateCallPandora` (Pandora state) | Only in `BAR_UI_MODE_BOTH` | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.aoplayLock` | Protects audio buffer (fabuf, lastTimestamp, aoplayCond) | Always active | [`player.c`](player.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
@@ -120,7 +120,7 @@ pthread_mutex_unlock(&player->aoplayLock);
 When multiple locks must be acquired, **always follow this order**:
 
 ```
-1. app->stateMutex     (Pandora state)
+1. app->stateRwlock    (Pandora state - rdlock/wrlock)
    ↓
 2. app->player.lock    (Player state)
 ```
@@ -138,7 +138,7 @@ When multiple locks must be acquired, **always follow this order**:
 
 There is ONE documented exception to the "no I/O under lock" rule: `BarStateCallPandora()` in [`bar_state.c`](bar_state.c).
 
-This function holds `stateMutex` during network I/O (100-500ms) because:
+This function holds `stateRwlock` (write) during network I/O (100-500ms) because:
 1. The libpiano library's `PianoResponse()` directly modifies `app->ph.stations` and other shared state structures
 2. These modifications must be atomic - no partial updates can be visible to other threads
 3. Alternative approaches (copy-on-write, delta merging) would require extensive refactoring with high bug risk
@@ -151,19 +151,19 @@ This function holds `stateMutex` during network I/O (100-500ms) because:
 
 ### Conditional Locking
 
-`app->stateMutex` is **conditionally active**:
+`app->stateRwlock` is **conditionally active**:
 
 ```c
 #ifdef WEBSOCKET_ENABLED
 if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
-    pthread_mutex_lock(&app->stateMutex);
+    pthread_rwlock_rdlock(&app->stateRwlock);   /* or wrlock for writers */
     // ... critical section ...
-    pthread_mutex_unlock(&app->stateMutex);
+    pthread_rwlock_unlock(&app->stateRwlock);
 }
 #endif
 ```
 
-In CLI-only mode, the lock operations are no-ops (optimized away). This is implemented via the `WITH_STATE_LOCK` macros in [`bar_state.c`](bar_state.c).
+In CLI-only mode, the lock operations are no-ops (optimized away). This is implemented via the `WITH_STATE_LOCK`, `WITH_STATE_LOCK_RETURN`, and `WITH_STATE_LOCK_WRITE_RETURN` macros in [`bar_state.c`](bar_state.c).
 
 ---
 
@@ -245,7 +245,7 @@ bool success = BarStateCallPandora(app, PIANO_REQUEST_GET_PLAYLIST,
 ```
 
 **Why:** The wrapper (`BarStateCallPandora` in [`bar_state.c`](bar_state.c)) ensures that:
-1. The `stateMutex` is held during the API call
+1. The `stateRwlock` is held during the API call
 2. State modifications from the response are atomic
 3. Other threads see consistent state (e.g., not partial playlist updates)
 
@@ -259,7 +259,7 @@ BarStateSwitchStation(app, newStation);
 ```
 
 **Why:** This function (in [`bar_state.c`](bar_state.c)) atomically:
-1. Locks `stateMutex`
+1. Locks `stateRwlock`
 2. Drains the current playlist
 3. Sets `nextStation`
 4. Unlocks
@@ -314,23 +314,23 @@ if (song) {
 // ✗ UNSAFE: Wrong lock order (DEADLOCK RISK)
 pthread_mutex_lock(&app->player.lock);        // Lock 2 first
 // ... some work ...
-pthread_mutex_lock(&app->stateMutex);         // Then Lock 1
+pthread_rwlock_wrlock(&app->stateRwlock);     // Then Lock 1
 // ... critical section ...
-pthread_mutex_unlock(&app->stateMutex);
+pthread_rwlock_unlock(&app->stateRwlock);
 pthread_mutex_unlock(&app->player.lock);
 ```
 
-**Problem:** If another thread locks in the correct order (`stateMutex` → `player.lock`), both threads will deadlock.
+**Problem:** If another thread locks in the correct order (`stateRwlock` → `player.lock`), both threads will deadlock.
 
 **Fix:** Always lock in hierarchy order:
 
 ```c
 // ✓ SAFE: Correct lock order
-pthread_mutex_lock(&app->stateMutex);          // Lock 1 first
+pthread_rwlock_wrlock(&app->stateRwlock);      // Lock 1 first (or rdlock for read-only)
 pthread_mutex_lock(&app->player.lock);         // Then Lock 2
 // ... critical section ...
 pthread_mutex_unlock(&app->player.lock);
-pthread_mutex_unlock(&app->stateMutex);
+pthread_rwlock_unlock(&app->stateRwlock);
 ```
 
 **Even better:** Avoid nested locks entirely by using state getters/setters.
@@ -339,9 +339,9 @@ pthread_mutex_unlock(&app->stateMutex);
 
 ```c
 // ✗ UNSAFE: Network I/O under lock
-pthread_mutex_lock(&app->stateMutex);
+pthread_rwlock_wrlock(&app->stateRwlock);
 BarUiPianoCall(app, PIANO_REQUEST_GET_PLAYLIST, ...);  // Blocks for seconds!
-pthread_mutex_unlock(&app->stateMutex);
+pthread_rwlock_unlock(&app->stateRwlock);
 ```
 
 **Problem:** Network calls can take seconds. Holding the lock blocks all other threads from accessing state.
@@ -358,7 +358,7 @@ BarStateCallPandora(app, PIANO_REQUEST_GET_PLAYLIST, ...);
 ```c
 // ✗ UNSAFE: Function returns with lock held
 PianoStation_t *getStation(BarApp_t *app) {
-    pthread_mutex_lock(&app->stateMutex);
+    pthread_rwlock_rdlock(&app->stateRwlock);
     return app->curStation;  // LOCK STILL HELD!
 }
 ```
@@ -370,9 +370,9 @@ PianoStation_t *getStation(BarApp_t *app) {
 ```c
 // ✓ SAFE: Unlock before return
 PianoStation_t *getStation(BarApp_t *app) {
-    pthread_mutex_lock(&app->stateMutex);
+    pthread_rwlock_rdlock(&app->stateRwlock);
     PianoStation_t *station = app->curStation;
-    pthread_mutex_unlock(&app->stateMutex);
+    pthread_rwlock_unlock(&app->stateRwlock);
     return station;
 }
 ```
@@ -437,7 +437,7 @@ void outerFunction(BarApp_t *app) {
 ### Checklist for New Code
 
 - [ ] Uses state getters/setters instead of direct access
-- [ ] Locks are acquired in hierarchy order (stateMutex → player.lock)
+- [ ] Locks are acquired in hierarchy order (stateRwlock → player.lock)
 - [ ] No I/O operations under lock
 - [ ] No memory allocation/deallocation under lock
 - [ ] Locks are released on all code paths (including error paths)
@@ -599,8 +599,8 @@ $ ./pianobar
 **Available assertions** (defined in [`bar_state.h`](bar_state.h)):
 
 ```c
-ASSERT_STATE_LOCK_HELD(app);        // Verify stateMutex is held
-ASSERT_STATE_LOCK_NOT_HELD(app);    // Verify stateMutex is free
+ASSERT_STATE_LOCK_HELD(app);        // Verify stateRwlock is held (by some thread)
+ASSERT_STATE_LOCK_NOT_HELD(app);    // Verify stateRwlock is free
 ASSERT_PLAYER_LOCK_HELD(player);    // Verify player.lock is held
 ASSERT_PLAYER_LOCK_NOT_HELD(player); // Verify player.lock is free
 ```
@@ -608,7 +608,7 @@ ASSERT_PLAYER_LOCK_NOT_HELD(player); // Verify player.lock is free
 **Example usage:**
 
 ```c
-// Function that expects stateMutex to be held by caller
+// Function that expects stateRwlock to be held by caller
 static void modifyStateNoLock(BarApp_t *app, PianoStation_t *station) {
     ASSERT_STATE_LOCK_HELD(app);  // Verify contract
     app->curStation = station;
@@ -637,7 +637,7 @@ static void doNetworkCall(BarApp_t *app) {
 ### The Golden Rules
 
 1. **Use state abstractions**: Always use `BarState*()` functions
-2. **Lock ordering**: `stateMutex` before `player.lock` (if both needed)
+2. **Lock ordering**: `stateRwlock` before `player.lock` (if both needed)
 3. **Minimize lock duration**: Hold locks for microseconds, not milliseconds
 4. **No I/O under lock**: Release locks before network/disk/console operations
 5. **Broadcast after unlock**: Call `BarWsBroadcast*()` functions after releasing locks
@@ -647,15 +647,15 @@ static void doNetworkCall(BarApp_t *app) {
 
 | Operation | Function | Lock Used |
 |-----------|----------|-----------|
-| Get current station | `BarStateGetCurrentStation()` | `stateMutex` |
-| Set next station | `BarStateSetNextStation()` | `stateMutex` |
-| Find station by ID | `BarStateFindStationById()` | `stateMutex` |
-| Switch station | `BarStateSwitchStation()` | `stateMutex` |
-| Get playlist | `BarStateGetPlaylist()` | `stateMutex` |
-| Drain playlist | `BarStateDrainPlaylist()` | `stateMutex` |
+| Get current station | `BarStateGetCurrentStation()` | `stateRwlock` (read) |
+| Set next station | `BarStateSetNextStation()` | `stateRwlock` (write) |
+| Find station by ID | `BarStateFindStationById()` | `stateRwlock` (read) |
+| Switch station | `BarStateSwitchStation()` | `stateRwlock` (write) |
+| Get playlist | `BarStateGetPlaylist()` | `stateRwlock` (read) |
+| Drain playlist | `BarStateDrainPlaylist()` | `stateRwlock` (write) |
 | Get player paused | `BarStateGetPlayerPaused()` | `player.lock` |
 | Get player time | `BarStateGetPlayerTime()` | `player.lock` |
-| Make Pandora API call | `BarStateCallPandora()` | `stateMutex` |
+| Make Pandora API call | `BarStateCallPandora()` | `stateRwlock` (write) |
 
 ### Resources
 
