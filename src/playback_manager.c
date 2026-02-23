@@ -53,6 +53,8 @@ extern void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason);
 static pthread_t g_playbackThread;
 static volatile bool g_running = false;
 
+static bool g_idleLogged = false;
+
 /*	Join thread with timeout - prevents deadlock if player hangs on network
  *	Returns true if thread joined successfully, false if timeout expired
  */
@@ -225,7 +227,10 @@ static void *BarPlaybackManagerThread(void *data) {
 		
 		/* Player idle - check for next song */
 		if (mode == PLAYER_DEAD) {
-			debugPrint(DEBUG_UI, "PlaybackMgr: Player idle\n");
+			if (!g_idleLogged) {
+				g_idleLogged = true;
+				debugPrint(DEBUG_UI, "PlaybackMgr: Player idle\n");
+			}
 			
 			/* Advance playlist */
 			PianoSong_t *playlist = BarStateGetPlaylist(app);
@@ -255,6 +260,7 @@ static void *BarPlaybackManagerThread(void *data) {
 			
 			/* Start next song */
 			if (playlist != NULL) {
+				g_idleLogged = false;  /* log "Player idle" once when we next become idle */
 				debugPrint(DEBUG_UI, "PlaybackMgr: Starting next song\n");
 				BarMainStartPlayback(app, &playerThread);
 				/* Note: BarMainStartPlayback already calls BarWsBroadcastSongStart */
