@@ -26,7 +26,7 @@ THE SOFTWARE.
 #endif
 
 #include "../../main.h"
-#include "../../debug.h"
+#include "../../log.h"
 #include "../../ui.h"
 #include "../../ui_dispatch.h"
 #include "../../bar_state.h"
@@ -220,21 +220,21 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	json_object *data = NULL;
 	
 	if (!app || !message) {
-		debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with null app or message\n");
+		log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with null app or message\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.100s%s\n", 
+	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.100s%s\n", 
 	           message, strlen(message) > 100 ? "..." : "");
 	
 	/* Parse Socket.IO message */
 	type = BarSocketIoParse(message, &eventName, &data);
 	
-	debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Parsed message - type=%d, eventName=%s\n", 
+	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Parsed message - type=%d, eventName=%s\n", 
 	           type, eventName ? eventName : "(null)");
 	
 	if (type == SOCKETIO_CONNECT) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
 		/* Send initial state on connect (unicast to requesting client) */
 		BarSocketIoHandleQuery(app, wsi);
 		goto cleanup;
@@ -285,7 +285,7 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 		BarSocketIoHandleQuery(app, wsi);
 	} else if (strcmp(eventName, "query.stations") == 0) {
 		/* query.stations = just stations list */
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
 		BarSocketIoEmitStations(app);
 	} else if (strcmp(eventName, "station.setQuickMix") == 0) {
 		/* Set QuickMix stations from array of station IDs */
@@ -332,7 +332,7 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	} else if (strcmp(eventName, "ping") == 0) {
 		/* Client keepalive no-op; no response needed */
 	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
 	}
 	
 cleanup:
@@ -411,40 +411,36 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 	char *message;
 	
 	if (!event) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Emit called with null event\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Emit called with null event\n");
 		return;
 	}
 	
 	/* Use separate debug flag for progress events */
 	bool isProgress = (strcmp(event, "progress") == 0);
-#ifdef HAVE_DEBUGLOG
-	debugKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
-#else
-	int dbgFlag = 0;  /* Unused when debugPrint is a no-op */
-#endif
-	
-	debugPrint(dbgFlag, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
-	
+	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
+
+	log_write(dbgFlag, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
+
 	message = BarSocketIoFormat(event, data);
 	if (!message) {
-		debugPrint(dbgFlag, "Socket.IO: Failed to format message for event '%s'\n", event);
+		log_write(dbgFlag, "Socket.IO: Failed to format message for event '%s'\n", event);
 		return;
 	}
-	
-	debugPrint(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.100s%s\n", 
+
+	log_write(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.100s%s\n",
 	           strlen(message), message, strlen(message) > 100 ? "..." : "");
-	
+
 	/* Broadcast to all clients if callback is set */
 	if (g_broadcastCallback) {
-		debugPrint(dbgFlag, "Socket.IO: Calling broadcast callback\n");
+		log_write(dbgFlag, "Socket.IO: Calling broadcast callback\n");
 		g_broadcastCallback(message, strlen(message));
-		debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Broadcast callback returned\n");
+		log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Broadcast callback returned\n");
 	} else {
-		debugPrint(dbgFlag, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
+		log_write(dbgFlag, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
 	}
-	
+
 	free(message);
-	debugPrint(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
+	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
 /* Emit 'start' event (song started) */
@@ -523,7 +519,7 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 	/* Check if stations are available */
 	PianoStation_t *stationList = BarStateGetStationList(app);
 	if (!stationList) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: No stations available yet\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: No stations available yet\n");
 		/* Send empty stations array */
 		stations = json_object_new_array();
 		BarSocketIoEmit("stations", stations);
@@ -569,11 +565,11 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	json_object *data, *song;
 	
 	if (!app) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess starting\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess starting\n");
 	
 	data = json_object_new_object();
 	PianoSong_t *playlist = BarStateGetPlaylist(app);
@@ -624,11 +620,11 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 		json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
 	BarSocketIoEmit("process", data);
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
 	json_object_put(data);
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
 }
 
 /* Emit 'process' event to specific client only (unicast) */
@@ -728,10 +724,10 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 	PianoReturn_t *pRet, CURLcode *wRet) {
 	bool ok = BarUiPianoCallLogged(app, type, data, actionName, pRet, wRet);
 	if (ok) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: %s\n", actionName);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: %s\n", actionName);
 		return true;
 	}
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Failed: %s\n", actionName);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Failed: %s\n", actionName);
 	BarSocketIoOnPandoraRequestFailed(*pRet);
 	char buf[256];
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
@@ -844,11 +840,11 @@ void BarSocketIoHandleGetGenres(BarApp_t *app) {
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Get genres request\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Get genres request\n");
 	
 	/* Fetch genre stations if not already cached */
 	if (app->ph.genreStations == NULL) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Fetching genre stations from API\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Fetching genre stations from API\n");
 		if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
 				"Receiving genre stations", "station.getGenres", &pRet, &wRet)) {
 			return;
@@ -868,24 +864,24 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, json_object *data) {
 	const char *musicId;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addGenre - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addGenre - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract musicId from data */
 	if (!json_object_object_get_ex(data, "musicId", &musicIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addGenre - missing musicId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addGenre - missing musicId\n");
 		return;
 	}
 	
 	musicId = json_object_get_string(musicIdObj);
 	
 	if (!musicId) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addGenre - invalid musicId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addGenre - invalid musicId\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Creating genre station with musicId: %s\n", musicId);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Creating genre station with musicId: %s\n", musicId);
 	
 	/* Set up request data */
 	reqData.token = (char *)musicId;
@@ -908,32 +904,32 @@ void BarSocketIoHandleAddShared(BarApp_t *app, json_object *data) {
 	const char *stationId;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addShared - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract stationId from data */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - missing stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addShared - missing stationId\n");
 		return;
 	}
 	
 	stationId = json_object_get_string(stationIdObj);
 	
 	if (!stationId) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - invalid stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addShared - invalid stationId\n");
 		return;
 	}
 	
 	/* Validate stationId contains only digits */
 	for (const char *p = stationId; *p != '\0'; p++) {
 		if (*p < '0' || *p > '9') {
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addShared - stationId must contain only digits: %s\n", stationId);
+			log_write(DEBUG_WEBSOCKET, "Socket.IO: addShared - stationId must contain only digits: %s\n", stationId);
 			return;
 		}
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Adding shared station with ID: %s\n", stationId);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Adding shared station with ID: %s\n", stationId);
 	
 	/* Set up request data */
 	reqData.token = (char *)stationId;
@@ -957,14 +953,14 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	PianoStation_t *station;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract musicId and stationId from data */
 	if (!json_object_object_get_ex(data, "musicId", &musicIdObj) ||
 	    !json_object_object_get_ex(data, "stationId", &stationIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - missing musicId or stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - missing musicId or stationId\n");
 		return;
 	}
 	
@@ -972,22 +968,22 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	stationId = json_object_get_string(stationIdObj);
 	
 	if (!musicId || !stationId) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - invalid musicId or stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - invalid musicId or stationId\n");
 		return;
 	}
 	
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - station not found\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Adding music to station: %s\n", station->name);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Adding music to station: %s\n", station->name);
 	
 	/* Check if station is shared (QuickMix) and transform if needed */
 	if (!BarWsTransformIfShared(app, station)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: addMusic - failed to transform\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - failed to transform\n");
 		BarSocketIoEmitError("station.addMusic", "Failed to transform station");
 		return;
 	}
@@ -1011,14 +1007,14 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	PianoStation_t *station;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract stationId and newName from data */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj) ||
 	    !json_object_object_get_ex(data, "newName", &newNameObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - missing stationId or newName\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - missing stationId or newName\n");
 		return;
 	}
 	
@@ -1026,22 +1022,22 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	newName = json_object_get_string(newNameObj);
 	
 	if (!stationId || !newName || strlen(newName) == 0) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - invalid stationId or newName\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - invalid stationId or newName\n");
 		return;
 	}
 	
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - station not found\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Renaming station from '%s' to '%s'\n", station->name, newName);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Renaming station from '%s' to '%s'\n", station->name, newName);
 	
 	/* Check if station is shared and transform if needed */
 	if (!BarWsTransformIfShared(app, station)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: renameStation - failed to transform\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - failed to transform\n");
 		BarSocketIoEmitError("station.rename", "Failed to transform station");
 		return;
 	}
@@ -1068,31 +1064,31 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
 	PianoStation_t *station;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract stationId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - missing stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - missing stationId\n");
 		return;
 	}
 	
 	stationId = json_object_get_string(stationIdObj);
 	if (!stationId) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid stationId\n");
 		return;
 	}
 	
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - station not found\n");
 		return;
 	}
 	
 	if (station->isQuickMix) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - QuickMix not supported\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - QuickMix not supported\n");
 		return;
 	}
 	
@@ -1148,14 +1144,14 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	PianoStation_t *station;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract stationId and modeId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj) ||
 	    !json_object_object_get_ex(data, "modeId", &modeIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - missing parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - missing parameters\n");
 		return;
 	}
 	
@@ -1165,11 +1161,11 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - station not found\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Setting station mode to %d\n", modeId);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Setting station mode to %d\n", modeId);
 	
 	/* Set station mode */
 	reqData.station = station;
@@ -1189,13 +1185,13 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
 	PianoStation_t *station;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract stationId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - missing stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - missing stationId\n");
 		return;
 	}
 	
@@ -1204,7 +1200,7 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
 		return;
 	}
 	
@@ -1296,7 +1292,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	PianoStation_t *station;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - invalid parameters\n");
 		return;
 	}
 	
@@ -1304,7 +1300,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	if (!json_object_object_get_ex(data, "seedId", &seedIdObj) ||
 	    !json_object_object_get_ex(data, "seedType", &seedTypeObj) ||
 	    !json_object_object_get_ex(data, "stationId", &stationIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - missing parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - missing parameters\n");
 		return;
 	}
 	
@@ -1315,7 +1311,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - station not found\n");
 		return;
 	}
 	
@@ -1340,7 +1336,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 			}
 		}
 		if (reqData.artist != NULL) {
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting artist seed\n");
+			log_write(DEBUG_WEBSOCKET, "Socket.IO: Deleting artist seed\n");
 			BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
 					"Deleting artist seed", "station.deleteSeed", &pRet, &wRet);
 		}
@@ -1353,7 +1349,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 			}
 		}
 		if (reqData.song != NULL) {
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting song seed\n");
+			log_write(DEBUG_WEBSOCKET, "Socket.IO: Deleting song seed\n");
 			BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
 					"Deleting song seed", "station.deleteSeed", &pRet, &wRet);
 		}
@@ -1366,7 +1362,7 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 			}
 		}
 		if (reqData.station != NULL) {
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting station seed\n");
+			log_write(DEBUG_WEBSOCKET, "Socket.IO: Deleting station seed\n");
 			BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_SEED, &reqData,
 					"Deleting station seed", "station.deleteSeed", &pRet, &wRet);
 		}
@@ -1386,14 +1382,14 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	PianoSong_t *feedbackSong = NULL;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract parameters */
 	if (!json_object_object_get_ex(data, "feedbackId", &feedbackIdObj) ||
 	    !json_object_object_get_ex(data, "stationId", &stationIdObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - missing parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - missing parameters\n");
 		return;
 	}
 	
@@ -1403,7 +1399,7 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	/* Find the station */
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - station not found\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - station not found\n");
 		return;
 	}
 	
@@ -1426,7 +1422,7 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	}
 	
 	if (feedbackSong != NULL) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting feedback\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Deleting feedback\n");
 		BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_FEEDBACK, feedbackSong,
 				"Deleting feedback", "station.deleteFeedback", &pRet, &wRet);
 	}
@@ -1514,24 +1510,24 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
 	const char *query;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract query from data */
 	if (!json_object_object_get_ex(data, "query", &queryObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: music.search - missing query\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - missing query\n");
 		return;
 	}
 	
 	query = json_object_get_string(queryObj);
 	
 	if (!query) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid query\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid query\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Searching for: %s\n", query);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Searching for: %s\n", query);
 	
 	/* Set up request data */
 	reqData.searchStr = (char *)query;
@@ -1564,12 +1560,12 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			
 			if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 				/* System volume mode - set OS volume directly */
-				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → system volume=%d%%\n", 
+				log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → system volume=%d%%\n", 
 				           action, volumePercent);
 				BarSystemVolumeSet(volumePercent);
 			} else {
 				/* Player volume mode - use percentage directly (linear 0-100) */
-				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%d%%\n", 
+				log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%d%%\n", 
 				           action, volumePercent);
 				app->settings.volume = volumePercent;
 				BarPlayerSetVolume(&app->player);
@@ -1587,12 +1583,12 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	actionId = BarSocketIoTranslateAction(action);
 	
 	if (actionId == (BarKeyShortcutId_t)-1) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Unknown or unsupported action: %s\n", action);
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Use descriptive commands (e.g., playback.next, song.love)\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown or unsupported action: %s\n", action);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Use descriptive commands (e.g., playback.next, song.love)\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → ID %d (executing directly)\n", 
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → ID %d (executing directly)\n", 
 	           action, actionId);
 	
 	/* Set context based on Pandora connection status */
@@ -1618,7 +1614,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	/* When Pandora is disconnected, treat playback.play as reconnect so clients can always send "play" */
 	if (actionId == BAR_KS_PLAY && (context & BAR_DC_PANDORA_DISCONNECTED)) {
 		actionId = BAR_KS_PANDORA_RECONNECT;
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
 	}
 	
 	/* Check if action can be executed in current context */
@@ -1637,7 +1633,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			errorMsg = "Action cannot be performed in current context";
 		}
 		
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' failed: %s\n", action, errorMsg);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' failed: %s\n", action, errorMsg);
 		BarSocketIoEmitError(action, errorMsg);
 		return;
 	}
@@ -1686,21 +1682,21 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Change station request: %s\n", stationId);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Change station request: %s\n", stationId);
 	
 	/* Find station by ID */
 	station = BarStateFindStationById(app, stationId);
 	
 	if (station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Switching to station: %s\n", station->name);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to station: %s\n", station->name);
 		/* Clear saved station - user made explicit choice */
 		free(app->lastStationId);
 		app->lastStationId = NULL;
 		/* Switch to the new station and drain current playlist */
 		BarUiSwitchStation(app, station);
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
 		BarSocketIoEmitErrorEx("station.change", "Station not found", stationId);
 	}
 }
@@ -1712,17 +1708,17 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 	int arrayLen, i;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - invalid parameters\n");
 		return;
 	}
 	
 	/* Expect data to be an array of station IDs */
 	if (!json_object_is_type(data, json_type_array)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - data is not an array\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - data is not an array\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Setting QuickMix stations...\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Setting QuickMix stations...\n");
 	
 	/* First, set all stations to NOT be in QuickMix */
 	station = BarStateGetStationList(app);
@@ -1742,7 +1738,7 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 			PianoListForeachP (station) {
 				if (strcmp(station->id, stationId) == 0) {
 					station->useQuickMix = true;
-					debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Added '%s' to QuickMix\n", 
+					log_write(DEBUG_WEBSOCKET, "Socket.IO: Added '%s' to QuickMix\n", 
 					           station->name);
 					break;
 				}
@@ -1768,7 +1764,7 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 	bool wasCurrentStation;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - invalid parameters\n");
 		return;
 	}
 	
@@ -1780,30 +1776,30 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 		if (json_object_object_get_ex(data, "stationId", &stationIdObj)) {
 			stationId = json_object_get_string(stationIdObj);
 		} else {
-			debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - missing stationId\n");
+			log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - missing stationId\n");
 			return;
 		}
 	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - invalid data type\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - invalid data type\n");
 		return;
 	}
 	
 	if (!stationId) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - null stationId\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteStation - null stationId\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Delete station request: %s\n", stationId);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Delete station request: %s\n", stationId);
 	
 	/* Find station by ID */
 	station = BarStateFindStationById(app, stationId);
 	
 	if (!station) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Deleting station: %s\n", station->name);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Deleting station: %s\n", station->name);
 	
 	/* Check if this is the currently playing station */
 	wasCurrentStation = (station == BarStateGetCurrentStation(app));
@@ -1824,7 +1820,7 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 			}
 			
 			if (quickMixStation) {
-				debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Switching to QuickMix after deletion\n");
+				log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to QuickMix after deletion\n");
 				BarUiSwitchStation(app, quickMixStation);
 			}
 			
@@ -1844,14 +1840,14 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	const char *trackToken, *type;
 	
 	if (!app || !data) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: createFrom - invalid parameters\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: createFrom - invalid parameters\n");
 		return;
 	}
 	
 	/* Extract trackToken and type from data */
 	if (!json_object_object_get_ex(data, "trackToken", &trackTokenObj) ||
 	    !json_object_object_get_ex(data, "type", &typeObj)) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: createFrom - missing trackToken or type\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: createFrom - missing trackToken or type\n");
 		return;
 	}
 	
@@ -1859,11 +1855,11 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	type = json_object_get_string(typeObj);
 	
 	if (!trackToken || !type) {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: createFrom - invalid trackToken or type\n");
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: createFrom - invalid trackToken or type\n");
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Creating station from %s...\n", type);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Creating station from %s...\n", type);
 	
 	/* Set up request data */
 	reqData.token = (char *)trackToken;
@@ -1874,7 +1870,7 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	} else if (strcmp(type, "artist") == 0) {
 		reqData.type = PIANO_MUSICTYPE_ARTIST;
 	} else {
-		debugPrint(DEBUG_WEBSOCKET, "Socket.IO: createFrom - invalid type: %s\n", type);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: createFrom - invalid type: %s\n", type);
 		return;
 	}
 	
@@ -1892,7 +1888,7 @@ void BarSocketIoHandleQuery(BarApp_t *app, void *wsi) {
 		return;
 	}
 	
-	debugPrint(DEBUG_WEBSOCKET, "Socket.IO: Query received\n");
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Query received\n");
 	
 	/* Send full state to requesting client only (unicast) */
 	BarSocketIoSetUnicastTarget(wsi);

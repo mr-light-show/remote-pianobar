@@ -86,7 +86,7 @@ THE SOFTWARE.
 	} while (0)
 
 /* Assert that player.decoderLock is currently held */
-#define ASSERT_AOPLAY_LOCK_HELD(player) \
+#define ASSERT_DECODER_LOCK_HELD(player) \
 	do { \
 		int _trylock_result = pthread_mutex_trylock(&(player)->decoderLock); \
 		if (_trylock_result == 0) { \
@@ -98,7 +98,7 @@ THE SOFTWARE.
 	} while (0)
 
 /* Assert that player.decoderLock is NOT currently held */
-#define ASSERT_AOPLAY_LOCK_NOT_HELD(player) \
+#define ASSERT_DECODER_LOCK_NOT_HELD(player) \
 	do { \
 		int _trylock_result = pthread_mutex_trylock(&(player)->decoderLock); \
 		assert(_trylock_result == 0 && "decoderLock is held (expected to be free)"); \
@@ -113,8 +113,8 @@ THE SOFTWARE.
 #define ASSERT_STATE_LOCK_NOT_HELD(app) ((void)0)
 #define ASSERT_PLAYER_LOCK_HELD(player) ((void)0)
 #define ASSERT_PLAYER_LOCK_NOT_HELD(player) ((void)0)
-#define ASSERT_AOPLAY_LOCK_HELD(player) ((void)0)
-#define ASSERT_AOPLAY_LOCK_NOT_HELD(player) ((void)0)
+#define ASSERT_DECODER_LOCK_HELD(player) ((void)0)
+#define ASSERT_DECODER_LOCK_NOT_HELD(player) ((void)0)
 #endif
 
 /* Initialize/destroy state mutex */

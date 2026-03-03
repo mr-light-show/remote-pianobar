@@ -61,7 +61,7 @@ THE SOFTWARE.
 #endif
 
 #include "player.h"
-#include "debug.h"
+#include "log.h"
 #include "ui.h"
 #include "ui_types.h"
 
@@ -195,7 +195,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 			/* End of stream */
 			av_frame_free(&newFrame);
 			pFFmpeg->reachedEnd = true;
-		debugPrint(DEBUG_AUDIO, "FFmpeg data source reached EOF at frame %llu\n", 
+		log_write(DEBUG_AUDIO, "FFmpeg data source reached EOF at frame %llu\n", 
 		           (unsigned long long)pFFmpeg->cursor);
 			break;
 		} else if (ret == AVERROR(EAGAIN)) {
@@ -219,7 +219,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		} else if (ret < 0) {
 			/* Error */
 			av_frame_free(&newFrame);
-			debugPrint(DEBUG_AUDIO, "FFmpeg buffersink error: %d\n", ret);
+			log_write(DEBUG_AUDIO, "FFmpeg buffersink error: %d\n", ret);
 			break;
 		}
 		
@@ -230,7 +230,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		
 		/* Periodic frame stats logging - uncomment to debug memory leaks
 		if (g_framesAllocated % 1000 == 0) {
-			debugPrint(DEBUG_AUDIO, "Frame stats: alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
+			log_write(DEBUG_AUDIO, "Frame stats: alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
 			           g_framesAllocated, g_framesFreed, 
 			           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
 		}
@@ -351,7 +351,7 @@ static ma_result ffmpeg_data_source_init(ffmpeg_data_source_t* pFFmpeg, player_t
 	double durationSecs = av_q2d(player->st->time_base) * (double)player->st->duration;
 	pFFmpeg->totalFrames = (ma_uint64)(durationSecs * pFFmpeg->sampleRate);
 	
-	debugPrint(DEBUG_AUDIO, "FFmpeg data source initialized: %u Hz, %u channels, %llu total frames (%.1f sec)\n",
+	log_write(DEBUG_AUDIO, "FFmpeg data source initialized: %u Hz, %u channels, %llu total frames (%.1f sec)\n",
 	           pFFmpeg->sampleRate, pFFmpeg->channels, (unsigned long long)pFFmpeg->totalFrames, durationSecs);
 	
 	return MA_SUCCESS;
@@ -378,7 +378,7 @@ static void onSongEnd(void* pUserData, ma_sound* pSound) {
 	(void)pSound;
 	player_t* player = (player_t*)pUserData;
 	
-	debugPrint(DEBUG_AUDIO, "Song end callback fired\n");
+	log_write(DEBUG_AUDIO, "Song end callback fired\n");
 	
 	pthread_mutex_lock(&player->lock);
 	player->mode = PLAYER_FINISHED;
@@ -425,11 +425,11 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	engineConfig.noDevice = MA_FALSE;
 	ma_result result = ma_engine_init(&engineConfig, &p->engine);
 	if (result != MA_SUCCESS) {
-		fprintf(stderr, "Failed to initialize audio engine: %d\n", result);
+		log_write(LOG_ERROR, "Failed to initialize audio engine: %d\n", result);
 		p->engineInitialized = false;
 	} else {
 		p->engineInitialized = true;
-		debugPrint(DEBUG_AUDIO, "Audio engine initialized (sample rate: %u)\n",
+		log_write(DEBUG_AUDIO, "Audio engine initialized (sample rate: %u)\n",
 		           ma_engine_get_sample_rate(&p->engine));
 	}
 	
@@ -440,14 +440,14 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 void BarPlayerDestroy(player_t * const p) {
 	/* Uninit engine */
 	if (p->engineInitialized) {
-		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: Stopping engine before uninit\n");
+		log_write(DEBUG_AUDIO, "BarPlayerDestroy: Stopping engine before uninit\n");
 		
 		/* Stop engine playback before uninit to avoid audio drain delay on Linux */
 		ma_engine_stop(&p->engine);
 		
-		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: Calling ma_engine_uninit\n");
+		log_write(DEBUG_AUDIO, "BarPlayerDestroy: Calling ma_engine_uninit\n");
 		ma_engine_uninit(&p->engine);
-		debugPrint(DEBUG_AUDIO, "BarPlayerDestroy: ma_engine_uninit completed\n");
+		log_write(DEBUG_AUDIO, "BarPlayerDestroy: ma_engine_uninit completed\n");
 		
 		p->engineInitialized = false;
 	}
@@ -472,7 +472,7 @@ void BarPlayerReset(player_t * const p) {
 		ma_sound_stop(&p->sound);
 		
 		ma_sound_uninit(&p->sound);
-		debugPrint(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
+		log_write(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
 	}
 	p->soundInitialized = false;
 	
@@ -748,7 +748,7 @@ static int decode(player_t * const player) {
 			if (ret == AVERROR_EOF) {
 				drainMode = DRAIN;
 				avcodec_send_packet(cctx, NULL);
-				debugPrint(DEBUG_AUDIO, "Decoder entering drain mode after EOF\n");
+				log_write(DEBUG_AUDIO, "Decoder entering drain mode after EOF\n");
 			} else if (pkt->stream_index != player->streamIdx) {
 				av_packet_unref(pkt);
 				continue;
@@ -757,7 +757,7 @@ static int decode(player_t * const player) {
 				if (av_strerror(ret, error, sizeof(error)) < 0) {
 					strncpy(error, "(unknown)", sizeof(error) - 1);
 				}
-			debugPrint(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
+			log_write(DEBUG_AUDIO, "av_read_frame failed with code %i (%s)\n", ret, error);
 			
 			pthread_mutex_lock(&player->decoderLock);
 			int flush_ret = av_buffersrc_add_frame(player->fabuf, NULL);
@@ -774,7 +774,7 @@ static int decode(player_t * const player) {
 			ret = avcodec_receive_frame(cctx, frame);
 			if (ret == AVERROR_EOF) {
 			drainMode = DONE;
-			debugPrint(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
+			log_write(DEBUG_AUDIO, "Decoder drained, sending NULL frame\n");
 			
 			pthread_mutex_lock(&player->decoderLock);
 			int flush_ret = av_buffersrc_add_frame(player->fabuf, NULL);
@@ -809,7 +809,7 @@ static int decode(player_t * const player) {
 	pthread_cond_broadcast(&player->decoderCond);
 	pthread_mutex_unlock(&player->decoderLock);
 	
-	debugPrint(DEBUG_AUDIO, "Decoder finished\n");
+	log_write(DEBUG_AUDIO, "Decoder finished\n");
 	return ret;
 }
 
@@ -859,7 +859,7 @@ static bool setupSound(player_t * const player) {
 		return false;
 	}
 	
-	debugPrint(DEBUG_AUDIO, "Sound started successfully\n");
+	log_write(DEBUG_AUDIO, "Sound started successfully\n");
 	return true;
 }
 
@@ -875,18 +875,18 @@ static void cleanupSound(player_t * const player) {
 		
 		ma_sound_uninit(&player->sound);
 		player->soundInitialized = false;
-		debugPrint(DEBUG_AUDIO, "Sound cleaned up\n");
+		log_write(DEBUG_AUDIO, "Sound cleaned up\n");
 	}
 	
 	ffmpeg_data_source_uninit(&player->dataSource);
 }
 
 static void finish(player_t * const player) {
-	debugPrint(DEBUG_AUDIO, "RSS at finish() start: %ld KB\n", getCurrentRSSKB());
+	log_write(DEBUG_AUDIO, "RSS at finish() start: %ld KB\n", getCurrentRSSKB());
 	
 	/* Clean up miniaudio sound */
 	cleanupSound(player);
-	debugPrint(DEBUG_AUDIO, "RSS after cleanupSound: %ld KB\n", getCurrentRSSKB());
+	log_write(DEBUG_AUDIO, "RSS after cleanupSound: %ld KB\n", getCurrentRSSKB());
 	
 	/* Drain any remaining frames from buffersink before freeing graph.
 	 * Frames can accumulate if playback stops mid-song or if miniaudio
@@ -901,31 +901,31 @@ static void finish(player_t * const player) {
 			}
 			av_frame_free(&drainFrame);
 			if (drainCount > 0) {
-				debugPrint(DEBUG_AUDIO, "Drained %d frames from buffersink\n", drainCount);
+				log_write(DEBUG_AUDIO, "Drained %d frames from buffersink\n", drainCount);
 			}
 		}
 	}
-	debugPrint(DEBUG_AUDIO, "RSS after drain: %ld KB\n", getCurrentRSSKB());
+	log_write(DEBUG_AUDIO, "RSS after drain: %ld KB\n", getCurrentRSSKB());
 	
 	/* Clean up ffmpeg resources */
 	if (player->fgraph != NULL) {
 		avfilter_graph_free(&player->fgraph);
 		player->fgraph = NULL;
 	}
-	debugPrint(DEBUG_AUDIO, "RSS after avfilter_graph_free: %ld KB\n", getCurrentRSSKB());
+	log_write(DEBUG_AUDIO, "RSS after avfilter_graph_free: %ld KB\n", getCurrentRSSKB());
 	
 	if (player->cctx != NULL) {
 		avcodec_free_context(&player->cctx);
 		player->cctx = NULL;
 	}
-	debugPrint(DEBUG_AUDIO, "RSS after avcodec_free_context: %ld KB\n", getCurrentRSSKB());
+	log_write(DEBUG_AUDIO, "RSS after avcodec_free_context: %ld KB\n", getCurrentRSSKB());
 	
 	if (player->fctx != NULL) {
 		avformat_close_input(&player->fctx);
 	}
-	debugPrint(DEBUG_AUDIO, "RSS after avformat_close_input: %ld KB\n", getCurrentRSSKB());
+	log_write(DEBUG_AUDIO, "RSS after avformat_close_input: %ld KB\n", getCurrentRSSKB());
 	
-	debugPrint(DEBUG_AUDIO, "Song cleanup complete: frames alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
+	log_write(DEBUG_AUDIO, "Song cleanup complete: frames alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
 	           g_framesAllocated, g_framesFreed, 
 	           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
 }
@@ -948,28 +948,28 @@ void *BarPlayerThread(void *data) {
 		
 		/* Check quit before starting/retrying */
 		if (shouldQuit(player)) {
-			debugPrint(DEBUG_AUDIO, "Player: Quit detected before stream open\n");
+			log_write(DEBUG_AUDIO, "Player: Quit detected before stream open\n");
 			break;
 		}
 		
-		debugPrint(DEBUG_AUDIO, "RSS before openStream: %ld KB\n", getCurrentRSSKB());
+		log_write(DEBUG_AUDIO, "RSS before openStream: %ld KB\n", getCurrentRSSKB());
 		
 		if (openStream(player)) {
-			debugPrint(DEBUG_AUDIO, "RSS after openStream: %ld KB\n", getCurrentRSSKB());
+			log_write(DEBUG_AUDIO, "RSS after openStream: %ld KB\n", getCurrentRSSKB());
 			
 			if (openFilter(player) && setupSound(player)) {
-				debugPrint(DEBUG_AUDIO, "RSS after openFilter+setupSound: %ld KB\n", getCurrentRSSKB());
+				log_write(DEBUG_AUDIO, "RSS after openFilter+setupSound: %ld KB\n", getCurrentRSSKB());
 				
 				changeMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
 				
 			/* Run decoder - feeds frames to filter chain which miniaudio reads from */
 			const int ret = decode(player);
-			debugPrint(DEBUG_AUDIO, "RSS after decode: %ld KB\n", getCurrentRSSKB());
+			log_write(DEBUG_AUDIO, "RSS after decode: %ld KB\n", getCurrentRSSKB());
 			
 			/* Check quit after decode completes */
 			if (shouldQuit(player)) {
-				debugPrint(DEBUG_AUDIO, "Player: Quit detected after decode\n");
+				log_write(DEBUG_AUDIO, "Player: Quit detected after decode\n");
 				finish(player);
 				break;
 			}
@@ -978,7 +978,7 @@ void *BarPlayerThread(void *data) {
 		while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
 			/* Check quit first and stop audio immediately */
 			if (shouldQuit(player)) {
-				debugPrint(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
+				log_write(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
 				if (player->soundInitialized) {
 					ma_sound_stop(&player->sound);
 				}
@@ -995,7 +995,7 @@ void *BarPlayerThread(void *data) {
 				
 				/* Check if song ended */
 				if (ma_sound_at_end(&player->sound)) {
-					debugPrint(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
+					log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
 					changeMode(player, PLAYER_FINISHED);
 					break;
 				}
@@ -1005,7 +1005,7 @@ void *BarPlayerThread(void *data) {
 			
 		/* Check quit after playback before retry logic */
 		if (shouldQuit(player)) {
-			debugPrint(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+			log_write(DEBUG_AUDIO, "Player: Quit detected after playback\n");
 			finish(player);
 			break;
 		}
@@ -1024,7 +1024,7 @@ finish(player);
 
 /* Check quit after cleanup before retry */
 if (shouldQuit(player)) {
-	debugPrint(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
+	log_write(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
 	break;
 }
 } while (retry);

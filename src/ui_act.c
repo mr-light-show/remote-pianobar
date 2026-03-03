@@ -37,7 +37,7 @@ THE SOFTWARE.
 #include "ui_dispatch.h"
 #include "websocket_bridge.h"
 #include "bar_state.h"
-#include "debug.h"
+#include "log.h"
 #include "system_volume.h"
 #include "station_display.h"
 
@@ -62,11 +62,11 @@ THE SOFTWARE.
 static inline void BarUiDoSkipSong (player_t * const player) {
 	assert (player != NULL);
 
-	/* CRITICAL RULE: player.lock and player.aoplayLock must NEVER be held simultaneously.
+	/* CRITICAL RULE: player.lock and player.decoderLock must NEVER be held simultaneously.
 	 * This function acquires them sequentially to signal both threads.
 	 * See src/THREAD_SAFETY.md for detailed explanation of two-lock player design. */
 	
-	ASSERT_AOPLAY_LOCK_NOT_HELD(player);  /* Verify aoplayLock is free before acquiring lock */
+	ASSERT_DECODER_LOCK_NOT_HELD(player);  /* Verify decoderLock is free before acquiring lock */
 	pthread_mutex_lock (&player->lock);
 	player->doQuit = true;
 	player->doPause = false;
@@ -118,7 +118,7 @@ int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 
 	/* shared stations must be transformed */
 	if (!station->isCreator) {
-		debugPrint(DEBUG_WEBSOCKET, "Transforming shared station...\n");
+		log_write(DEBUG_WEBSOCKET, "Transforming shared station...\n");
 		if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
 				"Transforming station", &pRet, &wRet)) {
 			return 0;

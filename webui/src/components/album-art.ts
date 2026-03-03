@@ -132,7 +132,7 @@ export class AlbumArt extends LitElement {
           <span class="icon material-icons">sync_problem</span>
           <h3>Connection Lost</h3>
           <p>Unable to connect to pianobar server.</p>
-          <button @click=${this.handleWebsocketReconnect}>
+          <button @click=${this.handleWebsocketReconnect} title="Reconnect">
             <span class="material-icons">sync</span>
             Reconnect
           </button>
@@ -147,7 +147,7 @@ export class AlbumArt extends LitElement {
           <span class="icon material-icons">cloud_off</span>
           <h3>Not Connected to Pandora</h3>
           <p>Click below to reconnect and access your stations.</p>
-          <button @click=${this.handlePandoraReconnect}>
+          <button @click=${this.handlePandoraReconnect} title="Reconnect">
             <span class="material-icons">login</span>
             Reconnect
           </button>

@@ -21,9 +21,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#include "debug.h"
+#pragma once
 
-#ifdef HAVE_DEBUGLOG
-unsigned int debug = 0;
-#endif
+#include "config.h"
+#include <stdbool.h>
 
+/* Log level / category: LOG_ERROR (0) always logs; others only when enabled via PIANOBAR_DEBUG. */
+typedef enum {
+	LOG_ERROR = 0,
+	DEBUG_NETWORK = 1,
+	DEBUG_AUDIO = 2,
+	DEBUG_UI = 4,
+	DEBUG_WEBSOCKET = 8,
+	DEBUG_WEBSOCKET_PROGRESS = 16,  /* Progress updates (noisy) */
+} logKind;
+
+/* Initialize log module (reads PIANOBAR_DEBUG for debug mask). Call once at startup. */
+void log_init(void);
+
+/* Log message. LOG_ERROR always emits; other kinds emit only when corresponding PIANOBAR_DEBUG bit is set. */
+void log_write(logKind kind, const char *format, ...)
+	__attribute__((format(printf, 2, 3)));

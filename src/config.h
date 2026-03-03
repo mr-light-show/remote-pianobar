@@ -43,8 +43,6 @@
 
 #ifndef NDEBUG
 #define HAVE_DEBUGLOG
-#define debug(...) fprintf(stderr, __VA_ARGS__)
-#else
-#define debug(...)
 #endif
+/* Use log_write() from log.h for diagnostics; debug() macro removed. */
 

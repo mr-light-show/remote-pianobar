@@ -9,7 +9,8 @@ This document describes the threading model, lock hierarchy, and safe coding pat
 3. [Safe Patterns](#safe-patterns)
 4. [Unsafe Patterns](#unsafe-patterns)
 5. [Guidelines for Contributors](#guidelines-for-contributors)
-6. [Debugging Tools](#debugging-tools)
+6. [Logging](#logging)
+7. [Debugging Tools](#debugging-tools)
 
 ---
 
@@ -55,7 +56,7 @@ Pianobar uses **multiple independent locks** that protect different data:
 |------|---------|-------|------|
 | `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and `BarStateCallPandora` (Pandora state) | Only in `BAR_UI_MODE_BOTH` | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
-| `app->player.aoplayLock` | Protects audio buffer (fabuf, lastTimestamp, aoplayCond) | Always active | [`player.c`](player.c) |
+| `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
 
 **Key Design Principle:** These locks are **independent** and protect **non-overlapping data**. This minimizes lock contention and simplifies reasoning about deadlocks.
@@ -73,7 +74,7 @@ The player uses **two separate locks** for different concerns:
 | Lock | Purpose | Access Pattern | Hold Time |
 |------|---------|----------------|-----------|
 | `player.lock` | Control plane (pause/skip/progress) | Low freq (~1/sec) | ~1µs |
-| `player.aoplayLock` | Data plane (audio buffer coordination) | High freq (~100/sec) | ~10µs |
+| `player.decoderLock` | Data plane (audio buffer coordination) | High freq (~100/sec) | ~10µs |
 
 **Why Two Locks?**
 
@@ -83,16 +84,16 @@ The player uses **two separate locks** for different concerns:
 
 3. **Clear Separation of Concerns**:
    - `player.lock` = "what should the player do?" (control plane)
-   - `player.aoplayLock` = "where is the audio data?" (data plane)
+   - `player.decoderLock` = "where is the audio data?" (data plane)
 
 **CRITICAL RULE: These locks must NEVER be held simultaneously.**
 
 **Example from audio thread** ([`player.c`](player.c)):
 ```c
-// Read from buffer (aoplayLock held)
-pthread_mutex_lock(&player->aoplayLock);
+// Read from buffer (decoderLock held)
+pthread_mutex_lock(&player->decoderLock);
 av_buffersink_get_frame(player->fbufsink, frame);
-pthread_mutex_unlock(&player->aoplayLock);
+pthread_mutex_unlock(&player->decoderLock);
 
 // Play audio (no locks held)
 ao_play(player->aoDev, data, size);
@@ -103,13 +104,13 @@ player->songPlayed = timestamp;
 if (player->doPause) { /* wait */ }
 pthread_mutex_unlock(&player->lock);
 
-// Update timestamp (aoplayLock held)
-pthread_mutex_lock(&player->aoplayLock);
+// Update timestamp (decoderLock held)
+pthread_mutex_lock(&player->decoderLock);
 player->lastTimestamp = timestamp;
-pthread_mutex_unlock(&player->aoplayLock);
+pthread_mutex_unlock(&player->decoderLock);
 ```
 
-**Assertions:** In DEBUG builds, attempting to acquire one while holding the other will trigger assert-fail. See `ASSERT_PLAYER_LOCK_NOT_HELD()` and `ASSERT_AOPLAY_LOCK_NOT_HELD()` in [`bar_state.h`](bar_state.h).
+**Assertions:** In DEBUG builds, attempting to acquire one while holding the other will trigger assert-fail. See `ASSERT_PLAYER_LOCK_NOT_HELD()` and `ASSERT_DECODER_LOCK_NOT_HELD()` in [`bar_state.h`](bar_state.h).
 
 ---
 
@@ -524,6 +525,19 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 
 // Between the two calls, player state may have changed!
 ```
+
+---
+
+## Logging
+
+Pianobar uses a single logging API for diagnostics and errors.
+
+- **User-facing messages:** Use `BarUiMsg(settings, level, format, ...)` for messages shown to the user in the UI (CLI or Web).
+- **Diagnostics and errors:** Use `log_write(kind, format, ...)` from [log.h](log.h):
+  - **LOG_ERROR** (0): Always logs. Use for errors, warnings, and important startup/info messages. Writes to stderr (and to the configured log file when the daemon redirects stderr).
+  - **DEBUG_*** (DEBUG_NETWORK, DEBUG_AUDIO, DEBUG_UI, DEBUG_WEBSOCKET, DEBUG_WEBSOCKET_PROGRESS): Log only when the corresponding bit is set in the `PIANOBAR_DEBUG` environment variable (e.g. `PIANOBAR_DEBUG=8` for WebSocket). Call `log_init()` once at startup (main.c does this); the debug mask is read from the environment and kept inside the log module.
+
+Do not use raw `fprintf(stderr, ...)` for diagnostics or errors; use `log_write(LOG_ERROR, ...)` or the appropriate DEBUG_* kind so that output is consistent (timestamps, optional color) and can be directed to the log file when configured.
 
 ---
 

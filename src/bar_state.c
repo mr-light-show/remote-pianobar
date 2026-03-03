@@ -25,7 +25,7 @@ THE SOFTWARE.
 
 #include "bar_state.h"
 #include "ui.h"
-#include "debug.h"
+#include "log.h"
 #include <assert.h>
 #include <string.h>
 #include <stdarg.h>
@@ -42,7 +42,7 @@ static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operat
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_rdlock((pthread_rwlock_t *)&app->stateRwlock);
-		debugPrint(DEBUG_UI, "State: Lock acquired (%s) (read)\n", operation);
+		log_write(DEBUG_UI, "State: Lock acquired (%s) (read)\n", operation);
 	}
 	#else
 	(void)app;
@@ -54,7 +54,7 @@ static void state_rwlock_wrlock_internal(const BarApp_t *app, const char *operat
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_wrlock((pthread_rwlock_t *)&app->stateRwlock);
-		debugPrint(DEBUG_UI, "State: Lock acquired (%s) (write)\n", operation);
+		log_write(DEBUG_UI, "State: Lock acquired (%s) (write)\n", operation);
 	}
 	#else
 	(void)app;
@@ -73,9 +73,9 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 			char buffer[256];
 			vsnprintf(buffer, sizeof(buffer), format, args);
 			va_end(args);
-			debugPrint(DEBUG_UI, "%s", buffer);
+			log_write(DEBUG_UI, "%s", buffer);
 		}
-		debugPrint(DEBUG_UI, "State: Lock released\n");
+		log_write(DEBUG_UI, "State: Lock released\n");
 		pthread_rwlock_unlock((pthread_rwlock_t *)&app->stateRwlock);
 	}
 	#else
@@ -91,7 +91,7 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
  */
 #define WITH_STATE_LOCK(app, op_name, fmt, ...) \
 	for (int _lock_held = (state_rwlock_wrlock_internal(app, op_name), \
-	                        (fmt ? debugPrint(DEBUG_UI, fmt, ##__VA_ARGS__) : (void)0), 0); \
+	                        (fmt ? log_write(DEBUG_UI, fmt, ##__VA_ARGS__) : (void)0), 0); \
 	     !_lock_held; \
 	     state_rwlock_unlock_internal(app, op_name, NULL), _lock_held = 1)
 
@@ -119,7 +119,7 @@ void BarStateInit(BarApp_t *app) {
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_init(&app->stateRwlock, NULL);
-		debugPrint(DEBUG_UI, "State: Rwlock initialized\n");
+		log_write(DEBUG_UI, "State: Rwlock initialized\n");
 	}
 	#endif
 }
@@ -132,7 +132,7 @@ void BarStateDestroy(BarApp_t *app) {
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_destroy(&app->stateRwlock);
-		debugPrint(DEBUG_UI, "State: Rwlock destroyed\n");
+		log_write(DEBUG_UI, "State: Rwlock destroyed\n");
 	}
 	#endif
 }

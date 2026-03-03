@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  // HTTP route does not intercept WebSocket; use routeWebSocket so the app stays disconnected.
+  await page.routeWebSocket(/socket\.io/, ws => {
+    ws.close();
+  });
+});
+
 test.describe('UI States', () => {
   test('shows fallback album art when disconnected', async ({ page }) => {
     await page.goto('/');
@@ -30,8 +37,7 @@ test.describe('UI States', () => {
     // Should show 0:00 / 0:00 or similar
   });
 
-  test.skip('updates UI when track changes', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(() => !process.env.PIANOBAR_RUNNING, 'updates UI when track changes', async ({ page }) => {
     await page.goto('/');
 
     // Wait for connection
@@ -58,8 +64,8 @@ test.describe('Responsive Design', () => {
     await expect(page.locator('album-art')).toBeVisible();
     await expect(page.locator('.song-info')).toBeVisible();
     await expect(page.locator('progress-bar')).toBeVisible();
-    await expect(page.locator('reconnect-button')).toBeVisible();
-    await expect(page.locator('volume-control')).toBeVisible();
+    await expect(page.locator('album-art .reconnect-panel')).toBeVisible();
+    // volume-control only visible when connected; when disconnected we have reconnect panel
   });
 
   test('renders correctly on tablet viewport', async ({ page }) => {
@@ -90,7 +96,7 @@ test.describe('Accessibility', () => {
     await expect(page.locator('h1')).toBeVisible();
     
     // Check that interactive elements are keyboard accessible
-    const reconnectButton = page.locator('reconnect-button button');
+    const reconnectButton = page.locator('album-art .reconnect-panel button');
     await reconnectButton.focus();
     await expect(reconnectButton).toBeFocused();
   });
@@ -99,7 +105,7 @@ test.describe('Accessibility', () => {
     await page.goto('/');
 
     // Reconnect button should have title
-    const reconnectButton = page.locator('reconnect-button button');
+    const reconnectButton = page.locator('album-art .reconnect-panel button');
     await expect(reconnectButton).toHaveAttribute('title', 'Reconnect');
   });
 });

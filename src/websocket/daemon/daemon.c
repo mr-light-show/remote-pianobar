@@ -23,6 +23,7 @@ THE SOFTWARE.
 #include <unistd.h>
 
 #include "../../main.h"
+#include "../../log.h"
 #include "daemon.h"
 #include "../../ui.h"
 
@@ -55,14 +56,14 @@ bool BarDaemonizeSteps(BarApp_t *app) {
 	sid = setsid();
 	
 	if (sid < 0) {
-		fprintf(stderr, "Daemon: Failed to create new session\n");
+		log_write(LOG_ERROR, "Daemon: Failed to create new session\n");
 		return false;
 	}
 	
 
 	/* Change the current working directory */
 	if (chdir("/") < 0) {
-		fprintf(stderr, "Daemon: Failed to change directory\n");
+		log_write(LOG_ERROR, "Daemon: Failed to change directory\n");
 		return false;
 	}
 	
@@ -111,7 +112,7 @@ bool BarDaemonize(BarApp_t *app) {
 	pid = fork();
 
 	if (pid < 0) {
-		fprintf(stderr, "Daemon: Failed to fork\n");
+		log_write(LOG_ERROR, "Daemon: Failed to fork\n");
 		return false;
 	}
 	
@@ -138,7 +139,7 @@ bool BarDaemonWritePidFile(BarApp_t *app) {
 	
 	fp = fopen(app->settings.pidFile, "w");
 	if (!fp) {
-		fprintf(stderr, "Daemon: Failed to create PID file: %s\n",
+		log_write(LOG_ERROR, "Daemon: Failed to create PID file: %s\n",
 		        app->settings.pidFile);
 		return false;
 	}
@@ -367,11 +368,11 @@ bool BarDaemonKillExistingInstance(void) {
 		return true;
 	}
 	
-	fprintf(stderr, "Pianobar already running (PID: %d). Stopping it...\n", (int)oldPid);
+	log_write(LOG_ERROR, "Pianobar already running (PID: %d). Stopping it...\n", (int)oldPid);
 	
 	/* Send SIGTERM for graceful shutdown */
 	if (kill(oldPid, SIGTERM) != 0) {
-		fprintf(stderr, "Failed to send SIGTERM to PID %d\n", (int)oldPid);
+		log_write(LOG_ERROR, "Failed to send SIGTERM to PID %d\n", (int)oldPid);
 		return false;
 	}
 	
@@ -390,7 +391,7 @@ bool BarDaemonKillExistingInstance(void) {
 	}
 	
 	/* Process didn't terminate gracefully, force kill */
-	fprintf(stderr, "Process didn't respond to SIGTERM, sending SIGKILL...\n");
+	log_write(LOG_ERROR, "Process didn't respond to SIGTERM, sending SIGKILL...\n");
 	if (kill(oldPid, SIGKILL) != 0) {
 		return false;
 	}
@@ -403,6 +404,6 @@ bool BarDaemonKillExistingInstance(void) {
 		return true;
 	}
 	
-	fprintf(stderr, "Warning: Failed to kill existing instance (PID: %d)\n", (int)oldPid);
+	log_write(LOG_ERROR, "Warning: Failed to kill existing instance (PID: %d)\n", (int)oldPid);
 	return false;
 }
