@@ -6,14 +6,14 @@ Comprehensive testing documentation for Remote Pianobar.
 
 | Category | Framework | Files | Tests | Status |
 |----------|-----------|-------|-------|--------|
-| C Unit Tests | Check | 1 | 12 | ✅ Passing |
+| C Unit Tests | Check | 6 | 36+ | ✅ Passing |
 | Socket.IO Protocol | Check | 1 | 12 | ✅ Passing |
 | Web UI Components | Vitest | 5 | 36 | ✅ Passing |
 | E2E Browser Tests | Playwright | 3 | 21 | ✅ 13 passing, 8 skipped* |
 
 \* Skipped tests require a running pianobar instance
 
-**Total Test Coverage:** 81 tests across C and TypeScript codebases
+**Total Test Coverage:** 105+ tests across C and TypeScript codebases
 
 ---
 
@@ -72,6 +72,19 @@ CK_VERBOSITY=verbose ./pianobar_test
 ```
 
 ### Test Files
+
+**`test/unit/test_bar_state.c`** - Bar state and lock behavior (12 tests when `WEBSOCKET_ENABLED`)
+- Init/destroy stateRwlock in BOTH mode
+- Station getters/setters under stateRwlock (NextStation, CurrentStation)
+- Station lookup: `BarStateFindStationById` (NULL list, one station), `BarStateGetStationList`
+- Playlist get/set, drain, switch station
+- Player state getters (mode, time, paused) using `player.lock`
+- Lock order: stateRwlock before player.lock (documented invariant)
+- `BarStateIsPandoraConnected` (simple read)
+
+**`test/unit/test_player.c`** - Player and decoderLock behavior
+- Basic: `BarPlayerIsPaused`, `BarPlayerGetMode`, `BarPlayerReset`
+- **decoderLock behavior:** mutual exclusion (one thread holds decoderLock, another’s trylock returns EBUSY); invariant that `player.lock` and `decoderLock` are never held together (allowed order documented). See [src/THREAD_SAFETY.md](src/THREAD_SAFETY.md).
 
 **`test/unit/test_socketio.c`** - Socket.IO protocol tests (12 tests)
 - Message formatting (connect, event, disconnect)

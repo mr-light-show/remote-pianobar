@@ -40,7 +40,7 @@ THE SOFTWARE.
 #include <sys/wait.h>
 
 #include "ui.h"
-#include "debug.h"
+#include "log.h"
 #include "ui_readline.h"
 #include "bar_state.h"
 #include "websocket_bridge.h"
@@ -213,7 +213,7 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 		req->secure ? settings->rpcTlsPort : "80",
 		req->urlPath);
 	assert (ret >= 0 && ret <= (int) sizeof (url));
-	debugPrint (DEBUG_NETWORK, "← %s\n", url);
+	log_write(DEBUG_NETWORK, "← %s\n", url);
 
 	/* save the previous interrupt destination */
 	prevint = interrupted;
@@ -286,7 +286,7 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	curl_slist_free_all (list);
 
 	req->responseData = buffer.data;
-	debugPrint (DEBUG_NETWORK, "→ %s\n", req->responseData);
+	log_write(DEBUG_NETWORK, "→ %s\n", req->responseData);
 
 	interrupted = prevint;
 

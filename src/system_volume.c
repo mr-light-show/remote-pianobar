@@ -22,7 +22,7 @@ THE SOFTWARE.
 */
 
 #include "system_volume.h"
-#include "debug.h"
+#include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,7 +93,7 @@ static bool macosCheckAndRefreshDevice(void) {
 		defaultOutputDevice = currentDevice;
 		
 		/* Log device change */
-		debugPrint(DEBUG_AUDIO, "System volume: Default audio device changed (0x%x -> 0x%x)\n", 
+		log_write(DEBUG_AUDIO, "System volume: Default audio device changed (0x%x -> 0x%x)\n", 
 		           (unsigned int)oldDevice, (unsigned int)currentDevice);
 		
 		return true;
@@ -153,7 +153,7 @@ static bool macosCoreaudioSetVolume(int percent) {
 	/* If operation failed, device may have changed - try refreshing and retrying once */
 	if (status != noErr) {
 		if (macosCheckAndRefreshDevice() && defaultOutputDevice != kAudioObjectUnknown) {
-			debugPrint(DEBUG_AUDIO, "System volume: Retrying set volume after device change\n");
+			log_write(DEBUG_AUDIO, "System volume: Retrying set volume after device change\n");
 			status = AudioObjectSetPropertyData(
 				defaultOutputDevice, &addr, 0, NULL, sizeof(volume), &volume);
 		}

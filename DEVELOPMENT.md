@@ -460,7 +460,7 @@ pianobar/
 │   ├── player.c             # Audio playback
 │   ├── ui*.c                # User interface
 │   ├── settings.c           # Configuration
-│   ├── debug.c              # Debug logging
+│   ├── log.c                # Logging (errors + PIANOBAR_DEBUG diagnostics)
 │   ├── libpiano/            # Pandora API client
 │   └── websocket/           # WebSocket implementation
 │       ├── core/            # WebSocket server core

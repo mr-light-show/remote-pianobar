@@ -24,6 +24,7 @@ THE SOFTWARE.
 /* application settings */
 
 #include "config.h"
+#include "log.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -459,7 +460,7 @@ void BarSettingsRead (BarSettings_t *settings) {
 							settings->stationDisplayNameOverrideCount++;
 							
 							if (ret != 0) {
-								fprintf (stderr, "Warning: Invalid regex pattern: %s\n",
+								log_write(LOG_ERROR, "Warning: Invalid regex pattern: %s\n",
 									settings->stationDisplayNameOverrides[idx].pattern);
 							}
 						}

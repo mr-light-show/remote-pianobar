@@ -64,7 +64,7 @@ THE SOFTWARE.
 #include <piano.h>
 
 #include "main.h"
-#include "debug.h"
+#include "log.h"
 #include "terminal.h"
 #include "ui.h"
 #include "ui_dispatch.h"
@@ -575,7 +575,7 @@ sig_atomic_t *interrupted = NULL;
 
 static void intHandler (int signal) {
 	if (interrupted != NULL) {
-		debugPrint(DEBUG_UI, "Received ^C\n");
+		log_write(DEBUG_UI, "Received ^C\n");
 		*interrupted += 1;
 	}
 }
@@ -662,7 +662,7 @@ static void BarMainRelaunchAsDaemon(int argc, char **argv) {
 #ifdef __APPLE__
 	pid_t pid = fork();
 	if (pid < 0) {
-		fprintf(stderr, "Failed to fork for relaunch: %s\n", strerror(errno));
+		log_write(LOG_ERROR, "Failed to fork for relaunch: %s\n", strerror(errno));
 		return;
 	}
 	
@@ -671,7 +671,7 @@ static void BarMainRelaunchAsDaemon(int argc, char **argv) {
 		/* Build new argv array with --launched-as-daemon inserted after program name */
 		char **new_argv = malloc((argc + 2) * sizeof(char *));
 		if (!new_argv) {
-			fprintf(stderr, "Failed to allocate memory for relaunch\n");
+			log_write(LOG_ERROR, "Failed to allocate memory for relaunch\n");
 			exit(1);
 		}
 		
@@ -680,7 +680,7 @@ static void BarMainRelaunchAsDaemon(int argc, char **argv) {
 		uint32_t size = sizeof(exe_path);
 		if (_NSGetExecutablePath(exe_path, &size) != 0) {
 			free(new_argv);
-			fprintf(stderr, "Failed to get executable path\n");
+			log_write(LOG_ERROR, "Failed to get executable path\n");
 			exit(1);
 		}
 		
@@ -696,7 +696,7 @@ static void BarMainRelaunchAsDaemon(int argc, char **argv) {
 		execvp(exe_path, new_argv);
 		
 		/* If we get here, exec failed */
-		fprintf(stderr, "Failed to exec pianobar: %s\n", strerror(errno));
+		log_write(LOG_ERROR, "Failed to exec pianobar: %s\n", strerror(errno));
 		free(new_argv);
 		exit(1);
 	}
@@ -756,7 +756,7 @@ int main (int argc, char **argv) {
 			}
 			
 			if (app.lockFd < 0) {
-				fprintf(stderr, "Error: Could not acquire lock. Another instance may still be running.\n");
+				log_write(LOG_ERROR, "Error: Could not acquire lock. Another instance may still be running.\n");
 				return 1;
 			}
 		}
@@ -770,7 +770,7 @@ int main (int argc, char **argv) {
 	 * Do this AFTER relaunch check so it only prints once (in the final process) */
 #ifdef WEBSOCKET_ENABLED
 	if (app.settings.uiMode == BAR_UI_MODE_WEB || app.settings.uiMode == BAR_UI_MODE_BOTH) {
-		fprintf(stderr, "Starting pianobar\n");
+		log_write(LOG_ERROR, "Starting pianobar\n");
 		
 		/* Get IPv4 address */
 		char ipv4_addr[INET_ADDRSTRLEN];
@@ -781,13 +781,13 @@ int main (int argc, char **argv) {
 		
 		/* Also print the IPv4 URL variant (more useful than 127.0.0.1) */
 		if (app.settings.websocketPort > 0) {
-			fprintf(stderr, "Web interface: http://%s:%d/\n", ipv4_addr, app.settings.websocketPort);
+			log_write(LOG_ERROR, "Web interface: http://%s:%d/\n", ipv4_addr, app.settings.websocketPort);
 		}
 	}
 #endif
 
 	/* NOW do other initialization (after relaunch check, if any) */
-	debugEnable();
+	log_init();
 
 
 	/* Disable Objective-C runtime fork safety check on macOS
@@ -825,7 +825,7 @@ int main (int argc, char **argv) {
 			app.settings.volume = app.settings.systemVolumePlayerGain;
 		} else {
 			/* Fall back to player volume if system volume unavailable */
-			fprintf(stderr, "Warning: System volume control unavailable, falling back to player volume\n");
+			log_write(LOG_ERROR, "Warning: System volume control unavailable, falling back to player volume\n");
 			app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 		}
 	}
@@ -853,7 +853,7 @@ int main (int argc, char **argv) {
 			
 			/* Do daemonization steps FIRST to detach from terminal immediately */
 			if (!BarDaemonizeSteps(&app)) {
-				fprintf(stderr, "Failed to perform daemonization steps\n");
+				log_write(LOG_ERROR, "Failed to perform daemonization steps\n");
 				return 1;
 			}
 			
@@ -862,14 +862,14 @@ int main (int argc, char **argv) {
 			BarPrintStartupInfo(&app, getpid(), true, stderr);
 		} else {
 			/* Should have been relaunched earlier - this shouldn't happen */
-			fprintf(stderr, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
+			log_write(LOG_ERROR, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
 			return 1;
 		}
 #else
 		
 		/* Normal daemonization on non-macOS platforms */
 		if (!BarWsDaemonize(&app)) {
-			fprintf(stderr, "Failed to daemonize\n");
+			log_write(LOG_ERROR, "Failed to daemonize\n");
 			return 1;
 		}
 

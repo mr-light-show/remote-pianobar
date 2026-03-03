@@ -1,14 +1,13 @@
 import { test, expect } from '@playwright/test';
 
+const requiresPianobar = () => !process.env.PIANOBAR_RUNNING;
+
 test.describe('Playback Controls', () => {
   test.beforeEach(async ({ page }) => {
-    // Note: These tests assume pianobar is running
-    // For development, mock the connection state
     await page.goto('/');
   });
 
-  test.skip('shows playback controls when connected', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(requiresPianobar, 'shows playback controls when connected', async ({ page }) => {
     await expect(page.locator('playback-controls')).toBeVisible();
     
     // Should show play/pause button
@@ -16,8 +15,7 @@ test.describe('Playback Controls', () => {
     await expect(controls).toBeVisible();
   });
 
-  test.skip('can toggle play/pause', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(requiresPianobar, 'can toggle play/pause', async ({ page }) => {
     const controls = page.locator('playback-controls');
     await expect(controls).toBeVisible();
 
@@ -28,8 +26,7 @@ test.describe('Playback Controls', () => {
     // Button state should change (this would require mocking or actual server)
   });
 
-  test.skip('can skip to next track', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(requiresPianobar, 'can skip to next track', async ({ page }) => {
     const controls = page.locator('playback-controls');
     await expect(controls).toBeVisible();
 
@@ -40,8 +37,7 @@ test.describe('Playback Controls', () => {
     // Track should change (requires actual server)
   });
 
-  test.skip('does not show previous button', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(requiresPianobar, 'does not show previous button', async ({ page }) => {
     const controls = page.locator('playback-controls');
     await expect(controls).toBeVisible();
 
@@ -59,8 +55,7 @@ test.describe('Progress Bar', () => {
     await expect(progressBar).toBeVisible();
   });
 
-  test.skip('shows track progress when playing', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(requiresPianobar, 'shows track progress when playing', async ({ page }) => {
     await page.goto('/');
 
     const progressBar = page.locator('progress-bar');
@@ -79,8 +74,7 @@ test.describe('Volume Control', () => {
     await expect(volumeControl).toBeVisible();
   });
 
-  test.skip('can adjust volume', async ({ page }) => {
-    // Skip by default - requires running pianobar server
+  test.skip(requiresPianobar, 'can adjust volume', async ({ page }) => {
     await page.goto('/');
 
     const volumeControl = page.locator('volume-control');
