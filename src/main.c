@@ -120,7 +120,7 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		#endif
 		
 
-		char nameBuf[100];
+		char nameBuf[BAR_INPUT_MAX];
 
 		BarUiMsg (settings, MSG_QUESTION, "Email: ");
 		if (BarReadlineStr (nameBuf, sizeof (nameBuf), input, BAR_RL_DEFAULT) == 0) {
@@ -142,7 +142,7 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		}
 		#endif
 		
-		char passBuf[100];
+		char passBuf[BAR_INPUT_MAX];
 
 		if (usernameFromConfig) {
 			BarUiMsg (settings, MSG_QUESTION, "Email: %s\n", settings->username);
@@ -369,7 +369,7 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 
 	/* Wait for player thread with timeout to prevent infinite hang */
 	bool threadExited = false;
-	for (int i = 0; i < 100; i++) {  /* 10 seconds max */
+	for (int i = 0; i < BAR_JOIN_THREAD_ITERATIONS; i++) {  /* 10 seconds max */
 		int ret = pthread_kill(*playerThread, 0);
 		if (ret == ESRCH) {
 			/* Thread no longer exists - join to clean up */
@@ -425,7 +425,7 @@ static void BarMainPrintTime (BarApp_t *app) {
 		sign[0] = '+';
 	}
 
-	char outstr[512], totalFormatted[16], remainingFormatted[16],
+	char outstr[BAR_BUF_MEDIUM], totalFormatted[16], remainingFormatted[16],
 			elapsedFormatted[16];
 	const char *vals[] = {totalFormatted, remainingFormatted,
 			elapsedFormatted, sign};

@@ -23,6 +23,7 @@ THE SOFTWARE.
 
 #pragma once
 
+#include "bar_constants.h"
 #include <curl/curl.h>
 
 #include <piano.h>

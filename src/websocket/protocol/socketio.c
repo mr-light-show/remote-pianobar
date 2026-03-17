@@ -224,8 +224,8 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 		return;
 	}
 	
-	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.100s%s\n", 
-	           message, strlen(message) > 100 ? "..." : "");
+	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.*s%s\n", 
+	           (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 	
 	/* Parse Socket.IO message */
 	type = BarSocketIoParse(message, &eventName, &data);
@@ -427,8 +427,8 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 		return;
 	}
 
-	log_write(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.100s%s\n",
-	           strlen(message), message, strlen(message) > 100 ? "..." : "");
+	log_write(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.*s%s\n",
+	           strlen(message), (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
 	/* Broadcast to all clients if callback is set */
 	if (g_broadcastCallback) {
@@ -586,7 +586,7 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	int volumePercent;
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		volumePercent = BarSystemVolumeGet();
-		if (volumePercent < 0) volumePercent = 50;  /* Fallback */
+		if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
 	} else {
 		/* Player mode: volume is already 0-100 linear */
 		volumePercent = app->settings.volume;
@@ -729,7 +729,7 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 	}
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Failed: %s\n", actionName);
 	BarSocketIoOnPandoraRequestFailed(*pRet);
-	char buf[256];
+	char buf[BAR_BUF_SMALL];
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
 	BarSocketIoEmitError(operation, buf);
 	return false;
@@ -1556,7 +1556,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			int volumePercent = json_object_get_int(volumeObj);
 			/* Clamp to 0-100 range */
 			if (volumePercent < 0) volumePercent = 0;
-			if (volumePercent > 100) volumePercent = 100;
+			if (volumePercent > VOLUME_MAX_PERCENT) volumePercent = VOLUME_MAX_PERCENT;
 			
 			if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 				/* System volume mode - set OS volume directly */

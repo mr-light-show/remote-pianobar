@@ -39,13 +39,13 @@ THE SOFTWARE.
 #include <libwebsockets.h>
 #include <json-c/json.h>
 
-/* Idle/keepalive policy: send PING after 25s idle, hang up if no response in 60s */
+/* Idle/keepalive policy: send PING after WEBSOCKET_PING_TIMEOUT_SEC idle, hang up if no response in WEBSOCKET_HANGUP_TIMEOUT_SEC */
 static const lws_retry_bo_t keepalive_policy = {
 	.retry_ms_table = NULL,
 	.retry_ms_table_count = 0,
 	.conceal_count = 0,
-	.secs_since_valid_ping = 25,
-	.secs_since_valid_hangup = 60,
+	.secs_since_valid_ping = WEBSOCKET_PING_TIMEOUT_SEC,
+	.secs_since_valid_hangup = WEBSOCKET_HANGUP_TIMEOUT_SEC,
 	.jitter_percent = 0,
 };
 
@@ -244,7 +244,7 @@ static BarWsMessage_t* BarWsBucketTake(BarWsContext_t *ctx, BarWsBucketType_t bu
 static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
                               void *user, void *in, size_t len) {
 	BarApp_t *app = (BarApp_t *)lws_context_user(lws_get_context(wsi));
-	char filepath[512];
+	char filepath[WEBSOCKET_FILEPATH_MAX];
 	const char *webui_path;
 	char *url;
 	
@@ -362,14 +362,14 @@ static struct lws_protocols protocols[] = {
 		"socketio",
 		callback_websocket,
 		0,
-		4096,
+		LWS_RX_BUFFER_SIZE,
 		0, NULL, 0
 	},
 	{
 		"homeassistant",
 		callback_websocket,
 		0,
-		4096,
+		LWS_RX_BUFFER_SIZE,
 		0, NULL, 0
 	},
 	{ NULL, NULL, 0, 0, 0, NULL, 0 } /* terminator */
@@ -505,7 +505,7 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
 		int volumePercent;
 		if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 			volumePercent = BarSystemVolumeGet();
-			if (volumePercent < 0) volumePercent = 50;  /* Fallback */
+			if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
 			log_write(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %d%% (system volume)\n", 
 			           volumePercent);
 		} else {
@@ -577,11 +577,11 @@ static void* BarWebsocketThread(void *arg) {
 	while (ctx->threadRunning && !app->doQuit) {
 		bool didWork = false;
 		
-		/* Service WebSocket - 50ms timeout
-		 * This ensures the loop runs at least every 50ms
+		/* Service WebSocket - WEBSOCKET_POLL_MS timeout
+		 * This ensures the loop runs at least every WEBSOCKET_POLL_MS
 		 */
 		if (ctx->context) {
-			int n = lws_service(ctx->context, 50);
+			int n = lws_service(ctx->context, WEBSOCKET_POLL_MS);
 			if (n > 0) {
 				didWork = true;
 			}
@@ -875,8 +875,8 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 	bool isProgress = (len > 13 && strncmp(message, "2[ \"progress\"", 13) == 0);
 	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
 
-	log_write(dbgFlag, "WebSocket: Broadcasting to %zu clients (%zu bytes): %.100s%s\n",
-	           ctx->numConnections, len, message, len > 100 ? "..." : "");
+	log_write(dbgFlag, "WebSocket: Broadcasting to %zu clients (%zu bytes): %.*s%s\n",
+	           ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 	
 	/* Check for unicast mode - if set, only send to target client */
 	void *unicastTarget = BarSocketIoGetUnicastTarget();

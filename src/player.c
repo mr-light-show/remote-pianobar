@@ -34,6 +34,7 @@ THE SOFTWARE.
  */
 
 #include "config.h"
+#include "bar_constants.h"
 #include "miniaudio.h"
 
 #include <unistd.h>
@@ -91,7 +92,7 @@ static long getCurrentRSSKB(void) {
 	FILE *f = fopen("/proc/self/status", "r");
 	if (!f) return -1;
 	
-	char line[256];
+	char line[BAR_BUF_SMALL];
 	long rss = -1;
 	while (fgets(line, sizeof(line), f)) {
 		if (strncmp(line, "VmRSS:", 6) == 0) {
@@ -632,7 +633,7 @@ static int getSampleRate(const player_t * const player) {
 }
 
 static bool openFilter(player_t * const player) {
-	char strbuf[256];
+	char strbuf[BAR_BUF_SMALL];
 	int ret = 0;
 	AVCodecParameters * const cp = player->st->codecpar;
 

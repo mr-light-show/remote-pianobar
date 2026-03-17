@@ -70,7 +70,7 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 		if (format) {
 			va_list args;
 			va_start(args, format);
-			char buffer[256];
+			char buffer[BAR_BUF_SMALL];
 			vsnprintf(buffer, sizeof(buffer), format, args);
 			va_end(args);
 			log_write(DEBUG_UI, "%s", buffer);

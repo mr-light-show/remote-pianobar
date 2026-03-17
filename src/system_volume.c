@@ -22,6 +22,7 @@ THE SOFTWARE.
 */
 
 #include "system_volume.h"
+#include "bar_constants.h"
 #include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -301,7 +302,7 @@ static bool pulseaudioInit(void) {
 	
 	/* Wait for connection (with timeout) */
 	int tries = 0;
-	while (!paReady && tries < 50) {
+	while (!paReady && tries < BAR_PA_READY_TRIES) {
 		pa_mainloop_iterate(paMainloop, 0, NULL);
 		if (pa_context_get_state(paContext) == PA_CONTEXT_FAILED ||
 		    pa_context_get_state(paContext) == PA_CONTEXT_TERMINATED) {
@@ -352,8 +353,7 @@ static int pulseaudioGetVolume(void) {
 	/* Iterate mainloop while holding lock, but with shorter iterations
 	 * to allow other threads access between iterations */
 	int iterations = 0;
-	const int MAX_ITERATIONS = 100;  /* ~1 second timeout */
-	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < MAX_ITERATIONS) {
+	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < BAR_PA_OP_MAX_ITERATIONS) {
 		pthread_mutex_unlock(&paMutex);
 		usleep(10000);  /* 10ms - allow other threads to run */
 		pthread_mutex_lock(&paMutex);
@@ -401,8 +401,7 @@ static bool pulseaudioSetVolume(int percent) {
 	
 	/* Iterate mainloop while releasing lock between iterations */
 	int iterations = 0;
-	const int MAX_ITERATIONS = 100;  /* ~1 second timeout */
-	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < MAX_ITERATIONS) {
+	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < BAR_PA_OP_MAX_ITERATIONS) {
 		pthread_mutex_unlock(&paMutex);
 		usleep(10000);  /* 10ms - allow other threads to run */
 		pthread_mutex_lock(&paMutex);
@@ -718,7 +717,7 @@ int BarSystemVolumeGet(void) {
 bool BarSystemVolumeSet(int percent) {
 	/* Clamp to valid range */
 	if (percent < 0) percent = 0;
-	if (percent > 100) percent = 100;
+	if (percent > VOLUME_MAX_PERCENT) percent = VOLUME_MAX_PERCENT;
 	
 #ifdef __APPLE__
 	return macosSetVolume(percent);

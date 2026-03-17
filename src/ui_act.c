@@ -264,7 +264,7 @@ BarUiActCallback(BarUiActCreateStationFromSong) {
 BarUiActCallback(BarUiActAddSharedStation) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
-	char stationId[50];
+	char stationId[BAR_STATION_ID_MAX];
 	PianoRequestDataCreateStation_t reqData;
 
 	reqData.token = stationId;
@@ -600,7 +600,7 @@ BarUiActCallback(BarUiActTogglePause) {
 BarUiActCallback(BarUiActRenameStation) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
-	char lineBuf[100];
+	char lineBuf[BAR_INPUT_MAX];
 
 	assert (selStation != NULL);
 
@@ -901,9 +901,9 @@ BarUiActCallback(BarUiActVolDown) {
 BarUiActCallback(BarUiActVolUp) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		int currentVol = BarSystemVolumeGet();
-		if (currentVol >= 0 && currentVol < 100) {
+		if (currentVol >= 0 && currentVol < VOLUME_MAX_PERCENT) {
 			int newVol = currentVol + 5;  /* 5% step for system volume */
-			if (newVol > 100) newVol = 100;
+			if (newVol > VOLUME_MAX_PERCENT) newVol = VOLUME_MAX_PERCENT;
 			BarSystemVolumeSet(newVol);
 			/* Don't modify settings.volume - it stays at 0dB for player */
 		}
@@ -918,9 +918,9 @@ BarUiActCallback(BarUiActVolUp) {
  */
 BarUiActCallback(BarUiActVolReset) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
-		BarSystemVolumeSet(50);  /* Reset to 50% for system volume */
+		BarSystemVolumeSet(DEFAULT_VOLUME_PERCENT);  /* Reset for system volume */
 	} else {
-		app->settings.volume = 50;  /* Reset to 50% (linear 0-100 scale) */
+		app->settings.volume = DEFAULT_VOLUME_PERCENT;
 		BarPlayerSetVolume (&app->player);
 	}
 	BarWsBroadcastVolume(app);
