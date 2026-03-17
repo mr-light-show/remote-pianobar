@@ -295,7 +295,8 @@ test-clean:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
 
 # Run tests with memory leak detection using AddressSanitizer
-test-asan: clean-test-asan
+# Full clean required so all code linked into the test binary is built with ASan (cf. test-coverage).
+test-asan: clean clean-test-asan
 	${SILENTECHO} "   TEST  Building with AddressSanitizer..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} -fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="${LDFLAGS} -fsanitize=address"
 	${SILENTECHO} "   TEST  Running test suite with memory leak detection..."
