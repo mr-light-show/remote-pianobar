@@ -293,6 +293,21 @@ coverage-clean:
 test-clean:
 	${SILENTECHO} " CLEAN  tests"
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
+
+# Run tests with memory leak detection using AddressSanitizer
+test-asan: clean-test-asan
+	${SILENTECHO} "   TEST  Building with AddressSanitizer..."
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} -fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="${LDFLAGS} -fsanitize=address"
+	${SILENTECHO} "   TEST  Running test suite with memory leak detection..."
+	${SILENTCMD}./${TEST_BIN}
+
+clean-test-asan:
+	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
+
+# Run tests with valgrind (Linux only, optional)
+test-valgrind: ${TEST_BIN}
+	${SILENTECHO} "   TEST  Running test suite with valgrind..."
+	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 else
 test:
 	@echo "Tests are disabled when NOWEBSOCKET=1"
@@ -317,6 +332,11 @@ lint-test:
 
 test-clean:
 	@true
+
+test-asan clean-test-asan test-valgrind:
+	@echo "Tests are disabled when NOWEBSOCKET=1"
+	@echo "Run: make test-asan or make test-valgrind (without NOWEBSOCKET=1)"
+	@exit 1
 endif
 
-.PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean debug all
+.PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all
