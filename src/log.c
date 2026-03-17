@@ -64,7 +64,7 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
-	struct tm *tm_info = localtime(&ts.tv_sec);
+	const struct tm *tm_info = localtime(&ts.tv_sec);
 	const char *color = "";
 
 	fprintf(stderr, "[%02d:%02d:%02d.%03ld] ",

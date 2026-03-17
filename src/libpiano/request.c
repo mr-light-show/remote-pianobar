@@ -499,7 +499,6 @@ PianoReturn_t PianoRequest (PianoHandle_t *ph, PianoRequest_t *req,
 			req->data = reqData;
 
 			goto cleanup;
-			break;
 		}
 	}
 
