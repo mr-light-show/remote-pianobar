@@ -776,6 +776,7 @@ git commit --no-verify
 
 - [WebSocket Plans](WEBSOCKET_WEB_INTERFACE_PLAN.md)
 - [Threading Documentation](WEBSOCKET_THREADING_PLAN.md)
+- [Error Handling Conventions](ERROR_HANDLING.md)
 - [Debug Flags Reference](WEBSOCKET_DEBUG.md)
 - [Home Assistant Integration](WEBSOCKET_HOMEASSISTANT_PLAN.md)
 - [Testing Documentation](README_TESTING.md)

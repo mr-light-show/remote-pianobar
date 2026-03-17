@@ -65,31 +65,24 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
 	struct tm *tm_info = localtime(&ts.tv_sec);
-	const bool use_color = isatty(fileno(stderr));
 	const char *color = "";
-
-	if (use_color) {
-		switch (kind) {
-			case DEBUG_NETWORK:             color = COLOR_CYAN; break;
-			case DEBUG_AUDIO:               color = COLOR_YELLOW; break;
-			case DEBUG_UI:                  color = COLOR_GREEN; break;
-			case DEBUG_WEBSOCKET:           color = COLOR_MAGENTA; break;
-			case DEBUG_WEBSOCKET_PROGRESS: color = COLOR_MAGENTA; break;
-			case LOG_ERROR:                 color = COLOR_RED; break;
-			default:                        color = ""; break;
-		}
-		fprintf(stderr, "%s", color);
-	}
 
 	fprintf(stderr, "[%02d:%02d:%02d.%03ld] ",
 	        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
 	        (long)(ts.tv_nsec / 1000000));
 
-	vfprintf(stderr, format, args);
-
-	if (use_color) {
-		fprintf(stderr, "%s", COLOR_RESET);
+	switch (kind) {
+		case DEBUG_NETWORK:             color = COLOR_CYAN; break;
+		case DEBUG_AUDIO:               color = COLOR_YELLOW; break;
+		case DEBUG_UI:                  color = COLOR_GREEN; break;
+		case DEBUG_WEBSOCKET:           color = COLOR_MAGENTA; break;
+		case DEBUG_WEBSOCKET_PROGRESS:  color = COLOR_MAGENTA; break;
+		case LOG_ERROR:                 color = COLOR_RED; break;
+		default:                        color = ""; break;
 	}
+	fprintf(stderr, "%s", color);
+	vfprintf(stderr, format, args);
+	fprintf(stderr, "%s", COLOR_RESET);
 }
 #endif
 

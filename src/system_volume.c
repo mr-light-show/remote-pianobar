@@ -478,11 +478,11 @@ static int alsaGetVolume(void) {
 	if (snd_mixer_open(&handle, 0) < 0)
 		return -1;
 	if (snd_mixer_attach(handle, "default") < 0)
-		goto error;
+		goto cleanup;
 	if (snd_mixer_selem_register(handle, NULL, NULL) < 0)
-		goto error;
+		goto cleanup;
 	if (snd_mixer_load(handle) < 0)
-		goto error;
+		goto cleanup;
 	
 	snd_mixer_selem_id_alloca(&sid);
 	snd_mixer_selem_id_set_index(sid, 0);
@@ -490,7 +490,7 @@ static int alsaGetVolume(void) {
 	
 	elem = snd_mixer_find_selem(handle, sid);
 	if (!elem)
-		goto error;
+		goto cleanup;
 	
 	snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
 	snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_MONO, &volume);
@@ -500,7 +500,7 @@ static int alsaGetVolume(void) {
 	snd_mixer_close(handle);
 	return percent;
 	
-error:
+cleanup:
 	snd_mixer_close(handle);
 	return -1;
 }
@@ -518,11 +518,11 @@ static bool alsaSetVolume(int percent) {
 	if (snd_mixer_open(&handle, 0) < 0)
 		return false;
 	if (snd_mixer_attach(handle, "default") < 0)
-		goto error;
+		goto cleanup;
 	if (snd_mixer_selem_register(handle, NULL, NULL) < 0)
-		goto error;
+		goto cleanup;
 	if (snd_mixer_load(handle) < 0)
-		goto error;
+		goto cleanup;
 	
 	snd_mixer_selem_id_alloca(&sid);
 	snd_mixer_selem_id_set_index(sid, 0);
@@ -530,7 +530,7 @@ static bool alsaSetVolume(int percent) {
 	
 	elem = snd_mixer_find_selem(handle, sid);
 	if (!elem)
-		goto error;
+		goto cleanup;
 	
 	snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
 	volume = min + ((max - min) * percent) / 100;
@@ -539,7 +539,7 @@ static bool alsaSetVolume(int percent) {
 	snd_mixer_close(handle);
 	return true;
 	
-error:
+cleanup:
 	snd_mixer_close(handle);
 	return false;
 }
