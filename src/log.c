@@ -33,7 +33,8 @@ THE SOFTWARE.
 #define COLOR_CYAN    "\033[0;36m"  /* Network */
 #define COLOR_YELLOW  "\033[0;33m"  /* Audio */
 #define COLOR_GREEN   "\033[0;32m"  /* UI */
-#define COLOR_MAGENTA "\033[0;35m"  /* WebSocket */
+#define COLOR_MAGENTA      "\033[0;35m"  /* WebSocket progress (non-bold) */
+#define COLOR_MAGENTA_BOLD "\033[1;35m"  /* WebSocket events */
 #define COLOR_RED     "\033[0;31m"  /* Error */
 #endif
 
@@ -45,6 +46,25 @@ void log_init(void)
 	const char *const s = getenv("PIANOBAR_DEBUG");
 	if (s != NULL) {
 		debug_mask = (unsigned int)atoi(s);
+	}
+	if (debug_mask != 0) {
+		fprintf(stderr, "PIANOBAR_DEBUG=%u: ", debug_mask);
+		if (debug_mask & DEBUG_NETWORK) {
+			fprintf(stderr, "%sNETWORK%s ", COLOR_CYAN, COLOR_RESET);
+		}
+		if (debug_mask & DEBUG_AUDIO) {
+			fprintf(stderr, "%sAUDIO%s ", COLOR_YELLOW, COLOR_RESET);
+		}
+		if (debug_mask & DEBUG_UI) {
+			fprintf(stderr, "%sUI%s ", COLOR_GREEN, COLOR_RESET);
+		}
+		if (debug_mask & DEBUG_WEBSOCKET) {
+			fprintf(stderr, "%sWEBSOCKET%s ", COLOR_MAGENTA_BOLD, COLOR_RESET);
+		}
+		if (debug_mask & DEBUG_WEBSOCKET_PROGRESS) {
+			fprintf(stderr, "%sWS_PROGRESS%s ", COLOR_MAGENTA, COLOR_RESET);
+		}
+		fprintf(stderr, "\n");
 	}
 #else
 	(void)0;
@@ -64,32 +84,25 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
-	struct tm *tm_info = localtime(&ts.tv_sec);
-	const bool use_color = isatty(fileno(stderr));
+	const struct tm *tm_info = localtime(&ts.tv_sec);
 	const char *color = "";
 
-	if (use_color) {
-		switch (kind) {
-			case DEBUG_NETWORK:             color = COLOR_CYAN; break;
-			case DEBUG_AUDIO:               color = COLOR_YELLOW; break;
-			case DEBUG_UI:                  color = COLOR_GREEN; break;
-			case DEBUG_WEBSOCKET:           color = COLOR_MAGENTA; break;
-			case DEBUG_WEBSOCKET_PROGRESS: color = COLOR_MAGENTA; break;
-			case LOG_ERROR:                 color = COLOR_RED; break;
-			default:                        color = ""; break;
-		}
-		fprintf(stderr, "%s", color);
+	switch (kind) {
+		case DEBUG_NETWORK:             color = COLOR_CYAN; break;
+		case DEBUG_AUDIO:               color = COLOR_YELLOW; break;
+		case DEBUG_UI:                  color = COLOR_GREEN; break;
+		case DEBUG_WEBSOCKET:           color = COLOR_MAGENTA_BOLD; break;
+		case DEBUG_WEBSOCKET_PROGRESS:  color = COLOR_MAGENTA; break;
+		case LOG_ERROR:                 color = COLOR_RED; break;
+		default:                        color = ""; break;
 	}
-
-	fprintf(stderr, "[%02d:%02d:%02d.%03ld] ",
+	/* Color on timestamp only; message is default terminal color */
+	fprintf(stderr, "%s[%02d:%02d:%02d.%03ld]%s ",
+	        color,
 	        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
-	        (long)(ts.tv_nsec / 1000000));
-
+	        (long)(ts.tv_nsec / 1000000),
+	        COLOR_RESET);
 	vfprintf(stderr, format, args);
-
-	if (use_color) {
-		fprintf(stderr, "%s", COLOR_RESET);
-	}
 }
 #endif
 

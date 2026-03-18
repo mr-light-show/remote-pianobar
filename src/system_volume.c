@@ -22,6 +22,7 @@ THE SOFTWARE.
 */
 
 #include "system_volume.h"
+#include "bar_constants.h"
 #include "log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -301,7 +302,7 @@ static bool pulseaudioInit(void) {
 	
 	/* Wait for connection (with timeout) */
 	int tries = 0;
-	while (!paReady && tries < 50) {
+	while (!paReady && tries < BAR_PA_READY_TRIES) {
 		pa_mainloop_iterate(paMainloop, 0, NULL);
 		if (pa_context_get_state(paContext) == PA_CONTEXT_FAILED ||
 		    pa_context_get_state(paContext) == PA_CONTEXT_TERMINATED) {
@@ -352,8 +353,7 @@ static int pulseaudioGetVolume(void) {
 	/* Iterate mainloop while holding lock, but with shorter iterations
 	 * to allow other threads access between iterations */
 	int iterations = 0;
-	const int MAX_ITERATIONS = 100;  /* ~1 second timeout */
-	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < MAX_ITERATIONS) {
+	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < BAR_PA_OP_MAX_ITERATIONS) {
 		pthread_mutex_unlock(&paMutex);
 		usleep(10000);  /* 10ms - allow other threads to run */
 		pthread_mutex_lock(&paMutex);
@@ -401,8 +401,7 @@ static bool pulseaudioSetVolume(int percent) {
 	
 	/* Iterate mainloop while releasing lock between iterations */
 	int iterations = 0;
-	const int MAX_ITERATIONS = 100;  /* ~1 second timeout */
-	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < MAX_ITERATIONS) {
+	while (pa_operation_get_state(op) == PA_OPERATION_RUNNING && iterations < BAR_PA_OP_MAX_ITERATIONS) {
 		pthread_mutex_unlock(&paMutex);
 		usleep(10000);  /* 10ms - allow other threads to run */
 		pthread_mutex_lock(&paMutex);
@@ -464,84 +463,76 @@ static bool pactlSetVolume(int percent) {
 	return system(cmd) == 0;
 }
 
-/* ALSA native: Get volume using libasound */
-static int alsaGetVolume(void) {
-	snd_mixer_t *handle;
-	snd_mixer_elem_t *elem;
+/* ALSA: open default mixer and find element by alsaMixerName.
+ * On success, sets *handle and *elem; caller must snd_mixer_close(*handle).
+ * On failure, returns false (handle is closed internally if it was opened).
+ */
+static bool alsa_open_mixer_and_find_elem(snd_mixer_t **handle, snd_mixer_elem_t **elem) {
 	snd_mixer_selem_id_t *sid;
-	long min, max, volume;
-	int percent;
-	
+
 	if (!alsaMixerName)
-		return -1;
-	
-	if (snd_mixer_open(&handle, 0) < 0)
-		return -1;
-	if (snd_mixer_attach(handle, "default") < 0)
-		goto error;
-	if (snd_mixer_selem_register(handle, NULL, NULL) < 0)
-		goto error;
-	if (snd_mixer_load(handle) < 0)
-		goto error;
-	
+		return false;
+
+	if (snd_mixer_open(handle, 0) < 0)
+		return false;
+	if (snd_mixer_attach(*handle, "default") < 0)
+		goto cleanup;
+	if (snd_mixer_selem_register(*handle, NULL, NULL) < 0)
+		goto cleanup;
+	if (snd_mixer_load(*handle) < 0)
+		goto cleanup;
+
 	snd_mixer_selem_id_alloca(&sid);
 	snd_mixer_selem_id_set_index(sid, 0);
 	snd_mixer_selem_id_set_name(sid, alsaMixerName);
-	
-	elem = snd_mixer_find_selem(handle, sid);
-	if (!elem)
-		goto error;
-	
+
+	*elem = snd_mixer_find_selem(*handle, sid);
+	if (!*elem)
+		goto cleanup;
+
+	return true;
+
+cleanup:
+	snd_mixer_close(*handle);
+	*handle = NULL;
+	return false;
+}
+
+/* ALSA native: Get volume using libasound */
+static int alsaGetVolume(void) {
+	snd_mixer_t *handle = NULL;
+	snd_mixer_elem_t *elem;
+	long min, max, volume;
+	int percent;
+
+	if (!alsa_open_mixer_and_find_elem(&handle, &elem)) {
+		return -1;
+	}
+
 	snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
 	snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_MONO, &volume);
-	
 	percent = (int)(((volume - min) * 100) / (max - min));
-	
+
 	snd_mixer_close(handle);
 	return percent;
-	
-error:
-	snd_mixer_close(handle);
-	return -1;
 }
 
 /* ALSA native: Set volume using libasound */
 static bool alsaSetVolume(int percent) {
-	snd_mixer_t *handle;
+	snd_mixer_t *handle = NULL;
 	snd_mixer_elem_t *elem;
-	snd_mixer_selem_id_t *sid;
 	long min, max, volume;
-	
-	if (!alsaMixerName)
+
+	if (!alsa_open_mixer_and_find_elem(&handle, &elem)) {
 		return false;
-	
-	if (snd_mixer_open(&handle, 0) < 0)
-		return false;
-	if (snd_mixer_attach(handle, "default") < 0)
-		goto error;
-	if (snd_mixer_selem_register(handle, NULL, NULL) < 0)
-		goto error;
-	if (snd_mixer_load(handle) < 0)
-		goto error;
-	
-	snd_mixer_selem_id_alloca(&sid);
-	snd_mixer_selem_id_set_index(sid, 0);
-	snd_mixer_selem_id_set_name(sid, alsaMixerName);
-	
-	elem = snd_mixer_find_selem(handle, sid);
-	if (!elem)
-		goto error;
-	
+	}
+
 	snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
 	volume = min + ((max - min) * percent) / 100;
 	snd_mixer_selem_set_playback_volume_all(elem, volume);
-	
+
 	snd_mixer_close(handle);
 	return true;
-	
-error:
-	snd_mixer_close(handle);
-	return false;
 }
 
 /* ALSA: Try to find a working mixer element
@@ -718,7 +709,7 @@ int BarSystemVolumeGet(void) {
 bool BarSystemVolumeSet(int percent) {
 	/* Clamp to valid range */
 	if (percent < 0) percent = 0;
-	if (percent > 100) percent = 100;
+	if (percent > VOLUME_MAX_PERCENT) percent = VOLUME_MAX_PERCENT;
 	
 #ifdef __APPLE__
 	return macosSetVolume(percent);

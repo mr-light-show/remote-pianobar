@@ -85,46 +85,47 @@ static inline void BarUiDoSkipSong (player_t * const player) {
 	pthread_mutex_unlock (&player->decoderLock);
 }
 
-/*	transform station if necessary to allow changes like rename, rate, ...
- *	@param piano handle
- *	@param transform this station
- *	@return 0 = error, 1 = everything went well
+/* Feedback mode for transform: UI (BarUiMsg + BarUiPianoCall) vs log (log_write + BarUiPianoCallLogged) */
+typedef enum { TRANSFORM_FEEDBACK_UI, TRANSFORM_FEEDBACK_LOGGED } BarTransformFeedback_t;
+
+/*	Transform station if shared; report progress via UI or log depending on feedback.
+ *	@return 0 = error, 1 = success
  */
-int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+static int BarTransformIfSharedWithFeedback (BarApp_t *app, PianoStation_t *station,
+		BarTransformFeedback_t feedback) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 
 	assert (station != NULL);
 
-	/* shared stations must be transformed */
 	if (!station->isCreator) {
-		BarUiMsg (&app->settings, MSG_INFO, "Transforming station... ");
-		if (!BarUiPianoCall (app, PIANO_REQUEST_TRANSFORM_STATION, station,
-				&pRet, &wRet)) {
-			return 0;
+		if (feedback == TRANSFORM_FEEDBACK_UI) {
+			BarUiMsg (&app->settings, MSG_INFO, "Transforming station... ");
+			if (!BarUiPianoCall (app, PIANO_REQUEST_TRANSFORM_STATION, station,
+					&pRet, &wRet))
+				return 0;
+		} else {
+			log_write(DEBUG_WEBSOCKET, "Transforming shared station...\n");
+			if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
+					"Transforming station", &pRet, &wRet))
+				return 0;
 		}
 	}
 	return 1;
+}
+
+/*	Transform station if necessary to allow changes like rename, rate, ...
+ *	@return 0 = error, 1 = everything went well
+ */
+int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_UI);
 }
 
 /*	Logged version of BarTransformIfShared for WebSocket thread
  *	Prints action to stdout/log
  */
 int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
-	PianoReturn_t pRet;
-	CURLcode wRet;
-
-	assert (station != NULL);
-
-	/* shared stations must be transformed */
-	if (!station->isCreator) {
-		log_write(DEBUG_WEBSOCKET, "Transforming shared station...\n");
-		if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
-				"Transforming station", &pRet, &wRet)) {
-			return 0;
-		}
-	}
-	return 1;
+	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_LOGGED);
 }
 
 /*	print current shortcut configuration
@@ -264,7 +265,7 @@ BarUiActCallback(BarUiActCreateStationFromSong) {
 BarUiActCallback(BarUiActAddSharedStation) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
-	char stationId[50];
+	char stationId[BAR_STATION_ID_MAX];
 	PianoRequestDataCreateStation_t reqData;
 
 	reqData.token = stationId;
@@ -600,7 +601,7 @@ BarUiActCallback(BarUiActTogglePause) {
 BarUiActCallback(BarUiActRenameStation) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
-	char lineBuf[100];
+	char lineBuf[BAR_INPUT_MAX];
 
 	assert (selStation != NULL);
 
@@ -901,9 +902,9 @@ BarUiActCallback(BarUiActVolDown) {
 BarUiActCallback(BarUiActVolUp) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		int currentVol = BarSystemVolumeGet();
-		if (currentVol >= 0 && currentVol < 100) {
+		if (currentVol >= 0 && currentVol < VOLUME_MAX_PERCENT) {
 			int newVol = currentVol + 5;  /* 5% step for system volume */
-			if (newVol > 100) newVol = 100;
+			if (newVol > VOLUME_MAX_PERCENT) newVol = VOLUME_MAX_PERCENT;
 			BarSystemVolumeSet(newVol);
 			/* Don't modify settings.volume - it stays at 0dB for player */
 		}
@@ -918,9 +919,9 @@ BarUiActCallback(BarUiActVolUp) {
  */
 BarUiActCallback(BarUiActVolReset) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
-		BarSystemVolumeSet(50);  /* Reset to 50% for system volume */
+		BarSystemVolumeSet(DEFAULT_VOLUME_PERCENT);  /* Reset for system volume */
 	} else {
-		app->settings.volume = 50;  /* Reset to 50% (linear 0-100 scale) */
+		app->settings.volume = DEFAULT_VOLUME_PERCENT;
 		BarPlayerSetVolume (&app->player);
 	}
 	BarWsBroadcastVolume(app);

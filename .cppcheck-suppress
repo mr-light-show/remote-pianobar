@@ -1,0 +1,44 @@
+# Third-party: miniaudio single-header library (we do not fix upstream)
+*:src/miniaudio.h
+# BarStateInit/BarStateDestroy modify app (e.g. stateRwlock); const would be incorrect
+constParameterPointer:src/bar_state.c
+# main.c: used in platform-specific daemon paths / config-dependent code
+unreadVariable:src/main.c
+constVariablePointer:src/main.c
+unusedVariable:src/main.c
+# Style / optional const and scope (triage; fix in follow-up if desired)
+constVariablePointer:src/playback_manager.c
+constVariablePointer:src/player.c
+truncLongCastAssignment:src/player.c
+staticFunction:src/player.c
+constParameterPointer:src/settings.c
+variableScope:src/settings.c
+shadowVariable:src/settings.c
+constVariablePointer:src/settings.c
+nullPointerOutOfMemory:src/settings.c
+staticFunction:src/settings.c
+uselessAssignmentArg:src/system_volume.c
+unreadVariable:src/system_volume.c
+redundantCondition:src/ui.c
+invalidPrintfArgType_sint:src/ui.c
+nullPointerOutOfMemory:src/ui.c
+variableScope:src/ui.c
+knownPointerToBool:src/ui.c
+constParameterCallback:src/ui.c
+constVariablePointer:src/ui.c
+constParameterPointer:src/ui.c
+staticFunction:src/ui.c
+knownConditionTrueFalse:src/ui_act.c
+variableScope:src/ui_act.c
+constParameterCallback:src/ui_act.c
+constVariablePointer:src/ui_act.c
+staticFunction:src/ui_act.c
+constParameterPointer:src/ui_readline.c
+staticFunction:src/station_display.c
+nullPointerOutOfMemory:src/libpiano/crypt.c
+constParameterPointer:src/libpiano/list.c
+variableScope:src/libpiano/piano.c
+invalidPrintfArgType_sint:src/libpiano/request.c
+shadowVariable:src/libpiano/response.c
+constVariablePointer:src/libpiano/response.c
+memleak:src/libpiano/response.c

@@ -89,7 +89,7 @@ Use these values for `PIANOBAR_DEBUG`:
 - `1` - Network only (blue/cyan)
 - `2` - Audio only (yellow)
 - `4` - UI only (green)
-- `8` - WebSocket only (magenta)
+- `8` - WebSocket only (bold magenta)
 - `15` - All debug output (recommended for testing)
 
 ## Build and Deploy

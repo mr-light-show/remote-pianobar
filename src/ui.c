@@ -203,7 +203,7 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	buffer buffer = {NULL, 0};
 	sig_atomic_t lint = 0, *prevint;
 
-	char url[2048];
+	char url[BAR_BUF_LARGE];
 	assert (settings->rpcHost != NULL);
 	assert (settings->rpcTlsPort != NULL);
 	assert (req->urlPath != NULL);
@@ -478,7 +478,7 @@ PianoStation_t *BarUiSelectStation (BarApp_t *app, PianoStation_t *stations,
 		bool autoselect) {
 	PianoStation_t **sortedStations = NULL, *retStation = NULL;
 	size_t stationCount, i, lastDisplayed, displayCount;
-	char buf[100];
+	char buf[BAR_INPUT_MAX];
 
 	if (stations == NULL) {
 		BarUiMsg (&app->settings, MSG_ERR, "No station available.\n");
@@ -547,7 +547,7 @@ PianoSong_t *BarUiSelectSong (const BarApp_t * const app,
 		PianoSong_t *startSong, BarReadlineFds_t *input) {
 	const BarSettings_t * const settings = &app->settings;
 	PianoSong_t *tmpSong = NULL;
-	char buf[100];
+	char buf[BAR_INPUT_MAX];
 
 	memset (buf, 0, sizeof (buf));
 
@@ -575,7 +575,7 @@ PianoSong_t *BarUiSelectSong (const BarApp_t * const app,
  */
 PianoArtist_t *BarUiSelectArtist (BarApp_t *app, PianoArtist_t *startArtist) {
 	PianoArtist_t *tmpArtist = NULL;
-	char buf[100];
+	char buf[BAR_INPUT_MAX];
 	unsigned long i;
 
 	memset (buf, 0, sizeof (buf));
@@ -617,7 +617,7 @@ PianoArtist_t *BarUiSelectArtist (BarApp_t *app, PianoArtist_t *startArtist) {
 char *BarUiSelectMusicId (BarApp_t *app, PianoStation_t *station,
 		const char *msg) {
 	char *musicId = NULL;
-	char lineBuf[100], selectBuf[2];
+	char lineBuf[BAR_INPUT_MAX], selectBuf[2];
 	PianoSearchResult_t searchResult;
 	PianoArtist_t *tmpArtist;
 	PianoSong_t *tmpSong;
@@ -758,7 +758,7 @@ static void BarUiAppendNewline (char *s, size_t maxlen) {
  */
 void BarUiPrintStation (const BarSettings_t *settings,
 		PianoStation_t *station) {
-	char outstr[512];
+	char outstr[BAR_BUF_MEDIUM];
 	const char *displayName = station->displayName ? station->displayName : station->name;
 	const char *vals[] = {displayName, station->id};
 
@@ -792,7 +792,7 @@ static const char *ratingToIcon (const BarSettings_t * const settings,
  */
 void BarUiPrintSong (const BarSettings_t *settings,
 		const PianoSong_t *song, const PianoStation_t *station) {
-	char outstr[512];
+	char outstr[BAR_BUF_MEDIUM];
 	const char *vals[] = {song->title, song->artist, song->album,
 			ratingToIcon (settings, song),
 			station != NULL ? settings->atIcon : "",
@@ -831,7 +831,7 @@ size_t BarUiListSongs (const BarApp_t * const app,
 			stationName = deleted;
 		}
 
-		char outstr[512], digits[8], duration[16] = "??:??";
+		char outstr[BAR_BUF_MEDIUM], digits[8], duration[16] = "??:??";
 		const char *vals[] = {digits, song->artist, song->title,
 				ratingToIcon (settings, song),
 				duration,

@@ -23,7 +23,13 @@ Current config is key-value in [settings.c](remote-pianobar/src/settings.c) (`ke
 
 **One account:** Credentials go in the main config. No `account` lines. `user` and `password` (or `password_command`) live in the main config file. Behaves as today (single account, index 0).
 
-**Multiple accounts:** All credentials live in separate files. Main config lists accounts with `account = id:path` and contains only global settings (network, audio, WebSocket, keybindings, etc.). **If both credentials (`user`/`password`) exist in the main config and `account = id:path` lines exist, ignore the credentials in the main file and print a warning to stdout on startup** (so users are not silently wrong). Each account's credentials and optional per-account options (auth, Interface/Display, Sort, Station Display Name Override, Format Strings, Message Formats, `account_label`) come from that account's file. Effective config for an account = merge(main config, account file); main supplies defaults, account file overrides; in multi-account mode do not use main-config user/password. Account used at startup: if `default_account` is set in the main config (must match an account id), use that account; otherwise use the first listed `account` (index 0).
+**Multiple accounts (main + include files):** The main config may contain **global settings and credentials for the primary user**. Additional accounts are listed with `account = id:path`. The primary user (credentials in the main file) is one logical account in the list:
+
+- **Primary account id:** Optional `main_account_id = <id>` in the main config names that account’s stable id for reconnect/UI. If omitted, the id is **`default`**. (Example: `main_account_id = home` so the main user appears as `home` in dropdowns; otherwise they appear as `default`.)
+- **Additional accounts:** Each `account = id:path` adds another account; credentials and optional per-account options for that row come from that file. Effective config for those accounts = merge(main config, account file); main supplies defaults, account file overrides credentials and any listed keys.
+- **Ordering:** Build the account list as: first entry = main-config credentials (id from `main_account_id` or `default`), then each `account = id:path` in file order. No warning when both main credentials and `account` lines exist—they are intentional.
+- **Startup account:** If `default_account` is set, it must match an account id (including `default` or whatever `main_account_id` is); use that index at startup. If unset, use index 0 (the main-config account when present, else the first `account = id:path` row).
+- **File-only multi-account (optional):** If there are `account = id:path` lines but **no** main-config `user`/`password`/`password_command`, treat every account as file-backed (no synthetic `default` row); first listed file is index 0. This keeps a credentials-in-files-only layout valid without a dummy main user.
 
 - **Path resolution** for `account = id:path`: If `path` starts with `~` or `/`, use it as-is (after tilde expansion). Otherwise resolve relative to the main config file's directory. Examples: `work:work.conf`, `personal:~/.config/pianobar/accounts/personal.conf`, `other:/usr/home/fred/.config/pianobar/fred.conf`.
 - **Account display name**: Optional `account_label` in each account's file. If not specified, use the id from the `account = id:path` line (e.g. `other`).
@@ -37,13 +43,17 @@ sort = name_az
 websocket_port = 9001
 ```
 
-**Multi-account example** (main config — no user/password):
+**Multi-account example** (main config: primary user + extra accounts):
 
 ```ini
-# Global settings only; if user/password appear here with account lines, they are ignored and a warning is printed
+# Primary Pandora user (id "default" unless main_account_id is set)
+user = me@example.com
+password = secret
+# main_account_id = home   # optional; if set, primary user’s id is "home" instead of "default"
+
 sort = name_az
 websocket_port = 9001
-# default_account = work   # optional; if unset, first listed account is used at startup
+# default_account = work   # optional startup id; must match main_account_id, "default", or an account = id
 
 account = work:work.conf
 account = personal:~/.config/pianobar/accounts/personal.conf
@@ -69,16 +79,16 @@ autostart_station = 98765
 
 - **Account entry**: `typedef struct { char *id; char *label; char *username; char *password; char *passwordCmd; } BarAccount_t;` (id from config, e.g. "work"; label = `account_label` from that account's file if present, else id).
 - **Settings**: In [settings.h](remote-pianobar/src/settings.h), add to `BarSettings_t`:  
-`BarAccount_t *accounts; size_t accountCount; size_t activeAccountIndex;`  
-Single-account mode: no `account` lines; main config has user/password; one account (index 0) built from main config. Multi-account mode: main config has `account = id:path` only (no user/password); each account's effective config = merge(main, account file). Keep existing `username`/`password` for backward compatibility in single-account mode.
+`BarAccount_t *accounts; size_t accountCount; size_t activeAccountIndex;` (optional `char *mainAccountId` or store id on first `BarAccount_t`).  
+Single-account mode: no `account` lines; main config has user/password; one account (index 0). Multi-account mode: first account from main-config credentials with id = `main_account_id` if set, else `default`; subsequent accounts from `account = id:path` with merge(main, file). Keep existing `username`/`password` for backward compatibility and as the source for the primary account row.
 - **Helpers**: `BarSettingsGetActiveAccount()`, `BarSettingsSetActiveAccount(index or id)`; resolve `password_command` per account when building login credentials (reuse existing passwordCmd logic).
 
 ### 2. Config parsing
 
 - In [settings.c](remote-pianobar/src/settings.c) `BarSettingsRead`:
   - **Single-account**: If no `account = id:path` lines, read main config as today; build one account (index 0) from main config. Label = `account_label` if present in main config, else a default (e.g. id `"0"` or `"main"`).
-  - **Multi-account**: If any `account = id:path` line exists, treat as multi-account. If the main config also contains `user` or `password`, ignore those credentials (do not use them for any account) and **print a warning to stdout on startup** (e.g. "Warning: account files are specified; ignoring user/password in main config."). Parse `account = id:path`; for each, resolve path and append an account entry (id + path). Parse optional `default_account = id`; if set, set activeAccountIndex to the index of that id (error if id not found); if not set, activeAccountIndex = 0. For each account, label = `account_label` from merged result if present, else the account id.
-  - **Merge helper**: Add `BarSettingsMergeFromFile(BarSettings_t *base, const char *path)`: read the file at `path`; for each key present, override the corresponding field in `base`. For multi-account, effective config for an account = merge(main config, that account's file). For single-account, no merge (main config is the only account).
+  - **Multi-account**: If any `account = id:path` line exists: **(A)** If main has `user`/`password`/`password_command`, prepend account 0 from main; id = `main_account_id` if set, else **`default`**; then for each `account = id:path`, merge main → file and append. **(B)** If main has no credentials, only file-backed accounts (first `account` line = index 0). Parse optional `default_account = id`; if set, resolve to index (error if id missing); else activeAccountIndex = 0. Labels from `account_label` or id. **Do not** ignore main credentials when present alongside `account` lines; no startup warning for that case.
+  - **Merge helper**: Add `BarSettingsMergeFromFile(BarSettings_t *base, const char *path)`: read the file at `path`; for each key present, override the corresponding field in `base`. For file-backed accounts, effective config = merge(main snapshot, account file). The primary row uses main config fields only (no merge file). For single-account, no merge.
   - In `BarSettingsDestroy`, free each account's strings and the array (including account file paths).
 
 ### 3. Login and reconnect
@@ -150,10 +160,10 @@ sequenceDiagram
 
 ## Testing and docs
 
-- **Backend**: Unit or manual: single-account (user/password in main) and multi-account (account = id:path, no user/password in main); switch account via WebSocket with `account_id`; verify state and merge.
+- **Backend**: Unit or manual: single-account; multi-account with main user + `account = id:path`; optional `main_account_id`; `default_account` startup; switch via WebSocket `account_id` (including `default`); verify merge for file-backed accounts only.
 - **Web UI**: Manual: two accounts, switch via dropdown; confirm stations and playback reflect the selected account.
 - **HA**: Manual: select entity shows accounts; changing it triggers reconnect and media player reflects new account.
-- **Docs**: Update [WEBSOCKET_API.md](remote-pianobar/WEBSOCKET_API.md) (reconnect payload, state fields); add a short "Multiple accounts" section to the main README or config docs describing the include-file format (main = active, alternates override only).
+- **Docs**: Update [WEBSOCKET_API.md](remote-pianobar/WEBSOCKET_API.md) (reconnect payload, state fields); document multiple accounts: primary in main (`main_account_id` defaults to `default`), plus `account = id:path` for others.
 
 ---
 
@@ -161,7 +171,7 @@ sequenceDiagram
 
 | Layer   | Change                                                                                                                                                                                                         |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Config  | One account: credentials in main config. Multiple: `account = id:path` in main (no user/password in main); all credentials in separate files; merge on switch.                                                 |
+| Config  | One account: credentials in main. Multiple: main credentials + optional `main_account_id` (default id `default`) + `account = id:path` for extra accounts; merge file-backed rows with main.                                                                 |
 | Backend | Account list + active index in settings; parse in BarSettingsRead; login/reconnect use active account; reconnect action accepts optional `account_id`; emit `current_account` and `accounts` in process state. |
 | Web UI  | Account dropdown; on change send reconnect with `account_id`.                                                                                                                                                  |
 | HA      | New Select entity for account; coordinator stores accounts/current_account; optional `account_id` on reconnect service.                                                                                        |

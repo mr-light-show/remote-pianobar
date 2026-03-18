@@ -46,7 +46,7 @@ void BarWsBroadcastVolume(BarApp_t *app) {
 		if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 			/* In system mode, read current volume from OS (already 0-100%) */
 			volumePercent = BarSystemVolumeGet();
-			if (volumePercent < 0) volumePercent = 50;  /* Fallback */
+			if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
 		} else {
 			/* Player mode - volume is already 0-100 linear */
 			volumePercent = app->settings.volume;

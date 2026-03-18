@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include "http_server.h"
+#include "../../bar_constants.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -79,7 +80,7 @@ const char *BarHttpGetMimeType(const char *path) {
 
 /* Serve static file with manual HTTP response construction */
 int BarHttpServeFile(struct lws *wsi, const char *filepath) {
-	unsigned char buffer[LWS_PRE + 4096];
+	unsigned char buffer[LWS_PRE + LWS_RX_BUFFER_SIZE];
 	unsigned char *start = &buffer[LWS_PRE];
 	unsigned char *p = start;
 	unsigned char *end = &buffer[sizeof(buffer) - 1];
@@ -199,7 +200,7 @@ int BarHttpServeFile(struct lws *wsi, const char *filepath) {
 
 /* Serve directory index (index.html) */
 int BarHttpServeIndex(struct lws *wsi, const char *webui_path) {
-	char filepath[512];
+	char filepath[WEBSOCKET_FILEPATH_MAX];
 	
 	if (!wsi || !webui_path) {
 		return -1;

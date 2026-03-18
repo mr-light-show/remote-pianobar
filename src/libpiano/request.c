@@ -499,7 +499,6 @@ PianoReturn_t PianoRequest (PianoHandle_t *ph, PianoRequest_t *req,
 			req->data = reqData;
 
 			goto cleanup;
-			break;
 		}
 	}
 
@@ -510,9 +509,17 @@ PianoReturn_t PianoRequest (PianoHandle_t *ph, PianoRequest_t *req,
 		assert (ph->user.authToken != NULL);
 
 		CURL * const curl = curl_easy_init ();
+		if (curl == NULL) {
+			ret = PIANO_RET_OUT_OF_MEMORY;
+			goto cleanup;
+		}
 		urlencAuthToken = curl_easy_escape (curl,
 				ph->user.authToken, 0);
-		assert (urlencAuthToken != NULL);
+		if (urlencAuthToken == NULL) {
+			ret = PIANO_RET_OUT_OF_MEMORY;
+			curl_easy_cleanup (curl);
+			goto cleanup;
+		}
 
 		snprintf (req->urlPath, sizeof (req->urlPath), PIANO_RPC_PATH
 				"method=%s&auth_token=%s&partner_id=%i&user_id=%s", method,

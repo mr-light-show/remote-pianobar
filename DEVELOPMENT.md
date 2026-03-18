@@ -547,7 +547,7 @@ lldb ./pianobar
 
 ### Debug Logging
 
-Enable debug output for specific subsystems using the `PIANOBAR_DEBUG` environment variable.
+Enable debug output for specific subsystems using the `PIANOBAR_DEBUG` environment variable. On startup, if the mask is non-zero, pianobar prints one line to stderr listing enabled categories in the same colors as debug log lines (e.g. `PIANOBAR_DEBUG=4: UI` with **UI** in green).
 
 #### Debug Flags
 
@@ -556,8 +556,8 @@ Debug flags are bitfield values that can be combined:
 - `1` - `DEBUG_NETWORK` - Network/API calls (cyan)
 - `2` - `DEBUG_AUDIO` - Audio playback (yellow)
 - `4` - `DEBUG_UI` - User interface (green)
-- `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (magenta)
-- `16` - `DEBUG_WEBSOCKET_PROGRESS` - Progress updates every second (magenta, very noisy)
+- `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (bold magenta)
+- `16` - `DEBUG_WEBSOCKET_PROGRESS` - Progress updates every second (normal magenta, very noisy)
 
 #### Usage Examples
 
@@ -592,11 +592,12 @@ PIANOBAR_DEBUG=15 ./pianobar 2>&1 | tee debug.log
 
 #### Color-Coded Output
 
-When stderr is a terminal, debug messages are color-coded by subsystem:
+When stderr is a terminal, the **timestamp** on each line is color-coded by subsystem; the message text after it uses the default color:
 - **Cyan**: Network operations
 - **Yellow**: Audio processing
 - **Green**: UI interactions
-- **Magenta**: WebSocket/Remote API events
+- **Bold magenta**: WebSocket events (bit 8)
+- **Normal magenta**: WebSocket progress spam (bit 16)
 
 ### Debugging TypeScript/Web UI
 
@@ -776,6 +777,7 @@ git commit --no-verify
 
 - [WebSocket Plans](WEBSOCKET_WEB_INTERFACE_PLAN.md)
 - [Threading Documentation](WEBSOCKET_THREADING_PLAN.md)
+- [Error Handling Conventions](ERROR_HANDLING.md)
 - [Debug Flags Reference](WEBSOCKET_DEBUG.md)
 - [Home Assistant Integration](WEBSOCKET_HOMEASSISTANT_PLAN.md)
 - [Testing Documentation](README_TESTING.md)

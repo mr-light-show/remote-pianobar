@@ -24,6 +24,7 @@ THE SOFTWARE.
 /* application settings */
 
 #include "config.h"
+#include "bar_constants.h"
 #include "log.h"
 
 #include <string.h>
@@ -187,7 +188,7 @@ void BarSettingsRead (BarSettings_t *settings) {
 	settings->audioQuality = PIANO_AQ_HIGH;
 	settings->autoselect = true;
 	settings->history = 5;
-	settings->volume = 50;  /* 50% default (linear 0-100 scale) */
+	settings->volume = DEFAULT_VOLUME_PERCENT;
 	settings->systemVolumePlayerGain = 75;  /* 75% default for system volume mode */
 	settings->timeout = 30; /* seconds */
 	settings->pauseTimeout = 30; /* minutes, 0 = disabled */
@@ -243,7 +244,7 @@ void BarSettingsRead (BarSettings_t *settings) {
 	for (size_t j = 0; j < sizeof (configfiles) / sizeof (*configfiles); j++) {
 		static const char *formatMsgPrefix = "format_msg_";
 		FILE *configfd;
-		char line[512];
+		char line[BAR_BUF_MEDIUM];
 		size_t lineNum = 0;
 
 		char * const path = BarGetXdgConfigDir (configfiles[j]);

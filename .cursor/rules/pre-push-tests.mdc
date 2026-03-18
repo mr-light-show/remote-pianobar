@@ -1,0 +1,41 @@
+---
+description: Tests before push; hook enforces; agents must not skip
+alwaysApply: true
+---
+
+# Pre-push: tests must pass before push
+
+## Enforcement (humans + agents)
+
+**Markdown rules do not stop bad pushes.** This repo ships a **git pre-push hook** that runs `make test-all`. If the hook is enabled, **no one can push failing tests**—not you, not another agent.
+
+**One-time setup** (from repo root):
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-push   # if not already executable
+```
+
+After that, every `git push` runs tests first. To push without tests (emergency only): `git push --no-verify` (discouraged).
+
+---
+
+## Agents — mandatory workflow
+
+You **MUST NOT** run `git push` until **both** are true:
+
+1. You have run `make test-all` from the project root in **this** turn or immediately before push, and it exited **0**.
+2. You state in your reply that tests passed (or the user’s push used `--no-verify`).
+
+**Order:** `make test-all` → wait for success → **then** `git push`.
+
+- If the user asks only to “push”, run `make test-all` first unless they explicitly say tests already passed or to use `--no-verify`.
+- **Shell timeout:** use at least **120000 ms** for `make test-all` (often ~1–2 minutes).
+
+**If tests fail:** do not push. Fix or report; re-run `make test-all` after fixes.
+
+---
+
+## What `make test-all` does
+
+Unit tests plus cppcheck static analysis across configured variants.
