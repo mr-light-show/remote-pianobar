@@ -85,46 +85,47 @@ static inline void BarUiDoSkipSong (player_t * const player) {
 	pthread_mutex_unlock (&player->decoderLock);
 }
 
-/*	transform station if necessary to allow changes like rename, rate, ...
- *	@param piano handle
- *	@param transform this station
- *	@return 0 = error, 1 = everything went well
+/* Feedback mode for transform: UI (BarUiMsg + BarUiPianoCall) vs log (log_write + BarUiPianoCallLogged) */
+typedef enum { TRANSFORM_FEEDBACK_UI, TRANSFORM_FEEDBACK_LOGGED } BarTransformFeedback_t;
+
+/*	Transform station if shared; report progress via UI or log depending on feedback.
+ *	@return 0 = error, 1 = success
  */
-int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+static int BarTransformIfSharedWithFeedback (BarApp_t *app, PianoStation_t *station,
+		BarTransformFeedback_t feedback) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 
 	assert (station != NULL);
 
-	/* shared stations must be transformed */
 	if (!station->isCreator) {
-		BarUiMsg (&app->settings, MSG_INFO, "Transforming station... ");
-		if (!BarUiPianoCall (app, PIANO_REQUEST_TRANSFORM_STATION, station,
-				&pRet, &wRet)) {
-			return 0;
+		if (feedback == TRANSFORM_FEEDBACK_UI) {
+			BarUiMsg (&app->settings, MSG_INFO, "Transforming station... ");
+			if (!BarUiPianoCall (app, PIANO_REQUEST_TRANSFORM_STATION, station,
+					&pRet, &wRet))
+				return 0;
+		} else {
+			log_write(DEBUG_WEBSOCKET, "Transforming shared station...\n");
+			if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
+					"Transforming station", &pRet, &wRet))
+				return 0;
 		}
 	}
 	return 1;
+}
+
+/*	Transform station if necessary to allow changes like rename, rate, ...
+ *	@return 0 = error, 1 = everything went well
+ */
+int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_UI);
 }
 
 /*	Logged version of BarTransformIfShared for WebSocket thread
  *	Prints action to stdout/log
  */
 int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
-	PianoReturn_t pRet;
-	CURLcode wRet;
-
-	assert (station != NULL);
-
-	/* shared stations must be transformed */
-	if (!station->isCreator) {
-		log_write(DEBUG_WEBSOCKET, "Transforming shared station...\n");
-		if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
-				"Transforming station", &pRet, &wRet)) {
-			return 0;
-		}
-	}
-	return 1;
+	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_LOGGED);
 }
 
 /*	print current shortcut configuration

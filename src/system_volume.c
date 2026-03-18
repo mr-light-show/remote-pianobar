@@ -463,84 +463,76 @@ static bool pactlSetVolume(int percent) {
 	return system(cmd) == 0;
 }
 
-/* ALSA native: Get volume using libasound */
-static int alsaGetVolume(void) {
-	snd_mixer_t *handle;
-	snd_mixer_elem_t *elem;
+/* ALSA: open default mixer and find element by alsaMixerName.
+ * On success, sets *handle and *elem; caller must snd_mixer_close(*handle).
+ * On failure, returns false (handle is closed internally if it was opened).
+ */
+static bool alsa_open_mixer_and_find_elem(snd_mixer_t **handle, snd_mixer_elem_t **elem) {
 	snd_mixer_selem_id_t *sid;
-	long min, max, volume;
-	int percent;
-	
+
 	if (!alsaMixerName)
-		return -1;
-	
-	if (snd_mixer_open(&handle, 0) < 0)
-		return -1;
-	if (snd_mixer_attach(handle, "default") < 0)
+		return false;
+
+	if (snd_mixer_open(handle, 0) < 0)
+		return false;
+	if (snd_mixer_attach(*handle, "default") < 0)
 		goto cleanup;
-	if (snd_mixer_selem_register(handle, NULL, NULL) < 0)
+	if (snd_mixer_selem_register(*handle, NULL, NULL) < 0)
 		goto cleanup;
-	if (snd_mixer_load(handle) < 0)
+	if (snd_mixer_load(*handle) < 0)
 		goto cleanup;
-	
+
 	snd_mixer_selem_id_alloca(&sid);
 	snd_mixer_selem_id_set_index(sid, 0);
 	snd_mixer_selem_id_set_name(sid, alsaMixerName);
-	
-	elem = snd_mixer_find_selem(handle, sid);
-	if (!elem)
+
+	*elem = snd_mixer_find_selem(*handle, sid);
+	if (!*elem)
 		goto cleanup;
-	
+
+	return true;
+
+cleanup:
+	snd_mixer_close(*handle);
+	*handle = NULL;
+	return false;
+}
+
+/* ALSA native: Get volume using libasound */
+static int alsaGetVolume(void) {
+	snd_mixer_t *handle = NULL;
+	snd_mixer_elem_t *elem;
+	long min, max, volume;
+	int percent;
+
+	if (!alsa_open_mixer_and_find_elem(&handle, &elem)) {
+		return -1;
+	}
+
 	snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
 	snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_MONO, &volume);
-	
 	percent = (int)(((volume - min) * 100) / (max - min));
-	
+
 	snd_mixer_close(handle);
 	return percent;
-	
-cleanup:
-	snd_mixer_close(handle);
-	return -1;
 }
 
 /* ALSA native: Set volume using libasound */
 static bool alsaSetVolume(int percent) {
-	snd_mixer_t *handle;
+	snd_mixer_t *handle = NULL;
 	snd_mixer_elem_t *elem;
-	snd_mixer_selem_id_t *sid;
 	long min, max, volume;
-	
-	if (!alsaMixerName)
+
+	if (!alsa_open_mixer_and_find_elem(&handle, &elem)) {
 		return false;
-	
-	if (snd_mixer_open(&handle, 0) < 0)
-		return false;
-	if (snd_mixer_attach(handle, "default") < 0)
-		goto cleanup;
-	if (snd_mixer_selem_register(handle, NULL, NULL) < 0)
-		goto cleanup;
-	if (snd_mixer_load(handle) < 0)
-		goto cleanup;
-	
-	snd_mixer_selem_id_alloca(&sid);
-	snd_mixer_selem_id_set_index(sid, 0);
-	snd_mixer_selem_id_set_name(sid, alsaMixerName);
-	
-	elem = snd_mixer_find_selem(handle, sid);
-	if (!elem)
-		goto cleanup;
-	
+	}
+
 	snd_mixer_selem_get_playback_volume_range(elem, &min, &max);
 	volume = min + ((max - min) * percent) / 100;
 	snd_mixer_selem_set_playback_volume_all(elem, volume);
-	
+
 	snd_mixer_close(handle);
 	return true;
-	
-cleanup:
-	snd_mixer_close(handle);
-	return false;
 }
 
 /* ALSA: Try to find a working mixer element
