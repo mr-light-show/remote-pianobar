@@ -131,5 +131,5 @@ flowchart TB
 
 ## Open decisions
 
-1. **Where to edit manager_user_ids**: Config Entry Options flow only, or also a service / card config field so anyone with dashboard edit access can change it from the card.
-2. **Add music**: Treat as manager-only (visitor can create new stations but not add music to an existing managed station).
+1. **Where to edit manager_user_ids**: Config Entry Options flow only, or also a service / card config field so anyone with dashboard edit access can change it from the card. Decision: card config
+2. **Add music**: Treat as manager-only (visitor can create new stations but not add music to an existing managed station). Decision: Statgement is true
