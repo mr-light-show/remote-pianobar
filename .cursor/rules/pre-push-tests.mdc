@@ -1,13 +1,41 @@
 ---
-description: Run tests before push; do not push if tests fail
+description: Tests before push; hook enforces; agents must not skip
 alwaysApply: true
 ---
 
-# Pre-push: run tests, do not push on failure
+# Pre-push: tests must pass before push
 
-- **Before pushing:** Run the most comprehensive tests from the project root: `make test-all` (unit tests + cppcheck lint). Do not suggest or perform `git push` until tests have been run and have passed.
-- **If tests fail:** Do not push. Remind to fix failures and re-run tests before pushing.
-- When the user is about to push or asks to push, suggest running `make test-all` first if it hasn’t been run this session, or confirm tests passed before proceeding.
-- **Timeout for `make test-all`:** The full run (unit tests + static analysis across many configs) typically takes **1–2 minutes**. When running `make test-all` via the Shell tool, use a **timeout of at least 120000 ms (2 minutes)** so the run is not cut off before completion.
+## Enforcement (humans + agents)
 
-**Enforcement:** To block pushes automatically when tests fail, add a git pre-push hook that runs `make test-all` and exits non-zero on failure.
+**Markdown rules do not stop bad pushes.** This repo ships a **git pre-push hook** that runs `make test-all`. If the hook is enabled, **no one can push failing tests**—not you, not another agent.
+
+**One-time setup** (from repo root):
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-push   # if not already executable
+```
+
+After that, every `git push` runs tests first. To push without tests (emergency only): `git push --no-verify` (discouraged).
+
+---
+
+## Agents — mandatory workflow
+
+You **MUST NOT** run `git push` until **both** are true:
+
+1. You have run `make test-all` from the project root in **this** turn or immediately before push, and it exited **0**.
+2. You state in your reply that tests passed (or the user’s push used `--no-verify`).
+
+**Order:** `make test-all` → wait for success → **then** `git push`.
+
+- If the user asks only to “push”, run `make test-all` first unless they explicitly say tests already passed or to use `--no-verify`.
+- **Shell timeout:** use at least **120000 ms** for `make test-all` (often ~1–2 minutes).
+
+**If tests fail:** do not push. Fix or report; re-run `make test-all` after fixes.
+
+---
+
+## What `make test-all` does
+
+Unit tests plus cppcheck static analysis across configured variants.

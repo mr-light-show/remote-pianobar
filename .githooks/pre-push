@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs before every git push. Blocks push if tests fail.
+# Enable once: git config core.hooksPath .githooks
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+echo "pre-push: running make test-all..."
+make test-all
