@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -63,7 +63,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libblas-dev liblapack-dev
       
       - name: Setup Node.js with caching
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '18'
           cache: 'npm'
@@ -196,7 +196,7 @@ jobs:
 
       - name: Upload to release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2.6.1
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: remote-pianobar_*.deb
@@ -220,7 +220,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
       
@@ -378,7 +378,7 @@ jobs:
           
       - name: Upload to release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2.6.1
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
@@ -399,7 +399,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
         
@@ -410,7 +410,7 @@ jobs:
           grep VERSION src/config.h
       
       - name: Cache Homebrew packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/Library/Caches/Homebrew
@@ -436,7 +436,7 @@ jobs:
           brew link --overwrite ffmpeg json-c libwebsockets libgcrypt libao || true
       
       - name: Setup Node.js with caching
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '18'
           cache: 'npm'
@@ -605,7 +605,7 @@ jobs:
           
       - name: Upload to release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2.6.1
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           files: remote-pianobar_*.dmg
