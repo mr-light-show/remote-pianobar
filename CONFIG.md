@@ -18,6 +18,67 @@ See `contrib/config-example` for a template configuration file.
 | `password` | (none) | Your Pandora password |
 | `password_command` | (none) | Command to retrieve password (e.g., `gpg --decrypt ~/password`) |
 
+With only these keys (and no `account` lines below), remote-pianobar behaves like a single Pandora login. For several logins, see [Multiple Pandora accounts](#multiple-pandora-accounts).
+
+### Multiple Pandora accounts
+
+You can configure **more than one** Pandora login. Exactly one account is **active** at a time. The **primary** account uses `user` / `password` / `password_command` from the main config file. **Additional** accounts load credentials from separate **snippet files** referenced with `account = id:path`.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `main_account_id` | (none) | Stable **id** for the primary account (the one whose credentials live in the main config). If omitted, the id is `default`. |
+| `account_label` | (none) | Display name for the **primary** account in the web UI and WebSocket payloads. If omitted, falls back to `main_account_id` or `default`. |
+| `default_account` | (none) | Which account **id** is active when pianobar starts. If omitted, the first account in the built-in list is used. Must match an existing account id; invalid values log a warning and fall back to the first account. |
+| `account` | (none) | Declares an extra account: `account = id:path`. **id** is a stable identifier (e.g. `work`). **path** is a snippet file with that account’s credentials. You may repeat this line for each extra account. |
+
+**Account list order:** If `user` is set in the main config, that primary account is always **first**. Extra accounts appear in the order each `account = id:path` line appears in the config.
+
+**File-only accounts:** You can omit `user` in the main config and define logins **only** via `account = id:path` if every snippet supplies `user` (and `password` or `password_command`). If the main config **does** set `user`, that login is always the first account and snippets are listed after it.
+
+**Single-account (classic) mode:** If you set `user` / `password` in the main file and never add `account` lines, you get one implicit account (same as a single-login setup).
+
+**Snippet file format:** Only these keys are read from each account file:
+
+| Key | Description |
+|-----|-------------|
+| `user` | Pandora email/username for this account |
+| `password` | Plain password |
+| `password_command` | Command that prints the password (same idea as main config) |
+| `account_label` | Display name for this account in UIs; if omitted, the **id** from `account = id:path` is used |
+| `autostart_station` | Per-account autostart station id (same semantics as global `autostart_station`; empty value disables autostart for this account) |
+
+**Inheritance:** For file-backed accounts, remote-pianobar first copies `user` / `password` / `password_command` from the **main** config (if set), then the snippet file **overrides** any keys it defines.
+
+**Path resolution:** Paths on `account = id:path` are resolved like other config paths: **relative** paths are relative to the directory of the config file that contained the `account` line (after the last processed config path, typically `~/.config/pianobar`). **Absolute** paths and paths starting with `~` are expanded as usual.
+
+**Runtime switching:** With the WebSocket / web UI enabled, clients can change the active account without editing the config. See **`WEBSOCKET_API.md`**: `process` includes `accounts` and `current_account` when multiple accounts exist; send action `app.pandora-reconnect` with optional `account_id` to switch and re-authenticate.
+
+**Example — primary in main config, second account in a snippet:**
+
+Main `~/.config/pianobar/config`:
+
+```ini
+user = you@home.example
+password = your_home_password
+main_account_id = home
+account_label = Home
+
+account = work:account-work.conf
+
+default_account = home
+
+# ... rest of config (audio, websocket_port, etc.)
+```
+
+`~/.config/pianobar/account-work.conf`:
+
+```ini
+user = you@work.example
+password_command = gpg --decrypt ~/.config/pianobar/work-pass.gpg
+account_label = Work
+autostart_station =
+```
+
 ## Network/Proxy
 
 | Option | Default | Description |
@@ -86,6 +147,8 @@ ReplayGain is applied on top of the volume setting. The default `system_volume_p
 | `station_display_name_override` | (none) | Transform station names for display using regex. See below for format. |
 
 ### Notes on Station Auto-Start
+
+**Multi-account:** The global `autostart_station` in the main config applies to the **primary** account. Each extra account can set its own `autostart_station` inside its snippet file (see [Multiple Pandora accounts](#multiple-pandora-accounts)).
 
 **State File Behavior:**
 - Pianobar automatically saves the last played station to `~/.config/pianobar/state`
@@ -340,4 +403,5 @@ For a complete example with all available options, see `contrib/config-example`.
 - `README.rst` - General usage and installation
 - `contrib/config-example` - Example configuration file
 - `contrib/eventcmd-examples/` - Example event command scripts
+- `WEBSOCKET_API.md` - Remote API (including multi-account `process` fields and `app.pandora-reconnect` with `account_id`)
 
