@@ -233,10 +233,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - docker_image: "bookworm"
+          - image: "debian:bookworm"
             pkg_name: "bookworm"
-          - docker_image: "trixie"
+          - image: "debian:trixie"
             pkg_name: "trixie"
+          - image: "ubuntu:noble"
+            pkg_name: "noble"
     
     steps:
       - name: Checkout code
@@ -268,7 +270,7 @@ jobs:
             -v $(pwd):/workspace \
             -w /workspace \
             -e DEBUG_FLAGS="$DEBUG_FLAGS" \
-            debian:${{ matrix.docker_image }} \
+            ${{ matrix.image }} \
             bash -c "
               apt-get update && \
               apt-get install -y \
@@ -329,7 +331,7 @@ jobs:
           DEPS=$(docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
             -w /workspace \
-            debian:${{ matrix.docker_image }} \
+            ${{ matrix.image }} \
             bash -c "ldd pianobar | grep '=>' || true")
           echo "$DEPS"
           
