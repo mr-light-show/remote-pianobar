@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { SocketService } from './services/socket-service';
+import { resolveStationIdFromStationsList } from './station-sync';
 
 import './components/album-art';
 import './components/progress-bar';
@@ -225,16 +226,13 @@ export class PianobarApp extends LitElement {
   
   /** Fill currentStationId from stations[] when we have a name but id is missing (some payloads omit stationId). */
   private syncCurrentStationIdFromStationsList(): void {
-    if ((this.currentStationId || '').trim() !== '') {
-      return;
-    }
-    const name = (this.currentStation || '').trim();
-    if (!name || this.stations.length === 0) {
-      return;
-    }
-    const match = this.stations.find((s: { id: string; name: string }) => s.name === name);
-    if (match?.id) {
-      this.currentStationId = String(match.id).trim();
+    const resolved = resolveStationIdFromStationsList(
+      this.currentStationId,
+      this.currentStation,
+      this.stations
+    );
+    if (resolved !== undefined) {
+      this.currentStationId = resolved;
     }
   }
 

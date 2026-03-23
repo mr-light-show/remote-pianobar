@@ -93,6 +93,61 @@ describe('StationModeModal', () => {
       expect(modeDescriptions[2].textContent).toBe('Deeper album tracks');
     });
 
+    it('shows compact station id in header when currentStationId is set', async () => {
+      const element: StationModeModal = await fixture(html`
+        <station-mode-modal
+          open
+          .modes=${mockModes}
+          currentStationId="S12345"
+          currentStationName="Rock"
+        ></station-mode-modal>
+      `);
+
+      await element.updateComplete;
+
+      const idEl = element.shadowRoot!.querySelector('.station-id-compact');
+      expect(idEl).toBeTruthy();
+      expect(idEl!.textContent?.trim()).toBe('S12345');
+      expect(idEl!.getAttribute('title')).toBe('Station ID');
+      expect(element.shadowRoot!.querySelector('.modal-head-separator')).toBeTruthy();
+    });
+
+    it('resolves station id from stations list when id empty but name matches', async () => {
+      const stations = [
+        { id: 'sid-9', name: 'Rock Station' },
+      ];
+      const element: StationModeModal = await fixture(html`
+        <station-mode-modal
+          open
+          .modes=${mockModes}
+          currentStationId=""
+          currentStationName="Rock Station"
+          .stations=${stations}
+        ></station-mode-modal>
+      `);
+
+      await element.updateComplete;
+
+      const idEl = element.shadowRoot!.querySelector('.station-id-compact');
+      expect(idEl?.textContent?.trim()).toBe('sid-9');
+    });
+
+    it('does not render station id compact when id cannot be resolved', async () => {
+      const element: StationModeModal = await fixture(html`
+        <station-mode-modal
+          open
+          .modes=${mockModes}
+          currentStationId=""
+          currentStationName="Unknown"
+          .stations=${[{ id: 'x', name: 'Other' }]}
+        ></station-mode-modal>
+      `);
+
+      await element.updateComplete;
+
+      expect(element.shadowRoot!.querySelector('.station-id-compact')).toBeFalsy();
+    });
+
     it('shows active badge for active mode', async () => {
       const element: StationModeModal = await fixture(html`
         <station-mode-modal open .modes=${mockModes}></station-mode-modal>

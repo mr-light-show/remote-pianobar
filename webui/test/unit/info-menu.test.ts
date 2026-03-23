@@ -28,7 +28,48 @@ describe('InfoMenu', () => {
       `);
 
       const actionButtons = element.shadowRoot!.querySelectorAll('.action-button');
-      expect(actionButtons.length).toBe(9); // All menu items
+      expect(actionButtons.length).toBe(9);
+    });
+
+    it('renders Switch Account when showAccountSwitch is true', async () => {
+      const element: InfoMenu = await fixture(html`
+        <info-menu .showAccountSwitch=${true}></info-menu>
+      `);
+
+      const actionButtons = element.shadowRoot!.querySelectorAll('.action-button');
+      expect(actionButtons.length).toBe(10);
+      expect(element.shadowRoot!.textContent).toContain('Switch Account');
+    });
+
+    it('does not render Switch Account when showAccountSwitch is false', async () => {
+      const element: InfoMenu = await fixture(html`
+        <info-menu></info-menu>
+      `);
+
+      expect(element.shadowRoot!.textContent).not.toContain('Switch Account');
+    });
+
+    it('dispatches info-switch-account when Switch Account is clicked', async () => {
+      const element: InfoMenu = await fixture(html`
+        <info-menu .showAccountSwitch=${true}></info-menu>
+      `);
+
+      element.toggleMenu();
+      await vi.advanceTimersByTimeAsync(0);
+      await element.updateComplete;
+
+      let fired = false;
+      element.addEventListener('info-switch-account', () => {
+        fired = true;
+      });
+
+      const switchBtn = Array.from(
+        element.shadowRoot!.querySelectorAll('.action-button')
+      ).find((btn) => btn.textContent?.includes('Switch Account'));
+      expect(switchBtn).toBeTruthy();
+      (switchBtn as HTMLElement).click();
+
+      expect(fired).toBe(true);
     });
 
     it('renders explain action', async () => {
