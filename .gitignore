@@ -15,6 +15,7 @@ playwright-report/
 test-results/
 .vite/
 dist/
+webui/coverage/
 
 # Agent context and plans
 .claude/
