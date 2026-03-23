@@ -81,7 +81,7 @@ THE SOFTWARE.
 #include "websocket_bridge.h"
 #include "ui_readline.h"
 
-/*	authenticate user
+/*	authenticate user using active account credentials (or main config fallback)
  */
 static bool BarMainLoginUser (BarApp_t *app) {
 	PianoReturn_t pRet;
@@ -89,16 +89,90 @@ static bool BarMainLoginUser (BarApp_t *app) {
 	PianoRequestDataLogin_t reqData;
 	bool ret;
 
-	reqData.user = app->settings.username;
-	reqData.password = app->settings.password;
+	const BarAccount_t *acct = BarSettingsGetActiveAccount (&app->settings);
+	reqData.user = acct ? acct->username : app->settings.username;
+	reqData.password = acct ? acct->password : app->settings.password;
 	reqData.step = 0;
 
-	BarUiMsg (&app->settings, MSG_INFO, "Login... ");
+	if (acct && acct->label) {
+		BarUiMsg (&app->settings, MSG_INFO, "Login (%s)... ", acct->label);
+	} else {
+		BarUiMsg (&app->settings, MSG_INFO, "Login... ");
+	}
 	ret = BarUiPianoCall (app, PIANO_REQUEST_LOGIN, &reqData, &pRet, &wRet);
 	BarUiStartEventCmd (&app->settings, "userlogin", NULL, NULL, &app->player,
 			NULL, pRet, wRet);
 
 	return ret;
+}
+
+/*	Run a password_command and return the result, or NULL on failure.
+ *	Caller must free the returned string.
+ */
+static char *BarRunPasswordCommand (BarSettings_t *settings, const char *cmd) {
+	pid_t chld;
+	int pipeFd[2];
+	char passBuf[BAR_INPUT_MAX];
+
+	BarUiMsg (settings, MSG_INFO, "Requesting password from external helper... ");
+
+	if (pipe (pipeFd) == -1) {
+		BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
+		return NULL;
+	}
+
+	chld = fork ();
+	if (chld == 0) {
+		close (pipeFd[0]);
+		dup2 (pipeFd[1], fileno (stdout));
+		execl ("/bin/sh", "/bin/sh", "-c", cmd, (char *) NULL);
+		BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
+		close (pipeFd[1]);
+		exit (1);
+	} else if (chld == -1) {
+		BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
+		return NULL;
+	} else {
+		int status;
+		close (pipeFd[1]);
+		memset (passBuf, 0, sizeof (passBuf));
+		ssize_t bytesRead = read (pipeFd[0], passBuf, sizeof (passBuf)-1);
+		close (pipeFd[0]);
+
+		if (bytesRead < 0) {
+			BarUiMsg (settings, MSG_NONE, "Error reading password: %s\n", strerror (errno));
+			waitpid (chld, &status, 0);
+			return NULL;
+		}
+
+		ssize_t len = strlen (passBuf)-1;
+		while (len >= 0 && passBuf[len] == '\n') {
+			passBuf[len] = '\0';
+			--len;
+		}
+
+		waitpid (chld, &status, 0);
+		if (WEXITSTATUS (status) == 0) {
+			BarUiMsg (settings, MSG_NONE, "Ok.\n");
+			return strdup (passBuf);
+		} else {
+			BarUiMsg (settings, MSG_NONE, "Error: Exit status %i.\n", WEXITSTATUS (status));
+			return NULL;
+		}
+	}
+}
+
+/*	Resolve password for a given account (run password_command if needed).
+ *	Sets acct->password if password_command succeeds.
+ *	@return true if password is available after resolution.
+ */
+static bool BarResolveAccountPassword (BarSettings_t *settings, BarAccount_t *acct) {
+	if (acct->password != NULL) return true;
+	if (acct->passwordCmd != NULL) {
+		acct->password = BarRunPasswordCommand (settings, acct->passwordCmd);
+		return (acct->password != NULL);
+	}
+	return false;
 }
 
 /*	ask for username/password if none were provided in settings
@@ -108,9 +182,52 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 
 	bool usernameFromConfig = true;
 
+	/* Multi-account: resolve credentials for the active account */
+	BarAccount_t *acct = (BarAccount_t *)BarSettingsGetActiveAccount (settings);
+	if (acct != NULL) {
+		if (acct->username == NULL) {
+			#ifdef WEBSOCKET_ENABLED
+			if (settings->uiMode == BAR_UI_MODE_WEB) {
+				BarUiMsg (settings, MSG_ERR, "Error: Account '%s' has no username.\n",
+						acct->id);
+				return false;
+			}
+			#endif
+			char nameBuf[BAR_INPUT_MAX];
+			BarUiMsg (settings, MSG_QUESTION, "Email for account '%s': ", acct->id);
+			if (BarReadlineStr (nameBuf, sizeof (nameBuf), input, BAR_RL_DEFAULT) == 0)
+				return false;
+			acct->username = strdup (nameBuf);
+		}
+		if (acct->password == NULL) {
+			if (!BarResolveAccountPassword (settings, acct)) {
+				#ifdef WEBSOCKET_ENABLED
+				if (settings->uiMode == BAR_UI_MODE_WEB) {
+					BarUiMsg (settings, MSG_ERR, "Error: Account '%s' has no password.\n",
+							acct->id);
+					return false;
+				}
+				#endif
+				char passBuf[BAR_INPUT_MAX];
+				BarUiMsg (settings, MSG_QUESTION, "Password for account '%s': ", acct->id);
+				if (BarReadlineStr (passBuf, sizeof (passBuf), input, BAR_RL_NOECHO) == 0) {
+					puts ("");
+					return false;
+				}
+				puts ("");
+				acct->password = strdup (passBuf);
+			}
+		}
+		/* Mirror to main settings for backward compat (login uses settings->username) */
+		free (settings->username);
+		settings->username = strdup (acct->username);
+		free (settings->password);
+		settings->password = acct->password ? strdup (acct->password) : NULL;
+		return true;
+	}
 
+	/* Legacy single-account path (no accounts array) */
 	if (settings->username == NULL) {
-		/* In web-only mode, stdin is not available - credentials must be in config */
 		#ifdef WEBSOCKET_ENABLED
 		if (settings->uiMode == BAR_UI_MODE_WEB) {
 			BarUiMsg (settings, MSG_ERR, "Error: Username not found in config file. "
@@ -118,7 +235,6 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 			return false;
 		}
 		#endif
-		
 
 		char nameBuf[BAR_INPUT_MAX];
 
@@ -128,12 +244,9 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		}
 		settings->username = strdup (nameBuf);
 		usernameFromConfig = false;
-	} else {
 	}
 
-
 	if (settings->password == NULL) {
-		/* In web-only mode, stdin is not available - credentials must be in config */
 		#ifdef WEBSOCKET_ENABLED
 		if (settings->uiMode == BAR_UI_MODE_WEB) {
 			BarUiMsg (settings, MSG_ERR, "Error: Password not found in config file. "
@@ -141,7 +254,7 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 			return false;
 		}
 		#endif
-		
+
 		char passBuf[BAR_INPUT_MAX];
 
 		if (usernameFromConfig) {
@@ -154,64 +267,12 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 				puts ("");
 				return false;
 			}
-			/* write missing newline */
 			puts ("");
 			settings->password = strdup (passBuf);
 		} else {
-			pid_t chld;
-			int pipeFd[2];
-
-			BarUiMsg (settings, MSG_INFO, "Requesting password from external helper... ");
-
-			if (pipe (pipeFd) == -1) {
-				BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
-				return false;
-			}
-
-			chld = fork ();
-			if (chld == 0) {
-				/* child */
-				close (pipeFd[0]);
-				dup2 (pipeFd[1], fileno (stdout));
-				execl ("/bin/sh", "/bin/sh", "-c", settings->passwordCmd, (char *) NULL);
-				BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
-				close (pipeFd[1]);
-				exit (1);
-			} else if (chld == -1) {
-				BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
-				return false;
-			} else {
-				/* parent */
-				int status;
-
-				close (pipeFd[1]);
-				memset (passBuf, 0, sizeof (passBuf));
-				ssize_t bytesRead = read (pipeFd[0], passBuf, sizeof (passBuf)-1);
-				close (pipeFd[0]);
-
-				if (bytesRead < 0) {
-					BarUiMsg (settings, MSG_NONE, "Error reading password: %s\n", strerror (errno));
-					waitpid (chld, &status, 0);
-					return false;
-				}
-
-				/* drop trailing newlines */
-				ssize_t len = strlen (passBuf)-1;
-				while (len >= 0 && passBuf[len] == '\n') {
-					passBuf[len] = '\0';
-					--len;
-				}
-
-				waitpid (chld, &status, 0);
-				if (WEXITSTATUS (status) == 0) {
-					settings->password = strdup (passBuf);
-					BarUiMsg (settings, MSG_NONE, "Ok.\n");
-				} else {
-					BarUiMsg (settings, MSG_NONE, "Error: Exit status %i.\n", WEXITSTATUS (status));
-					return false;
-				}
-			}
-		} /* end else passwordCmd */
+			settings->password = BarRunPasswordCommand (settings, settings->passwordCmd);
+			if (settings->password == NULL) return false;
+		}
 	}
 
 	return true;

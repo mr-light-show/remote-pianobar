@@ -114,6 +114,16 @@ typedef struct {
 	bool valid;         /* whether regex compiled successfully */
 } BarStationDisplayNameOverride_t;
 
+/* Multi-account support: per-account credentials and metadata */
+typedef struct {
+	char *id;           /* stable identifier (from config, e.g. "work") */
+	char *label;        /* display name (account_label or fallback to id) */
+	char *username;
+	char *password;
+	char *passwordCmd;
+	char *autostartStation;  /* per-account autostart override */
+} BarAccount_t;
+
 typedef struct {
 	bool autoselect;
 	unsigned int history, maxRetry, timeout, bufferSecs;
@@ -148,7 +158,12 @@ typedef struct {
 	/* Station display name overrides */
 	BarStationDisplayNameOverride_t *stationDisplayNameOverrides;
 	size_t stationDisplayNameOverrideCount;
-	
+
+	/* Multi-account support */
+	BarAccount_t *accounts;
+	size_t accountCount;
+	size_t activeAccountIndex;
+
 	/* WebSocket support (conditional compilation) */
 	#ifdef WEBSOCKET_ENABLED
 	BarUiMode_t uiMode;
@@ -169,4 +184,8 @@ void BarSettingsInit (BarSettings_t *);
 void BarSettingsDestroy (BarSettings_t *);
 void BarSettingsRead (BarSettings_t *);
 void BarSettingsWrite (PianoStation_t *, BarSettings_t *);
+
+const BarAccount_t *BarSettingsGetActiveAccount (const BarSettings_t *);
+bool BarSettingsSetActiveAccountById (BarSettings_t *, const char *id);
+char *BarSettingsExpandTilde (const char * const, const char * const);
 

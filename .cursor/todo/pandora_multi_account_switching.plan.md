@@ -1,6 +1,6 @@
 ---
 name: Pandora multi-account switching
-overview: Add support for multiple Pandora accounts in remote-pianobar, with config-file options, and expose account selection in the web UI and Home Assistant via a select control.
+overview: Add support for multiple Pandora accounts in remote-pianobar, with config-file options, and expose account selection in the web UI, Home Assistant (select + reconnect service), and the Lovelace card Advanced section when multiple accounts exist.
 todos: []
 isProject: false
 ---
@@ -11,7 +11,8 @@ isProject: false
 
 - **remote-pianobar**: Config format for multiple accounts, runtime account list + active index, reconnect with optional account selection, and WebSocket state for UIs.
 - **Web UI**: Account dropdown; send `app.pandora-reconnect` with chosen account when switching.
-- **remote-pianobar-ha**: New Select entity for "Account to use"; optional `account_id` on reconnect service.
+- **remote-pianobar-ha**: New Select entity for "Account to use"; **reconnect service must** accept optional `account_id` and pass it through to `app.pandora-reconnect`.
+- **remote_pianobar_card** (Lovelace media player card): **Advanced** section shows Pandora account selection **only when** there is more than one account (same account list as the integration).
 
 Single-process model: one daemon, one active Pandora session at a time; switching account = disconnect (if needed) then reconnect with the selected account's credentials.
 
@@ -123,12 +124,21 @@ Emit the same state after reconnect or account switch (already done via existing
 
 ## Home Assistant (remote-pianobar-ha)
 
-- **Coordinator**: In [coordinator.py](remote-pianobar-ha/custom_components/pianobar/coordinator.py), when processing the WebSocket state that includes `process` (or the event that carries the same payload), update `coordinator.data` with `current_account` and `accounts` (list of `{ "id", "label" }`). Ensure this is the same structure the backend sends.
+- **Coordinator**: In [coordinator.py](remote-pianobar-ha/custom_components/pianobar/coordinator.py), when processing the WebSocket state that includes `process` (or the event that carries the same payload), update `coordinator.data` with `current_account` and `accounts` (list of `{ "id", "label" }`). Ensure this is the same structure the backend sends. **Expose `accounts` and current account id/label on the media player entity attributes** (when useful) so the Lovelace card can read them without hard-coding the account Select entity id; alternatively the card may resolve the account select entity from the config entry.
 - **Select entity**: Add a second Select in [select.py](remote-pianobar-ha/custom_components/pianobar/select.py) (existing one remains the station selector):
   - Entity: e.g. "Pandora account" or "Account to use"; `options` = list of account labels (or ids); `current_option` = label (or id) of `current_account`.
   - `async_select_option`: map selected label back to account id, then call `await self.coordinator.send_action_with_params("app.pandora-reconnect", {"account_id": id})`. Coordinator already has [send_action_with_params](remote-pianobar-ha/custom_components/pianobar/coordinator.py) that sends `{"action": action, ...params}`.
-- **Reconnect service**: Optionally extend the `reconnect` service in **[init**.py](remote-pianobar-ha/custom_components/pianobar/__init__.py) and [services.yaml](remote-pianobar-ha/custom_components/pianobar/services.yaml) to accept an optional `account_id` and pass it through `send_action_with_params("app.pandora-reconnect", {"account_id": account_id})` when provided.
+- **Reconnect service** (required): Extend the `reconnect` service in [__init__.py](remote-pianobar-ha/custom_components/pianobar/__init__.py) and [services.yaml](remote-pianobar-ha/custom_components/pianobar/services.yaml) to accept an optional `account_id`. When `account_id` is provided, call `send_action_with_params("app.pandora-reconnect", {"account_id": account_id})`; when omitted, call reconnect without `account_id` (current account). Document the new field in `services.yaml`.
 - **Device/entity naming**: Place the new Select on the same device as the existing station Select; unique_id e.g. `{entry_id}_account_select`.
+
+---
+
+## Lovelace card (remote_pianobar_card)
+
+- **Placement**: Add account selection inside the card’s **Advanced** section—the same surface used for power-user / secondary actions (e.g. overflow menu block titled **Advanced**, or equivalent subsection in [pianobar-media-player-card.ts](remote_pianobar_card/src/pianobar-media-player-card.ts) / [overflow-menu.ts](remote_pianobar_card/src/components/overflow-menu.ts)). Do **not** put it on the card editor’s “Advanced” config tab unless that tab is explicitly repurposed; prefer **runtime** UI.
+- **Visibility**: Render the account control **only when** `accounts.length > 1` (from media player `attributes` or coordinator-fed state). Hide entirely for single-account setups.
+- **Behavior**: Dropdown (or `ha-select`-style) listing account labels; selected value = current account. On change: call `pianobar.reconnect` with `account_id`, or `select.select_option` on the integration’s account Select entity—whichever matches existing card patterns for station/actions.
+- **Loading / errors**: Brief “Switching account…” or disable control while reconnect is in flight; surface service errors if reconnect fails.
 
 ---
 
@@ -141,12 +151,14 @@ sequenceDiagram
   participant WebSocket
   participant WebUI
   participant HA
+  participant Card
 
   Config->>Daemon: BarSettingsRead
   Daemon->>Daemon: Login with active account
   WebUI->>WebSocket: connect and query
   WebSocket->>WebUI: process state with stations and accounts
   HA->>WebSocket: connect and receive state
+  Card->>HA: read accounts from entity state
   WebUI->>WebSocket: pandora-reconnect with account_id
   WebSocket->>Daemon: set active account and reconnect
   Daemon->>WebSocket: process state updated
@@ -154,15 +166,43 @@ sequenceDiagram
   WebSocket->>HA: same state
   HA->>WebSocket: pandora-reconnect with account_id
   WebSocket->>Daemon: set active account and reconnect
+  Card->>HA: reconnect or select_option account_id
 ```
+
+---
+
+## Cross-client synchronization
+
+Multiple clients (web UI tabs, HA coordinator, Lovelace card) connect simultaneously via WebSocket. When any client triggers an account switch or station change, all other clients must reflect the updated state without manual refresh.
+
+### Mechanism
+
+The backend's `BarSocketIoEmit` function broadcasts every event to **all** connected WebSocket clients. After an account switch, the backend emits both `stations` (new account's station list) and `process` (full state including `current_account` and `accounts`) to all clients. This is the primary sync mechanism—no polling or per-client state is needed.
+
+### Per-layer requirements
+
+- **Backend**: All account switch code paths must emit both `stations` and `process` events after completion. The direct-call path in `socketio.c` (account switch with `account_id`) calls `BarUiActPandoraReconnect` (which broadcasts `stations` inside) and then `BarSocketIoEmitProcess` (which broadcasts `process` with updated `current_account`). The keyboard 'R' path goes through the dispatch table and the main loop handles state emission. No unicast—always broadcast.
+- **Web UI**: The `process` event handler in `app.ts` updates `currentAccountId` and `accounts` from server state, overriding any optimistic local state. The `stations` event handler replaces the entire station list. Multiple browser tabs each have independent WebSocket connections and all receive broadcasts. When another client switches accounts, the local UI updates reactively without user interaction.
+- **HA coordinator**: `_handle_process_event` updates `data["accounts"]` and `data["current_account"]`; `_handle_stations_event` replaces `data["stations"]`. After each event, `async_set_updated_data(self.data)` fires, which triggers all `CoordinatorEntity` subclasses (station select, account select, media player) to re-render with current state. No additional work needed—HA's coordinator pattern handles propagation.
+- **HA Account Select**: `options` and `current_option` are computed properties reading from `coordinator.data`. When the coordinator's data changes (via broadcast from backend), the entity's state automatically updates in HA, which propagates to dashboards and automations.
+- **HA Station Select**: Same pattern—`options` reads from `coordinator.data["stations"]` and `current_option` from `coordinator.data["station"]`. After an account switch, the old station name won't match the new list, so `current_option` returns `None` until the new account's station starts playing.
+- **Lovelace card**: Reads from HA entity state via `this.hass.states[entityId]`. HA calls the card's `set hass()` whenever any watched entity changes. The card must **not** cache account or station data locally—always derive from `hass.states` so that external changes are reflected immediately. The account selector in the overflow menu should read from the Account Select entity's `options` and `state` attributes.
+
+### Edge cases
+
+- **Optimistic state vs. server correction**: The web UI sets `currentAccountId` optimistically when the user clicks "Switch". If the backend fails (bad credentials, network error), the subsequent `error` event arrives and the next `process` event (from a successful reconnect by another client, or on browser refresh) will correct the stale optimistic value.
+- **Modal showing during external switch**: If the switch-account modal is open in one tab and another tab switches accounts, the `currentAccountId` prop updates from the `process` event. The modal's "Switch" button disables when `selectedAccountId === currentAccountId`, so if the desired account was already switched to externally, the button correctly becomes disabled.
+- **Station list flash**: Between the account switch and the `stations` broadcast arriving, a brief moment may show stale stations. This is acceptable—the `stations` event arrives within the same reconnect sequence (typically < 1 second).
 
 ---
 
 ## Testing and docs
 
 - **Backend**: Unit or manual: single-account; multi-account with main user + `account = id:path`; optional `main_account_id`; `default_account` startup; switch via WebSocket `account_id` (including `default`); verify merge for file-backed accounts only.
-- **Web UI**: Manual: two accounts, switch via dropdown; confirm stations and playback reflect the selected account.
-- **HA**: Manual: select entity shows accounts; changing it triggers reconnect and media player reflects new account.
+- **Web UI**: Manual: two accounts, switch via modal; confirm stations and playback reflect the selected account.
+- **HA**: Manual: select entity shows accounts; reconnect service with/without `account_id`; changing select triggers reconnect and media player reflects new account.
+- **Card**: Manual: with 2+ accounts, overflow menu shows account picker; single account hides it; switch account and confirm media player / stations update.
+- **Cross-client sync**: Open web UI in two browser tabs and HA dashboard simultaneously. Switch account from one tab; verify the other tab's station list and account indicator update without refresh. Switch from HA; verify web UI updates. Switch from web UI; verify HA station select options and account select current_option update.
 - **Docs**: Update [WEBSOCKET_API.md](remote-pianobar/WEBSOCKET_API.md) (reconnect payload, state fields); document multiple accounts: primary in main (`main_account_id` defaults to `default`), plus `account = id:path` for others.
 
 ---
@@ -172,8 +212,9 @@ sequenceDiagram
 | Layer   | Change                                                                                                                                                                                                         |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Config  | One account: credentials in main. Multiple: main credentials + optional `main_account_id` (default id `default`) + `account = id:path` for extra accounts; merge file-backed rows with main.                                                                 |
-| Backend | Account list + active index in settings; parse in BarSettingsRead; login/reconnect use active account; reconnect action accepts optional `account_id`; emit `current_account` and `accounts` in process state. |
+| Backend | Account list + active index in settings; parse in BarSettingsRead; login/reconnect use active account; reconnect action accepts optional `account_id`; emit `current_account` and `accounts` in process state; **broadcast** all state changes to every connected client for cross-client sync. |
 | Web UI  | Account dropdown; on change send reconnect with `account_id`.                                                                                                                                                  |
-| HA      | New Select entity for account; coordinator stores accounts/current_account; optional `account_id` on reconnect service.                                                                                        |
+| HA      | New Select entity for account; coordinator stores accounts/current_account; media player attributes for accounts when needed for card; **reconnect service extended** with optional `account_id` param and services.yaml docs.                                                                                        |
+| Card    | **Advanced** section: account selector only if `accounts.length > 1`; reconnect / select_option on change.                                                                                                                                   |
 
-Implement backend first (config + reconnect + state), then Web UI, then HA, so the wire format is stable.
+Implement backend first (config + reconnect + state), then Web UI, then HA, then **Lovelace card**, so entity state and services are stable before card UI.

@@ -107,6 +107,17 @@ void BarSettingsInit (BarSettings_t *settings) {
 	memset (settings, 0, sizeof (*settings));
 }
 
+/*	free an account entry's strings
+ */
+static void BarAccountDestroy (BarAccount_t *acct) {
+	free (acct->id);
+	free (acct->label);
+	free (acct->username);
+	free (acct->password);
+	free (acct->passwordCmd);
+	free (acct->autostartStation);
+}
+
 /*	free settings structure, zero it afterwards
  *	@oaram pointer to struct
  */
@@ -163,8 +174,176 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 		}
 		free (settings->stationDisplayNameOverrides);
 	}
+
+	/* Free account list */
+	if (settings->accounts) {
+		for (size_t i = 0; i < settings->accountCount; i++) {
+			BarAccountDestroy (&settings->accounts[i]);
+		}
+		free (settings->accounts);
+	}
 	
 	memset (settings, 0, sizeof (*settings));
+}
+
+/* Temporary storage for account = id:path lines during config parsing */
+typedef struct {
+	char *id;
+	char *path;
+} BarAccountLine_t;
+
+/*	Resolve an account file path relative to the config directory.
+ *	Absolute paths and ~ paths are returned as-is (after tilde expansion).
+ *	Relative paths are resolved against configDir.
+ */
+static char *BarSettingsResolveAccountPath (const char *path, const char *configDir,
+		const char *userhome) {
+	if (path[0] == '/' || path[0] == '~') {
+		return BarSettingsExpandTilde (path, userhome);
+	}
+	/* relative to config dir */
+	size_t len = strlen (configDir) + 1 + strlen (path) + 1;
+	char *resolved = malloc (len);
+	snprintf (resolved, len, "%s/%s", configDir, path);
+	return resolved;
+}
+
+/*	Read credentials and per-account keys from a file, populating an account entry.
+ *	Only credential-related and per-account keys are read (user, password,
+ *	password_command, account_label, autostart_station).
+ */
+static void BarSettingsReadAccountFile (BarAccount_t *acct, const char *filepath) {
+	FILE *fd = fopen (filepath, "r");
+	if (fd == NULL) {
+		log_write (LOG_ERROR, "Warning: Cannot open account file: %s\n", filepath);
+		return;
+	}
+
+	char line[1024];
+	while (fgets (line, sizeof (line), fd) != NULL) {
+		char *key = line;
+		while (isspace ((unsigned char) *key)) ++key;
+		if (*key == '#' || *key == '\0') continue;
+
+		char *val = strchr (line, '=');
+		if (val == NULL) continue;
+		*val = '\0';
+		++val;
+
+		/* trim key */
+		char *keyend = &key[strlen (key) - 1];
+		while (keyend >= key && isspace ((unsigned char) *keyend)) {
+			*keyend = '\0';
+			--keyend;
+		}
+
+		/* strip leading space, trim trailing cr/lf */
+		if (isspace ((unsigned char) val[0])) ++val;
+		char *valend = &val[strlen (val) - 1];
+		while (valend >= val && (*valend == '\r' || *valend == '\n')) {
+			*valend = '\0';
+			--valend;
+		}
+
+		if (streq ("user", key)) {
+			free (acct->username);
+			acct->username = strdup (val);
+		} else if (streq ("password", key)) {
+			free (acct->password);
+			acct->password = strdup (val);
+		} else if (streq ("password_command", key)) {
+			free (acct->passwordCmd);
+			acct->passwordCmd = strdup (val);
+		} else if (streq ("account_label", key)) {
+			free (acct->label);
+			acct->label = strdup (val);
+		} else if (streq ("autostart_station", key)) {
+			free (acct->autostartStation);
+			acct->autostartStation = strdup (val);
+		}
+	}
+	fclose (fd);
+}
+
+/*	Build the accounts array from parsed config.
+ *	If account lines exist: build list with optional primary from main config.
+ *	If no account lines: build single account from main config credentials.
+ */
+static void BarSettingsBuildAccounts (BarSettings_t *settings,
+		const char *mainAccountId, const char *defaultAccount,
+		const char *accountLabel,
+		BarAccountLine_t *accountLines, size_t accountLineCount,
+		const char *configDir, const char *userhome) {
+	bool hasMainCredentials = (settings->username != NULL);
+	size_t total = accountLineCount;
+	size_t startIndex = 0;
+
+	if (hasMainCredentials) {
+		total += 1;  /* primary account from main config */
+		startIndex = 1;
+	}
+
+	if (total == 0) {
+		/* no credentials anywhere */
+		return;
+	}
+
+	settings->accounts = calloc (total, sizeof (BarAccount_t));
+	settings->accountCount = total;
+
+	/* Primary account from main config credentials */
+	if (hasMainCredentials) {
+		BarAccount_t *primary = &settings->accounts[0];
+		primary->id = strdup (mainAccountId ? mainAccountId : "default");
+		primary->label = strdup (accountLabel ? accountLabel :
+				(mainAccountId ? mainAccountId : "default"));
+		primary->username = strdup (settings->username);
+		if (settings->password) {
+			primary->password = strdup (settings->password);
+		}
+		if (settings->passwordCmd) {
+			primary->passwordCmd = strdup (settings->passwordCmd);
+		}
+		if (settings->autostartStation) {
+			primary->autostartStation = strdup (settings->autostartStation);
+		}
+	}
+
+	/* File-backed accounts */
+	for (size_t i = 0; i < accountLineCount; i++) {
+		BarAccount_t *acct = &settings->accounts[startIndex + i];
+		acct->id = strdup (accountLines[i].id);
+		/* label defaults to id, may be overridden by account_label in file */
+		acct->label = strdup (accountLines[i].id);
+
+		/* Inherit main config credentials as defaults for merge */
+		if (settings->username) acct->username = strdup (settings->username);
+		if (settings->password) acct->password = strdup (settings->password);
+		if (settings->passwordCmd) acct->passwordCmd = strdup (settings->passwordCmd);
+
+		/* Read account file (overrides inherited fields) */
+		char *resolved = BarSettingsResolveAccountPath (accountLines[i].path,
+				configDir, userhome);
+		BarSettingsReadAccountFile (acct, resolved);
+		free (resolved);
+	}
+
+	/* Resolve default_account to activeAccountIndex */
+	settings->activeAccountIndex = 0;
+	if (defaultAccount) {
+		bool found = false;
+		for (size_t i = 0; i < settings->accountCount; i++) {
+			if (streq (settings->accounts[i].id, defaultAccount)) {
+				settings->activeAccountIndex = i;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			log_write (LOG_ERROR, "Warning: default_account '%s' not found, "
+					"using first account\n", defaultAccount);
+		}
+	}
 }
 
 /*	read app settings from file; format is: key = value\n
@@ -220,6 +399,18 @@ void BarSettingsRead (BarSettings_t *settings) {
 	
 	settings->stationDisplayNameOverrides = NULL;
 	settings->stationDisplayNameOverrideCount = 0;
+
+	settings->accounts = NULL;
+	settings->accountCount = 0;
+	settings->activeAccountIndex = 0;
+
+	/* Temporary multi-account parsing state */
+	char *mainAccountId = NULL;
+	char *defaultAccount = NULL;
+	char *accountLabel = NULL;
+	BarAccountLine_t *accountLines = NULL;
+	size_t accountLineCount = 0;
+	char *configDir = NULL;
 
 	settings->msgFormat[MSG_NONE].prefix = NULL;
 	settings->msgFormat[MSG_NONE].postfix = NULL;
@@ -575,15 +766,64 @@ void BarSettingsRead (BarSettings_t *settings) {
 		} else if (streq ("alsa_mixer", key)) {
 			free (settings->alsaMixer);
 			settings->alsaMixer = strdup (val);
+		} else if (streq ("account", key)) {
+			/* account = id:path */
+			char *colon = strchr (val, ':');
+			if (colon && colon != val && *(colon + 1) != '\0') {
+				*colon = '\0';
+				accountLines = realloc (accountLines,
+						(accountLineCount + 1) * sizeof (BarAccountLine_t));
+				accountLines[accountLineCount].id = strdup (val);
+				accountLines[accountLineCount].path = strdup (colon + 1);
+				accountLineCount++;
+			} else {
+				BarUiMsg (settings, MSG_INFO,
+						"Invalid account format at %s:%zu (expected id:path)\n",
+						path, lineNum);
+			}
+		} else if (streq ("main_account_id", key)) {
+			free (mainAccountId);
+			mainAccountId = strdup (val);
+		} else if (streq ("default_account", key)) {
+			free (defaultAccount);
+			defaultAccount = strdup (val);
+		} else if (streq ("account_label", key)) {
+			free (accountLabel);
+			accountLabel = strdup (val);
 		} else {
 				BarUiMsg (settings, MSG_INFO,
 						"Unrecognized key %s at %s:%zu\n", key, path, lineNum);
 			}
 		}
 
+		/* Remember the config file's directory for resolving relative account paths.
+		 * Always update so we use the last file processed (config, not state). */
+		free (configDir);
+		configDir = strdup (path);
+		char *lastSlash = strrchr (configDir, '/');
+		if (lastSlash) *lastSlash = '\0';
+
 		fclose (configfd);
 		free (path);
 	}
+
+	/* Build account list from parsed config + account files */
+	if (accountLineCount > 0 || settings->username != NULL) {
+		BarSettingsBuildAccounts (settings, mainAccountId, defaultAccount,
+				accountLabel, accountLines, accountLineCount,
+				configDir ? configDir : ".", userhome);
+	}
+
+	/* Free temporary account parsing state */
+	for (size_t i = 0; i < accountLineCount; i++) {
+		free (accountLines[i].id);
+		free (accountLines[i].path);
+	}
+	free (accountLines);
+	free (mainAccountId);
+	free (defaultAccount);
+	free (accountLabel);
+	free (configDir);
 
 	/* check environment variable if proxy is not set explicitly */
 	if (settings->proxy == NULL) {
@@ -628,3 +868,30 @@ void BarSettingsWrite (PianoStation_t *station, BarSettings_t *settings) {
 	free (path);
 }
 
+/*	Get the active account (or NULL if no accounts configured)
+ */
+const BarAccount_t *BarSettingsGetActiveAccount (const BarSettings_t *settings) {
+	if (settings->accounts == NULL || settings->accountCount == 0) {
+		return NULL;
+	}
+	if (settings->activeAccountIndex >= settings->accountCount) {
+		return &settings->accounts[0];
+	}
+	return &settings->accounts[settings->activeAccountIndex];
+}
+
+/*	Set active account by id string.
+ *	@return true if found and set, false if id not found
+ */
+bool BarSettingsSetActiveAccountById (BarSettings_t *settings, const char *id) {
+	if (settings->accounts == NULL || id == NULL) {
+		return false;
+	}
+	for (size_t i = 0; i < settings->accountCount; i++) {
+		if (strcmp (settings->accounts[i].id, id) == 0) {
+			settings->activeAccountIndex = i;
+			return true;
+		}
+	}
+	return false;
+}

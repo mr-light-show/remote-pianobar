@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import { property } from 'lit/decorators.js';
 
 export class ModalBase extends LitElement {
@@ -44,6 +44,11 @@ export class ModalBase extends LitElement {
     return html`<div class="loading">${message}</div>`;
   }
   
+  /** Optional content below the title, above the header separator (subclasses may override). */
+  protected renderModalHeaderExtra(): TemplateResult | typeof nothing {
+    return nothing;
+  }
+
   protected renderStandardFooter(
     confirmText: string,
     confirmDisabled: boolean = false,
@@ -73,7 +78,9 @@ export class ModalBase extends LitElement {
         ${this.title ? html`
           <div class="modal-header">
             <h2 class="modal-title">${this.title}</h2>
+            ${this.renderModalHeaderExtra()}
           </div>
+          <div class="modal-head-separator" role="presentation"></div>
         ` : ''}
         <div class="modal-body">
           ${bodyContent}
@@ -125,8 +132,15 @@ export class ModalBase extends LitElement {
     }
     
     .modal-header {
-      padding: 20px 24px;
-      border-bottom: 1px solid var(--outline);
+      padding: 20px 24px 0;
+    }
+
+    .modal-head-separator {
+      height: 1px;
+      margin: 12px 0 0;
+      background: var(--outline);
+      border: 0;
+      flex-shrink: 0;
     }
     
     .modal-title {
