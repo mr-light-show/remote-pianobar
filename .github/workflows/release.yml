@@ -1,5 +1,8 @@
 name: Build and Release
 
+permissions:
+  contents: write
+
 on:
   release:
     types: [published]
@@ -33,6 +36,16 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
+      - name: Ensure GitHub release exists
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="${{ steps.set.outputs.release_tag }}"
+          gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" || \
+            gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
+              --title "$RELEASE_TAG" --notes ""
+
   build-amd64:
     name: Build Linux Package (noble_amd64)
     runs-on: ubuntu-24.04
@@ -53,11 +66,13 @@ jobs:
           sed -i 's/#define VERSION ".*"/#define VERSION "'"$VERSION"'"/' src/config.h
           grep VERSION src/config.h
       
-      - name: Cache and install APT packages
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check
-          version: 2.3
+      - name: Install APT packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev \
+            libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev \
+            libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check
 
       - name: Ensure BLAS/LAPACK installed (required by libsphinxbase)
         run: sudo apt-get update && sudo apt-get install -y libblas-dev liblapack-dev
@@ -196,12 +211,17 @@ jobs:
 
       - name: Upload to release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2.6.1
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: remote-pianobar_*.deb
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(remote-pianobar_*.deb)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No .deb files to upload"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
 
   build-arm64:
     name: Build ARM64 Package (${{ matrix.pkg_name }})
@@ -213,10 +233,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - docker_image: "bookworm"
+          - image: "debian:bookworm"
             pkg_name: "bookworm"
-          - docker_image: "trixie"
+          - image: "debian:trixie"
             pkg_name: "trixie"
+          - image: "ubuntu:noble"
+            pkg_name: "noble"
     
     steps:
       - name: Checkout code
@@ -231,7 +253,7 @@ jobs:
           grep VERSION src/config.h
       
       - name: Set up QEMU for ARM64
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
       
@@ -248,7 +270,7 @@ jobs:
             -v $(pwd):/workspace \
             -w /workspace \
             -e DEBUG_FLAGS="$DEBUG_FLAGS" \
-            debian:${{ matrix.docker_image }} \
+            ${{ matrix.image }} \
             bash -c "
               apt-get update && \
               apt-get install -y \
@@ -309,7 +331,7 @@ jobs:
           DEPS=$(docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
             -w /workspace \
-            debian:${{ matrix.docker_image }} \
+            ${{ matrix.image }} \
             bash -c "ldd pianobar | grep '=>' || true")
           echo "$DEPS"
           
@@ -378,12 +400,16 @@ jobs:
           
       - name: Upload to release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2.6.1
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: remote-pianobar_${{ matrix.pkg_name }}_arm64.deb
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          f="remote-pianobar_${{ matrix.pkg_name }}_arm64.deb"
+          if [ ! -f "$f" ]; then
+            echo "::error::Missing $f"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "$f" --clobber --repo "${{ github.repository }}"
 
   build-macos:
     name: Build macOS 14 Package
@@ -605,9 +631,14 @@ jobs:
           
       - name: Upload to release
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2.6.1
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: remote-pianobar_*.dmg
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(remote-pianobar_*.dmg)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No .dmg files to upload"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
