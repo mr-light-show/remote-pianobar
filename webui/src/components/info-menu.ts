@@ -1,8 +1,9 @@
 import { LitElement, html, css } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, property, state } from 'lit/decorators.js';
 
 @customElement('info-menu')
 export class InfoMenu extends LitElement {
+  @property({ type: Boolean }) showAccountSwitch = false;
   @state() private menuOpen = false;
   
   connectedCallback() {
@@ -158,10 +159,22 @@ export class InfoMenu extends LitElement {
     this.dispatchEvent(new CustomEvent('info-delete-station'));
     this.closeMenu();
   }
+
+  handleSwitchAccount() {
+    this.dispatchEvent(new CustomEvent('info-switch-account'));
+    this.closeMenu();
+  }
   
   render() {
     return html`
       <div class="menu-popup ${this.menuOpen ? '' : 'hidden'}">
+        ${this.showAccountSwitch ? html`
+          <button class="action-button" @click=${this.handleSwitchAccount}>
+            <span class="material-icons">account_circle</span>
+            <span>Switch Account</span>
+          </button>
+          <div class="menu-divider"></div>
+        ` : ''}
         <button class="action-button" @click=${this.handleExplain}>
           <span class="material-icons">help_outline</span>
           <span>Explain why this song is playing</span>

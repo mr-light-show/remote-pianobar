@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { SocketService } from './services/socket-service';
+import { resolveStationIdFromStationsList } from './station-sync';
 
 import './components/album-art';
 import './components/progress-bar';
@@ -19,6 +20,7 @@ import './components/station-mode-modal';
 import './components/station-seeds-modal';
 import './components/song-actions-menu';
 import './components/info-menu';
+import './components/switch-account-modal';
 import './components/login-screen';
 
 @customElement('pianobar-app')
@@ -62,6 +64,9 @@ export class PianobarApp extends LitElement {
   @state() private infoLoading = false;
   /** True until backend emits pandora.disconnected; set true again on process (reconnected). */
   @state() private pandoraConnected = true;
+  @state() private accounts: Array<{id: string; label: string}> = [];
+  @state() private currentAccountId = '';
+  @state() private switchAccountModalOpen = false;
   
   static styles = css`
     :host {
@@ -219,6 +224,18 @@ export class PianobarApp extends LitElement {
     this.setupConnectionListener();
   }
   
+  /** Fill currentStationId from stations[] when we have a name but id is missing (some payloads omit stationId). */
+  private syncCurrentStationIdFromStationsList(): void {
+    const resolved = resolveStationIdFromStationsList(
+      this.currentStationId,
+      this.currentStation,
+      this.stations
+    );
+    if (resolved !== undefined) {
+      this.currentStationId = resolved;
+    }
+  }
+
   setupConnectionListener() {
     this.socket.onConnectionChange((connected) => {
       this.connected = connected;
@@ -249,11 +266,12 @@ export class PianobarApp extends LitElement {
       
       // Update current station (even if empty)
       if ('station' in data) {
-        this.currentStation = data.station;
+        this.currentStation = data.station ?? '';
       }
       if ('stationId' in data) {
-        this.currentStationId = data.stationId;
+        this.currentStationId = String(data.stationId ?? '').trim();
       }
+      this.syncCurrentStationIdFromStationsList();
     });
     
     this.socket.on('stop', () => {
@@ -309,6 +327,7 @@ export class PianobarApp extends LitElement {
           this.creatingStationFrom = null;
         }
       }
+      this.syncCurrentStationIdFromStationsList();
     });
     
     this.socket.on('genres', (data) => {
@@ -395,12 +414,13 @@ export class PianobarApp extends LitElement {
       
       // Update current station (even if empty)
       if ('station' in data) {
-        this.currentStation = data.station;
+        this.currentStation = data.station ?? '';
       }
       if ('stationId' in data) {
-        this.currentStationId = data.stationId;
+        this.currentStationId = String(data.stationId ?? '').trim();
       }
-      
+      this.syncCurrentStationIdFromStationsList();
+
       // Update volume control if present
       if (data.volume !== undefined) {
         this.volume = data.volume;
@@ -408,6 +428,14 @@ export class PianobarApp extends LitElement {
         if (volumeControl) {
           (volumeControl as any).updateFromServer(data.volume);
         }
+      }
+
+      // Update account info
+      if (data.accounts) {
+        this.accounts = data.accounts;
+      }
+      if (data.current_account) {
+        this.currentAccountId = data.current_account.id;
       }
     });
     
@@ -512,6 +540,24 @@ export class PianobarApp extends LitElement {
       this.socket.emit('action', 'playback.play');
       this.playing = true;
     }
+  }
+
+  handleInfoSwitchAccount() {
+    this.switchAccountModalOpen = true;
+  }
+
+  handleAccountSelect(e: CustomEvent) {
+    const { accountId } = e.detail;
+    this.switchAccountModalOpen = false;
+    if (accountId && accountId !== this.currentAccountId) {
+      this.currentAccountId = accountId;
+      this.showToast('Switching account...');
+      this.socket.emit('action', { action: 'app.pandora-reconnect', account_id: accountId });
+    }
+  }
+
+  handleSwitchAccountCancel() {
+    this.switchAccountModalOpen = false;
   }
 
   /** Check if connected to WebSocket but Pandora is disconnected (explicit event or no stations/playback) */
@@ -695,6 +741,7 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoStationMode() {
+    this.syncCurrentStationIdFromStationsList();
     if (this.currentStationId) {
       this.stationModeModalOpen = true;
       // Fetch modes immediately when opening modal
@@ -727,6 +774,7 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoStationSeeds() {
+    this.syncCurrentStationIdFromStationsList();
     if (this.currentStationId) {
       this.stationSeedsModalOpen = true;
       // Fetch station info immediately when opening modal
@@ -842,6 +890,7 @@ export class PianobarApp extends LitElement {
               <span class="material-icons">menu</span>
             </button>
             <info-menu
+              ?showAccountSwitch=${this.accounts.length > 1}
               @info-explain=${this.handleInfoExplain}
               @info-upcoming=${this.handleInfoUpcoming}
               @info-quickmix=${this.handleInfoQuickMix}
@@ -851,6 +900,7 @@ export class PianobarApp extends LitElement {
               @info-station-mode=${this.handleInfoStationMode}
               @info-station-seeds=${this.handleInfoStationSeeds}
               @info-delete-station=${this.handleInfoDeleteStation}
+              @info-switch-account=${this.handleInfoSwitchAccount}
             ></info-menu>
           </div>
         ` : ''}
@@ -1008,6 +1058,7 @@ export class PianobarApp extends LitElement {
         <station-mode-modal
           ?open="${this.stationModeModalOpen}"
           ?modesLoading="${this.modesLoading}"
+          .stations="${this.stations}"
           .currentStationId="${this.currentStationId}"
           .currentStationName="${this.currentStation}"
           .modes="${this.stationModes}"
@@ -1027,6 +1078,14 @@ export class PianobarApp extends LitElement {
           @delete-feedback=${this.handleDeleteFeedback}
           @cancel=${this.handleStationSeedsCancel}
         ></station-seeds-modal>
+        
+        <switch-account-modal
+          ?open="${this.switchAccountModalOpen}"
+          .accounts="${this.accounts}"
+          currentAccountId="${this.currentAccountId}"
+          @account-select=${this.handleAccountSelect}
+          @cancel=${this.handleSwitchAccountCancel}
+        ></switch-account-modal>
       ` : ''}
     `;
   }

@@ -620,6 +620,33 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 		json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
 	}
 	
+	/* Emit account info when multiple accounts are configured */
+	if (app->settings.accountCount > 0) {
+		const BarAccount_t *active = BarSettingsGetActiveAccount(&app->settings);
+		if (active) {
+			json_object *currentAcct = json_object_new_object();
+			json_object_object_add(currentAcct, "id",
+					json_object_new_string(active->id));
+			json_object_object_add(currentAcct, "label",
+					json_object_new_string(active->label ? active->label : active->id));
+			json_object_object_add(data, "current_account", currentAcct);
+		}
+
+		json_object *accountsArr = json_object_new_array();
+		for (size_t i = 0; i < app->settings.accountCount; i++) {
+			json_object *acctObj = json_object_new_object();
+			json_object_object_add(acctObj, "id",
+					json_object_new_string(app->settings.accounts[i].id));
+			json_object_object_add(acctObj, "label",
+					json_object_new_string(
+						app->settings.accounts[i].label ?
+						app->settings.accounts[i].label :
+						app->settings.accounts[i].id));
+			json_object_array_add(accountsArr, acctObj);
+		}
+		json_object_object_add(data, "accounts", accountsArr);
+	}
+
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
 	BarSocketIoEmit("process", data);
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
@@ -1579,6 +1606,30 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		}
 	}
 	
+	/* Special handling for app.pandora-reconnect with account_id:
+	 * Account switching must work regardless of Pandora connection state,
+	 * so call the reconnect callback directly, bypassing the dispatch
+	 * table's context check (which requires BAR_DC_PANDORA_DISCONNECTED). */
+	if (strcmp(action, "app.pandora-reconnect") == 0 && data) {
+		json_object *accountIdObj;
+		if (json_object_object_get_ex(data, "account_id", &accountIdObj)) {
+			const char *accountId = json_object_get_string(accountIdObj);
+			if (accountId) {
+				if (!BarSettingsSetActiveAccountById(&app->settings, accountId)) {
+					log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown account_id: %s\n", accountId);
+					BarSocketIoEmitErrorEx("app.pandora-reconnect", "Unknown account", accountId);
+					return;
+				}
+				log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to account '%s', calling reconnect directly\n", accountId);
+				PianoStation_t *curStation = BarStateGetCurrentStation(app);
+				PianoSong_t *curSong = BarStateGetPlaylist(app);
+				BarUiActPandoraReconnect(app, curStation, curSong, BAR_DC_GLOBAL);
+				BarSocketIoEmitProcess(app);
+				return;
+			}
+		}
+	}
+
 	/* Translate descriptive command to action ID */
 	actionId = BarSocketIoTranslateAction(action);
 	

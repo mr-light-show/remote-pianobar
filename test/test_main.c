@@ -47,6 +47,7 @@ Suite *websocket_suite(void);
 Suite *http_server_suite(void);
 Suite *daemon_suite(void);
 Suite *socketio_suite(void);
+Suite *settings_suite(void);
 Suite *player_suite(void);
 Suite *bar_state_suite(void);
 
@@ -59,6 +60,7 @@ int main(void) {
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
 	srunner_add_suite(sr, socketio_suite());
+	srunner_add_suite(sr, settings_suite());
 	srunner_add_suite(sr, player_suite());
 	srunner_add_suite(sr, bar_state_suite());
 	

@@ -1,4 +1,4 @@
-import { html, css } from 'lit';
+import { html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
 
@@ -9,10 +9,17 @@ interface StationMode {
   active: boolean;
 }
 
+interface StationRow {
+  id: string;
+  name: string;
+}
+
 @customElement('station-mode-modal')
 export class StationModeModal extends ModalBase {
   @property({ type: String }) currentStationId: string = '';
   @property({ type: String }) currentStationName: string = '';
+  /** Used to resolve id when currentStationId is empty but name matches a station. */
+  @property({ type: Array }) stations: StationRow[] = [];
   @property({ type: Array }) modes: StationMode[] = [];
   @property({ type: Boolean}) modesLoading = false;
   
@@ -30,16 +37,25 @@ export class StationModeModal extends ModalBase {
       this.title = `Station Mode: ${this.currentStationName}`;
     }
   }
+
+  protected override renderModalHeaderExtra(): TemplateResult | typeof nothing {
+    const id = this.resolvedStationId();
+    if (!id) {
+      return nothing;
+    }
+    return html`<div class="station-id-compact" title="Station ID">${id}</div>`;
+  }
   
   handleModeSelect(modeId: number) {
     this.selectedModeId = modeId;
   }
   
   handleSetMode() {
-    if (this.currentStationId && this.selectedModeId !== null) {
+    const stationId = this.resolvedStationId();
+    if (stationId && this.selectedModeId !== null) {
       this.dispatchEvent(new CustomEvent('set-mode', {
         detail: { 
-          stationId: this.currentStationId,
+          stationId,
           modeId: this.selectedModeId
         }
       }));
@@ -48,6 +64,20 @@ export class StationModeModal extends ModalBase {
   
   protected onCancel() {
     this.selectedModeId = null;
+  }
+
+  /** Prefer explicit id; otherwise match currentStationName to stations[]. */
+  private resolvedStationId(): string {
+    const id = (this.currentStationId || '').trim();
+    if (id) {
+      return id;
+    }
+    const name = (this.currentStationName || '').trim();
+    if (!name || !Array.isArray(this.stations)) {
+      return '';
+    }
+    const row = this.stations.find((s) => s.name === name);
+    return (row?.id || '').trim();
   }
   
   static override styles = [
@@ -127,6 +157,15 @@ export class StationModeModal extends ModalBase {
       color: var(--on-surface-variant);
       line-height: 1.4;
       margin-bottom: 16px;
+    }
+
+    .station-id-compact {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10px;
+      color: var(--on-surface-variant);
+      line-height: 1.4;
+      margin-top: 8px;
+      word-break: break-all;
     }
   `
   ];

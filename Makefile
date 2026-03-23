@@ -236,6 +236,7 @@ TEST_SRC:=\
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
+		${TEST_DIR}/unit/test_settings.c \
 		${TEST_DIR}/unit/test_player.c \
 		${TEST_DIR}/unit/test_bar_state.c
 TEST_OBJ:=${TEST_SRC:.c=.o}

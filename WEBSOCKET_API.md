@@ -144,6 +144,8 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 | `stationId` | string | Current station ID (empty string if none) |
 | `elapsed` | number | Current playback position in seconds (only if playing) |
 | `song` | object | Current song object (only if playing) |
+| `current_account` | object | Active account (only when multiple accounts configured). See [Account Object](#account-object). |
+| `accounts` | array | List of all configured accounts (only when multiple accounts configured). See [Account Object](#account-object). |
 
 **Example:**
 
@@ -165,11 +167,16 @@ Sent in response to a `query` event or on initial connection. Contains complete 
     "duration": 200,
     "trackToken": "S1234567...",
     "songStationName": "Today's Hits Radio"
-  }
+  },
+  "current_account": { "id": "work", "label": "Work" },
+  "accounts": [
+    { "id": "default", "label": "Home" },
+    { "id": "work", "label": "Work" }
+  ]
 }
 ```
 
-**Example (no song playing):**
+**Example (no song playing, single account):**
 
 ```json
 {
@@ -181,6 +188,8 @@ Sent in response to a `query` event or on initial connection. Contains complete 
   "stationId": ""
 }
 ```
+
+> **Note:** `current_account` and `accounts` are only present when the server is configured with multiple Pandora accounts. Single-account setups omit these fields.
 
 ---
 
@@ -1094,7 +1103,7 @@ ws.send('2["action","query.upcoming"]');
 |--------|-------------|
 | `app.quit` | Quit the pianobar application |
 | `app.pandora-disconnect` | Stop playback, clear station/playlist, disconnect from Pandora (does not quit) |
-| `app.pandora-reconnect` | Re-authenticate with Pandora and fetch stations (use after `app.pandora-disconnect`) |
+| `app.pandora-reconnect` | Re-authenticate with Pandora and fetch stations; optionally switch account |
 
 **Example - Quit:**
 
@@ -1108,15 +1117,30 @@ ws.send('2["action","app.quit"]');
 ws.send('2["action","app.pandora-disconnect"]');
 ```
 
-**Response:** All WebSocket clients are disconnected. Clients should automatically reconnect and will receive fresh state (no station selected, not playing).
+**Response:** Stops playback, clears stations, and disconnects from Pandora. Broadcasts updated state to all clients showing the disconnected state (no station, not playing). The WebSocket connection remains open so the UI can display a "Not Connected" state.
 
-**Example - Pandora Reconnect:**
+**Example - Pandora Reconnect (current account):**
 
 ```javascript
 ws.send('2["action","app.pandora-reconnect"]');
 ```
 
-**Response:** Re-authenticates with Pandora using saved credentials, fetches the station list, and broadcasts a `stations` event to all clients. Use this to recover from the logged-out state after `app.pandora-disconnect`.
+**Response:** Re-authenticates with Pandora using the current active account's credentials, fetches the station list, and broadcasts `stations` and `process` events to all clients.
+
+**Example - Pandora Reconnect with Account Switch:**
+
+When multiple accounts are configured, pass an `account_id` to switch to a different account before reconnecting.
+
+```javascript
+ws.send('2["action",{"action":"app.pandora-reconnect","account_id":"work"}]');
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | string | yes | Must be `"app.pandora-reconnect"` |
+| `account_id` | string | no | Stable account identifier to switch to before reconnecting. Must match an `id` from the `accounts` array in the `process` event. If omitted, reconnects with the current active account. |
+
+**Response:** Sets the active account to the specified `account_id`, stops any current playback, disconnects from the previous Pandora session, re-authenticates with the new account's credentials, fetches the new station list, and broadcasts `stations` and `process` events (including updated `current_account` and `accounts`) to **all** connected clients. If `account_id` is unknown, an error event is emitted.
 
 ---
 
@@ -1137,6 +1161,17 @@ interface Song {
   trackToken?: string;     // Unique token (for station creation)
   songStationName?: string; // Station the song came from (for QuickMix)
   stationName?: string;    // Alternative field for station name
+}
+```
+
+### Account Object
+
+Used in the `process` event's `current_account` and `accounts` fields. Only present when multiple accounts are configured.
+
+```typescript
+interface Account {
+  id: string;              // Stable account identifier (from config, e.g. "work", "default")
+  label: string;           // Display name (from account_label in config, or falls back to id)
 }
 ```
 
@@ -1493,6 +1528,35 @@ function deleteFeedback(feedbackId, stationId) {
   ws.send(`2["station.deleteFeedback",{"feedbackId":"${feedbackId}","stationId":"${stationId}"}]`);
 }
 ```
+
+### Switching Accounts
+
+When the server is configured with multiple Pandora accounts (via `account = id:path` in config), the `process` event includes `accounts` and `current_account` fields. Clients can switch accounts using the `app.pandora-reconnect` action with an `account_id`.
+
+```javascript
+// Step 1: Read available accounts from process state
+let accounts = [];
+let currentAccountId = '';
+
+ws.onmessage = (event) => {
+  if (eventName === 'process') {
+    if (data.accounts) {
+      accounts = data.accounts;            // [{id: "default", label: "Home"}, {id: "work", label: "Work"}]
+      currentAccountId = data.current_account?.id || '';
+    }
+  }
+};
+
+// Step 2: Switch to a different account
+function switchAccount(accountId) {
+  ws.send(`2["action",{"action":"app.pandora-reconnect","account_id":"${accountId}"}]`);
+  // Server will disconnect from current Pandora session, re-authenticate
+  // with the new account, fetch stations, and broadcast updated state
+  // (process + stations events) to ALL connected clients
+}
+```
+
+After switching, all connected clients receive updated `stations` (new account's station list) and `process` events (with `current_account` reflecting the new account). No polling or manual refresh is needed.
 
 ---
 

@@ -23,9 +23,11 @@ THE SOFTWARE.
 #include <check.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <json-c/json.h>
 #include "../../src/main.h"
 #include "../../src/settings.h"
+#include "../../src/system_volume.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/core/queue.h"
 #include "../../src/websocket/protocol/socketio.h"
@@ -419,6 +421,104 @@ START_TEST(test_socketio_rating_emits_state) {
 }
 END_TEST
 
+static void free_settings_accounts (BarApp_t *app) {
+	if (!app->settings.accounts || app->settings.accountCount == 0) {
+		return;
+	}
+	for (size_t i = 0; i < app->settings.accountCount; i++) {
+		free (app->settings.accounts[i].id);
+		free (app->settings.accounts[i].label);
+		free (app->settings.accounts[i].username);
+		free (app->settings.accounts[i].password);
+		free (app->settings.accounts[i].passwordCmd);
+		free (app->settings.accounts[i].autostartStation);
+	}
+	free (app->settings.accounts);
+	app->settings.accounts = NULL;
+	app->settings.accountCount = 0;
+}
+
+/* EmitProcess JSON includes accounts and current_account when accountCount > 0 */
+START_TEST (test_socketio_emit_process_includes_accounts) {
+	BarApp_t app;
+	BarSettings_t settings;
+
+	memset (&app, 0, sizeof (app));
+	memset (&settings, 0, sizeof (settings));
+	app.settings = settings;
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app.settings.volume = 55;
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+
+	app.settings.accountCount = 2;
+	app.settings.accounts = calloc (2, sizeof (BarAccount_t));
+	ck_assert_ptr_nonnull (app.settings.accounts);
+	app.settings.accounts[0].id = strdup ("alpha");
+	app.settings.accounts[0].label = strdup ("Alpha");
+	app.settings.accounts[1].id = strdup ("beta");
+	app.settings.accounts[1].label = strdup ("Beta");
+	app.settings.activeAccountIndex = 1;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitProcess (&app);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "process") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "accounts") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "alpha") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "beta") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "current_account") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "Beta") != NULL);
+
+	free_settings_accounts (&app);
+	pthread_mutex_destroy (&app.player.lock);
+	clearBroadcastMock ();
+}
+END_TEST
+
+/* app.pandora-reconnect with unknown account_id emits error and leaves active index */
+START_TEST (test_socketio_pandora_reconnect_unknown_account) {
+	BarApp_t app;
+	BarSettings_t settings;
+	BarWsContext_t ctx;
+
+	memset (&app, 0, sizeof (app));
+	memset (&settings, 0, sizeof (settings));
+	memset (&ctx, 0, sizeof (ctx));
+	app.settings = settings;
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.wsContext = &ctx;
+
+	app.settings.accountCount = 2;
+	app.settings.accounts = calloc (2, sizeof (BarAccount_t));
+	ck_assert_ptr_nonnull (app.settings.accounts);
+	app.settings.accounts[0].id = strdup ("a");
+	app.settings.accounts[0].label = strdup ("A");
+	app.settings.accounts[1].id = strdup ("b");
+	app.settings.accounts[1].label = strdup ("B");
+	app.settings.activeAccountIndex = 0;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	json_object *data = json_object_new_object ();
+	json_object_object_add (data, "account_id", json_object_new_string ("ghost"));
+	BarSocketIoHandleAction (&app, "app.pandora-reconnect", data, NULL);
+	json_object_put (data);
+
+	ck_assert_uint_eq (app.settings.activeAccountIndex, 0);
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "ghost") != NULL);
+
+	free_settings_accounts (&app);
+	clearBroadcastMock ();
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -434,6 +534,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_emit, test_socketio_emit_stop);
 	tcase_add_test(tc_emit, test_socketio_emit_progress);
 	tcase_add_test(tc_emit, test_socketio_emit_volume);
+	tcase_add_test(tc_emit, test_socketio_emit_process_includes_accounts);
 	suite_add_tcase(s, tc_emit);
 	
 	/* Action dispatch tests */
@@ -443,6 +544,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_translate, test_socketio_translate_volume_commands);
 	tcase_add_test(tc_translate, test_socketio_reject_invalid_command);
 	tcase_add_test(tc_translate, test_socketio_reject_single_letter);
+	tcase_add_test(tc_translate, test_socketio_pandora_reconnect_unknown_account);
 	suite_add_tcase(s, tc_translate);
 	
 	/* Event handler tests */

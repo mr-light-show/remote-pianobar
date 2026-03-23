@@ -778,8 +778,16 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
 	free(app->lastStationId);
 	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
 	
-	/* Stop current playback */
-	BarUiDoSkipSong(&app->player);
+	/* Stop current playback and wait for the playback manager to finish
+	 * cleaning up the player thread.  This prevents a race where we
+	 * destroy the Piano handle while the playback manager is still
+	 * referencing songs from the old playlist. */
+	if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
+		BarUiDoSkipSong(&app->player);
+		for (int i = 0; i < 100 && BarPlayerGetMode(&app->player) != PLAYER_DEAD; i++) {
+			usleep(100000);
+		}
+	}
 	
 	/* Clear playlist and stations */
 	BarStateDrainPlaylist(app);
@@ -1199,14 +1207,19 @@ BarUiActCallback(BarUiActManageStation) {
 }
 
 /*	pandora reconnect - re-authenticate and fetch stations
+ *	Uses active account credentials (set by BarSocketIoHandleAction for account switches)
  */
 BarUiActCallback(BarUiActPandoraReconnect) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataLogin_t reqData;
-	
-	/* Check if credentials are available */
-	if (app->settings.username == NULL || app->settings.password == NULL) {
+
+	/* Resolve credentials from active account or main settings */
+	const BarAccount_t *acct = BarSettingsGetActiveAccount (&app->settings);
+	const char *user = acct ? acct->username : app->settings.username;
+	const char *pass = acct ? acct->password : app->settings.password;
+
+	if (user == NULL || pass == NULL) {
 		BarUiMsg(&app->settings, MSG_ERR, 
 			"Cannot reconnect: No credentials configured.\n");
 #ifdef WEBSOCKET_ENABLED
@@ -1214,13 +1227,48 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 #endif
 		return;
 	}
-	
-	/* Re-authenticate with Pandora */
-	reqData.user = app->settings.username;
-	reqData.password = app->settings.password;
+
+	reqData.user = (char *)user;
+	reqData.password = (char *)pass;
 	reqData.step = 0;
-	
-	BarUiMsg(&app->settings, MSG_INFO, "Reconnecting to Pandora... ");
+
+	/* Clean up existing Pandora session so GET_STATIONS doesn't append
+	 * to the old station list (libpiano appends, never replaces). */
+	PianoStation_t *curStation = BarStateGetCurrentStation(app);
+	free(app->lastStationId);
+	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
+
+	/* Signal player to stop, then wait for the playback manager thread to
+	 * fully clean up (join player thread, reset interrupted pointer, set
+	 * mode to PLAYER_DEAD).  Without this wait, the playback manager may
+	 * start a new song from the old playlist before we destroy the Piano
+	 * handle, causing a use-after-free and an assertion failure in
+	 * BarMainStartPlayback (interrupted != &app->doQuit). */
+	if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
+		BarUiDoSkipSong(&app->player);
+		for (int i = 0; i < 100 && BarPlayerGetMode(&app->player) != PLAYER_DEAD; i++) {
+			usleep(100000);  /* 100ms, up to 10s total */
+		}
+		if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
+			BarUiMsg(&app->settings, MSG_ERR,
+				"Player did not stop within timeout, proceeding anyway.\n");
+		}
+	}
+
+	BarStateDrainPlaylist(app);
+	BarStateSetCurrentStation(app, NULL);
+	BarStateSetNextStation(app, NULL);
+
+	PianoDestroy(&app->ph);
+	PianoInit(&app->ph, app->settings.partnerUser, app->settings.partnerPassword,
+	          app->settings.device, app->settings.inkey, app->settings.outkey);
+
+	if (acct && acct->label) {
+		BarUiMsg(&app->settings, MSG_INFO, "Reconnecting to Pandora (%s)... ",
+				acct->label);
+	} else {
+		BarUiMsg(&app->settings, MSG_INFO, "Reconnecting to Pandora... ");
+	}
 	if (!BarUiPianoCall(app, PIANO_REQUEST_LOGIN, &reqData, &pRet, &wRet)) {
 		BarUiMsg(&app->settings, MSG_ERR, "Failed to reconnect.\n");
 		return;
@@ -1239,8 +1287,17 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	/* Broadcast updated stations to WebSocket clients */
 	BarWsBroadcastStations(app);
 	
-	/* Auto-resume last station if saved and no station explicitly pending */
-	if (app->lastStationId && BarStateGetNextStation(app) == NULL) {
+	/* Auto-resume: prefer per-account autostart, then last station */
+	const char *autostation = (acct && acct->autostartStation) ?
+			acct->autostartStation : NULL;
+	if (autostation && BarStateGetNextStation(app) == NULL) {
+		PianoStation_t *station = BarStateFindStationById(app, autostation);
+		if (station) {
+			BarUiMsg(&app->settings, MSG_INFO, "Starting account station: %s\n",
+					station->name);
+			BarStateSetNextStation(app, station);
+		}
+	} else if (app->lastStationId && BarStateGetNextStation(app) == NULL) {
 		PianoStation_t *station = BarStateFindStationById(app, app->lastStationId);
 		if (station) {
 			BarUiMsg(&app->settings, MSG_INFO, "Resuming station: %s\n", station->name);
