@@ -109,7 +109,7 @@ static bool BarMainLoginUser (BarApp_t *app) {
 /*	Run a password_command and return the result, or NULL on failure.
  *	Caller must free the returned string.
  */
-static char *BarRunPasswordCommand (BarSettings_t *settings, const char *cmd) {
+static char *BarRunPasswordCommand (const BarSettings_t *settings, const char *cmd) {
 	pid_t chld;
 	int pipeFd[2];
 	char passBuf[BAR_INPUT_MAX];
@@ -166,7 +166,7 @@ static char *BarRunPasswordCommand (BarSettings_t *settings, const char *cmd) {
  *	Sets acct->password if password_command succeeds.
  *	@return true if password is available after resolution.
  */
-static bool BarResolveAccountPassword (BarSettings_t *settings, BarAccount_t *acct) {
+static bool BarResolveAccountPassword (const BarSettings_t *settings, BarAccount_t *acct) {
 	if (acct->password != NULL) return true;
 	if (acct->passwordCmd != NULL) {
 		acct->password = BarRunPasswordCommand (settings, acct->passwordCmd);

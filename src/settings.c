@@ -771,11 +771,18 @@ void BarSettingsRead (BarSettings_t *settings) {
 			char *colon = strchr (val, ':');
 			if (colon && colon != val && *(colon + 1) != '\0') {
 				*colon = '\0';
-				accountLines = realloc (accountLines,
+				BarAccountLine_t *newLines = realloc (accountLines,
 						(accountLineCount + 1) * sizeof (BarAccountLine_t));
-				accountLines[accountLineCount].id = strdup (val);
-				accountLines[accountLineCount].path = strdup (colon + 1);
-				accountLineCount++;
+				if (newLines == NULL) {
+					BarUiMsg (settings, MSG_ERR,
+							"Out of memory reading account lines at %s:%zu\n",
+							path, lineNum);
+				} else {
+					accountLines = newLines;
+					accountLines[accountLineCount].id = strdup (val);
+					accountLines[accountLineCount].path = strdup (colon + 1);
+					accountLineCount++;
+				}
 			} else {
 				BarUiMsg (settings, MSG_INFO,
 						"Invalid account format at %s:%zu (expected id:path)\n",
