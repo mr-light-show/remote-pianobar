@@ -1,97 +1,77 @@
-pianobar
-========
+# pianobar
 
-.. image:: https://img.shields.io/github/release/mr-light-show/remote-pianobar.svg
-   :target: https://github.com/mr-light-show/remote-pianobar/releases
-   :alt: GitHub Release
-
-.. image:: https://github.com/mr-light-show/remote-pianobar/actions/workflows/build.yml/badge.svg
-   :target: https://github.com/mr-light-show/remote-pianobar/actions/workflows/build.yml
-   :alt: Build
-
-.. image:: https://github.com/mr-light-show/remote-pianobar/actions/workflows/test.yml/badge.svg
-   :target: https://github.com/mr-light-show/remote-pianobar/actions/workflows/test.yml
-   :alt: Test
-
-.. image:: https://codecov.io/gh/mr-light-show/remote-pianobar/branch/master/graph/badge.svg
-   :target: https://codecov.io/gh/mr-light-show/remote-pianobar
-   :alt: codecov
+[![GitHub Release](https://img.shields.io/github/release/mr-light-show/remote-pianobar.svg)](https://github.com/mr-light-show/remote-pianobar/releases)
+[![Build](https://github.com/mr-light-show/remote-pianobar/actions/workflows/build.yml/badge.svg)](https://github.com/mr-light-show/remote-pianobar/actions/workflows/build.yml)
+[![Test](https://github.com/mr-light-show/remote-pianobar/actions/workflows/test.yml/badge.svg)](https://github.com/mr-light-show/remote-pianobar/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/mr-light-show/remote-pianobar/branch/master/graph/badge.svg)](https://codecov.io/gh/mr-light-show/remote-pianobar)
 
 pianobar is a free/open-source, console-based client for the personalized
-online radio Pandora_.
+online radio [Pandora](http://www.pandora.com).
 
-.. _Pandora: http://www.pandora.com
+> **Remote Pianobar** — a fork of the original pianobar with remote control capabilities.
+> See the **Remote Pianobar Features** section below for details.
+> Original repository: https://github.com/PromyLOPh/pianobar
 
-.. note::
-   Remote Pianobar - a fork of the original pianobar with remote control capabilities.
-   See the `Remote Pianobar Features`_ section below for details.
-   Original repository: https://github.com/PromyLOPh/pianobar
+[![pianobar screenshot](images/pianobar-screenshot.png)](images/pianobar-screenshot.png)
 
-.. image:: https://6xq.net/pianobar/pianobar-screenshot.png
-    :target: https://6xq.net/pianobar/pianobar-screenshot.png
-    :alt: pianobar screenshot
+## Features
 
-Features
---------
-
-- play and manage (create, add more music, delete, rename, ...) stations
+- play and manage (create, add more music, delete, rename, …) stations
 - rate songs and explain why they have been selected
 - upcoming songs/song history
-- customize keybindings and text output (see `configuration example`_)
-- remote control and eventcmd interface (send tracks to last.fm_, for example)
+- customize keybindings and text output (see [configuration example](https://github.com/PromyLOPh/pianobar/blob/master/contrib/config-example))
+- remote control and eventcmd interface (send tracks to [last.fm](https://www.last.fm), for example)
 - Remote API for building custom UIs (web, mobile, desktop)
 - included modern web UI built with Lit components
 - proxy support for listeners outside the USA
 
-.. _last.fm: https://www.last.fm
-.. _configuration example: https://github.com/PromyLOPh/pianobar/blob/master/contrib/config-example
+## Install
 
-Install
--------
+### Install from GitHub releases
 
-Install from GitHub releases
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Pre-built packages are available on the `Releases`_ page. If you have the
+Pre-built packages are available on the [Releases](https://github.com/mr-light-show/remote-pianobar/releases) page. If you have the
 original pianobar installed, remove it first to avoid conflicts.
 
 **Linux (Debian/Ubuntu .deb)**
 
-1. Remove existing pianobar if installed::
+1. Remove existing pianobar if installed:
 
+   ```bash
    sudo apt remove pianobar
    # or, if you installed a .deb named pianobar:
    # sudo dpkg --remove pianobar
+   ```
 
 2. Open https://github.com/mr-light-show/remote-pianobar/releases and
    download the .deb that matches your system:
 
-   - Ubuntu 24.04 (Noble), amd64: ``remote-pianobar_noble_amd64.deb``
-   - Debian Bookworm or similar, arm64: ``remote-pianobar_bookworm_arm64.deb``
-   - Debian Trixie or similar, arm64: ``remote-pianobar_trixie_arm64.deb``
+   - Ubuntu 24.04 (Noble), amd64: `remote-pianobar_noble_amd64.deb`
+   - Debian Bookworm or similar, arm64: `remote-pianobar_bookworm_arm64.deb`
+   - Debian Trixie or similar, arm64: `remote-pianobar_trixie_arm64.deb`
 
-3. Install (substitute your file name)::
+3. Install (substitute your file name):
 
+   ```bash
    sudo dpkg -i remote-pianobar_noble_amd64.deb
    # If you see dependency errors:
    sudo apt install -f
+   ```
 
 **macOS (.dmg)**
 
-1. Remove existing pianobar if installed via Homebrew::
+1. Remove existing pianobar if installed via Homebrew:
 
+   ```bash
    brew uninstall pianobar
+   ```
 
 2. Open https://github.com/mr-light-show/remote-pianobar/releases and
-   download ``remote-pianobar_macos14.dmg``.
+   download `remote-pianobar_macos14.dmg`.
 
-3. Open the DMG, then run the included ``install.sh`` (with sudo) or copy
+3. Open the DMG, then run the included `install.sh` (with sudo) or copy
    the app to your desired location (see INSTALL.txt in the DMG).
 
-.. _Releases: https://github.com/mr-light-show/remote-pianobar/releases
-
-Build from source
-^^^^^^^^^^^^^^^^^
+### Build from source
 
 You need the following software to build pianobar:
 
@@ -99,10 +79,13 @@ You need the following software to build pianobar:
 - pthreads
 - libao
 - libcurl ≥ 7.32.0
-- gcrypt [1]_
+- gcrypt[^1]
 - json-c
-- ffmpeg ≤ 5.1 [2]_
+- ffmpeg ≤ 5.1[^2]
 - UTF-8 console/locale
+
+[^1]: with blowfish cipher enabled
+[^2]: required: demuxer mov, decoder aac, protocol http and filters volume, aformat, aresample
 
 **Linux-specific:**
 
@@ -114,55 +97,65 @@ You need the following software to build pianobar:
 - openssl
 - Node.js and npm (for building the web UI)
 
-.. [1] with blowfish cipher enabled
-.. [2] required: demuxer mov, decoder aac, protocol http and filters volume,
-        aformat, aresample
-
 **Package installation examples:**
 
-On Debian/Ubuntu::
+On Debian/Ubuntu:
 
-	sudo apt-get install build-essential libao-dev libcurl4-openssl-dev \
-	  libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev \
-	  libavutil-dev libavfilter-dev libswresample-dev libasound2-dev
+```bash
+sudo apt-get install build-essential libao-dev libcurl4-openssl-dev \
+  libgcrypt20-dev libjson-c-dev libavcodec-dev libavformat-dev \
+  libavutil-dev libavfilter-dev libswresample-dev libasound2-dev
+```
 
-For WebSocket builds, also install::
+For WebSocket builds, also install:
 
-	sudo apt-get install libwebsockets-dev nodejs npm
+```bash
+sudo apt-get install libwebsockets-dev nodejs npm
+```
 
-On macOS (via Homebrew)::
+On macOS (via Homebrew):
 
-	brew install libao curl libgcrypt json-c ffmpeg
+```bash
+brew install libao curl libgcrypt json-c ffmpeg
+```
 
-For WebSocket builds, also install::
+For WebSocket builds, also install:
 
-	brew install libwebsockets node
+```bash
+brew install libwebsockets node
+```
 
-Then type::
+Then type:
 
-	gmake clean && gmake
+```bash
+gmake clean && gmake
+```
 
-WebSocket/Remote API is included by default. To build without it::
+WebSocket/Remote API is included by default. To build without it:
 
-	make NOWEBSOCKET=1 clean && make NOWEBSOCKET=1
+```bash
+make NOWEBSOCKET=1 clean && make NOWEBSOCKET=1
+```
 
-You can run the client directly from the source directory now::
+You can run the client directly from the source directory now:
 
-	./pianobar
+```bash
+./pianobar
+```
 
-Or install it to ``/usr/local`` by issuing::
+Or install it to `/usr/local` by issuing:
 
-	gmake install
+```bash
+gmake install
+```
 
-Remote Pianobar Features
--------------------------
+## Remote Pianobar Features
 
 Remote Pianobar enables real-time communication for custom user
 interfaces. Build web, mobile, or desktop UIs that control pianobar and receive
 live updates.
 
-Features
-++++++++
+### Features
 
 - Real-time playback state updates
 - Song metadata (title, artist, album, art URL)
@@ -171,111 +164,127 @@ Features
 - Song actions (love, ban, tired, create station)
 - Two-way communication via Socket.IO protocol
 
-Building Remote Pianobar
-+++++++++++++++++++++++++
+### Building Remote Pianobar
 
-**Audio Library:** Remote Pianobar uses `miniaudio <https://miniaud.io/>`_ for audio playback, which provides automatic device switching and cross-platform support. The library is included in the source tree (``src/miniaudio.h``) and requires no additional dependencies.
+**Audio Library:** Remote Pianobar uses [miniaudio](https://miniaud.io/) for audio playback, which provides automatic device switching and cross-platform support. The library is included in the source tree (`src/miniaudio.h`) and requires no additional dependencies.
 
-To build Remote Pianobar (WebSocket is enabled by default)::
+To build Remote Pianobar (WebSocket is enabled by default):
 
-	make clean && make
+```bash
+make clean && make
+```
 
-Or use the included build script for development::
+Or use the included build script for development:
 
-	./build.sh        # Standard build
-	./build.sh debug  # Debug build with crash capture
+```bash
+./build.sh        # Standard build
+./build.sh debug  # Debug build with crash capture
+```
 
-Configuration
-+++++++++++++
+### Configuration
 
-Add these settings to your ``~/.config/pianobar/config``::
+Add these settings to your `~/.config/pianobar/config`:
 
-	ui_mode = both
-	websocket_port = 8080
-	webui_path = ./dist/webui
+```ini
+ui_mode = both
+websocket_port = 8080
+webui_path = ./dist/webui
+```
 
 UI mode options:
 
-- ``cli``: Command-line interface only, no remote API
-- ``web``: Web-only (daemonizes, runs in background)
-- ``both``: Both CLI and remote API (default, runs in foreground)
+- `cli`: Command-line interface only, no remote API
+- `web`: Web-only (daemonizes, runs in background)
+- `both`: Both CLI and remote API (default, runs in foreground)
 
-When using ``web`` mode, pianobar runs as a daemon and you should specify::
+When using `web` mode, pianobar runs as a daemon and you should specify:
 
-	ui_mode = web
-	websocket_port = 8080
-	webui_path = ./dist/webui
-	pid_file = /tmp/pianobar.pid
-	log_file = /tmp/pianobar.log
+```ini
+ui_mode = web
+websocket_port = 8080
+webui_path = ./dist/webui
+pid_file = /tmp/pianobar.pid
+log_file = /tmp/pianobar.log
+```
 
-Then start pianobar and it will run in the background. Open ``http://localhost:8080`` in your browser.
+Then start pianobar and it will run in the background. Open `http://localhost:8080` in your browser.
 
-Log file rotation
-++++++++++++++++++
+### Log file rotation
 
-When using ``log_file`` in daemon mode, the log grows indefinitely. On Linux you
+When using `log_file` in daemon mode, the log grows indefinitely. On Linux you
 can use logrotate to rotate it by size so the file stays small and rotation is
 automatic.
 
 1. **Confirm your log file path.** In your pianobar config
-   (``~/.config/pianobar/config`` or ``~/.pianobar/config``), find the
-   ``log_file`` setting. You need the **absolute** path for logrotate (e.g.
-   ``/home/pi/.config/pianobar/pianobar.log``). If you use ``~``, run
-   ``echo ~/.config/pianobar/pianobar.log`` and use the output.
+   (`~/.config/pianobar/config` or `~/.pianobar/config`), find the
+   `log_file` setting. You need the **absolute** path for logrotate (e.g.
+   `/home/pi/.config/pianobar/pianobar.log`). If you use `~`, run
+   `echo ~/.config/pianobar/pianobar.log` and use the output.
 
 2. **Install logrotate (if needed).** On Debian/Ubuntu/Raspberry Pi OS it is
-   often already installed. Check with ``which logrotate``. If missing::
+   often already installed. Check with `which logrotate`. If missing:
 
-	sudo apt update && sudo apt install logrotate
+   ```bash
+   sudo apt update && sudo apt install logrotate
+   ```
 
 3. **Create the logrotate config.** Create
-   ``/etc/logrotate.d/pianobar``::
+   `/etc/logrotate.d/pianobar`:
 
-	sudo nano /etc/logrotate.d/pianobar
+   ```bash
+   sudo nano /etc/logrotate.d/pianobar
+   ```
 
-   Paste the following. Replace ``/path/to/pianobar.log`` with your absolute
-   log path from step 1. Replace ``USER`` and ``GROUP`` with the owner of the
-   log file. The ``su`` directive is required when the log is in a
-   world-writable directory (e.g. ``/tmp``)::
+   Paste the following. Replace `/path/to/pianobar.log` with your absolute
+   log path from step 1. Replace `USER` and `GROUP` with the owner of the
+   log file. The `su` directive is required when the log is in a
+   world-writable directory (e.g. `/tmp`):
 
-	/path/to/pianobar.log {
-	    su USER GROUP
-	    size 5M
-	    copytruncate
-	    rotate 3
-	    missingok
-	}
+   ```
+   /path/to/pianobar.log {
+       su USER GROUP
+       size 5M
+       copytruncate
+       rotate 3
+       missingok
+   }
+   ```
 
-   To find USER and GROUP: run ``ls -l /path/to/pianobar.log`` (third and
-   fourth columns), or ``id -un`` and ``id -gn``.
+   To find USER and GROUP: run `ls -l /path/to/pianobar.log` (third and
+   fourth columns), or `id -un` and `id -gn`.
 
-4. **Set permissions.** Logrotate ignores configs writable by group/others::
+4. **Set permissions.** Logrotate ignores configs writable by group/others:
 
-	sudo chmod 644 /etc/logrotate.d/pianobar
+   ```bash
+   sudo chmod 644 /etc/logrotate.d/pianobar
+   ```
 
-5. **Test (dry-run).** Check for errors without rotating::
+5. **Test (dry-run).** Check for errors without rotating:
 
-	sudo logrotate -d /etc/logrotate.d/pianobar
+   ```bash
+   sudo logrotate -d /etc/logrotate.d/pianobar
+   ```
 
-   If the log file does not exist yet, that is fine (``missingok`` allows that).
+   If the log file does not exist yet, that is fine (`missingok` allows that).
 
-6. **Optional: force one rotation.** To confirm it works::
+6. **Optional: force one rotation.** To confirm it works:
 
-	sudo logrotate -f /etc/logrotate.d/pianobar
+   ```bash
+   sudo logrotate -f /etc/logrotate.d/pianobar
+   ```
 
    The pianobar daemon keeps running without restart.
 
 7. **Automatic runs.** logrotate is usually run daily by cron (e.g.
-   ``/etc/cron.daily/logrotate``). When your log reaches 5 MB (or on the daily
+   `/etc/cron.daily/logrotate`). When your log reaches 5 MB (or on the daily
    run), it will be rotated automatically; up to 3 old files are kept.
 
 **Troubleshooting:** If rotation never runs, check that the daily job exists
-(``ls /etc/cron.daily/logrotate``) and that the config is not ignored
-(permissions 0644; correct ``su`` when the log is in ``/tmp``). Run
-``sudo logrotate -f /etc/logrotate.d/pianobar`` to force a rotation.
+(`ls /etc/cron.daily/logrotate`) and that the config is not ignored
+(permissions 0644; correct `su` when the log is in `/tmp`). Run
+`sudo logrotate -f /etc/logrotate.d/pianobar` to force a rotation.
 
-Included Web UI
-+++++++++++++++
+### Included Web UI
 
 A modern, lightweight web interface is included:
 
@@ -287,40 +296,47 @@ A modern, lightweight web interface is included:
 - Volume control and playback controls
 - Station management
 
-See ``webui/README.md`` for development and build instructions.
+Example of the web UI in **web mode** (album art, track info, progress, volume, playback controls, station selector):
 
-Building Custom UIs
-+++++++++++++++++++
+[![Web mode UI example](images/web-mode-example.png)](images/web-mode-example.png)
+
+See `webui/README.md` for development and build instructions.
+
+### Building Custom UIs
 
 The Remote API uses Socket.IO and provides events for:
 
-**Client → Server (Commands)**::
+**Client → Server (Commands):**
 
-	- play, pause, skip
-	- love_song, ban_song, tired_song
-	- set_volume
-	- list_stations, play_station
-	- create_station, delete_station
+```
+- play, pause, skip
+- love_song, ban_song, tired_song
+- set_volume
+- list_stations, play_station
+- create_station, delete_station
+```
 
-**Server → Client (Events)**::
+**Server → Client (Events):**
 
-	- state_update: Playback state changes
-	- song_update: New song metadata
-	- station_update: Station list changes
-	- volume_update: Volume changes
+```
+- state_update: Playback state changes
+- song_update: New song metadata
+- station_update: Station list changes
+- volume_update: Volume changes
+```
 
-Connect to ``ws://localhost:8080`` using any Socket.IO client library.
-Full protocol documentation available in ``WEBSOCKET_PROTOCOL.md``.
+Connect to `ws://localhost:8080` using any Socket.IO client library.
+Full protocol documentation available in `WEBSOCKET_PROTOCOL.md`.
 
 For more information, see:
 
-- Web UI development: ``webui/README.md``
-- API protocol: ``WEBSOCKET_PROTOCOL.md``
+- Web UI development: `webui/README.md`
+- API protocol: `WEBSOCKET_PROTOCOL.md`
 - Original repository: https://github.com/PromyLOPh/pianobar
 
-FAQ
----
-*How can I have pianobar use port 80 on Ubuntu?*
+## FAQ
+
+### How can I have pianobar use port 80 on Ubuntu?
 
 Port 80 is a privileged port (below 1024) and requires special permissions. Here are your options:
 
@@ -328,246 +344,214 @@ Port 80 is a privileged port (below 1024) and requires special permissions. Here
 
 Grant pianobar permission to bind to privileged ports without running as root:
 
-.. code:: bash
+```bash
+# Give pianobar capability to bind to privileged ports
+sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/pianobar
 
-    # Give pianobar capability to bind to privileged ports
-    sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/pianobar
-    
-    # Verify it worked
-    getcap /usr/local/bin/pianobar
+# Verify it worked
+getcap /usr/local/bin/pianobar
+```
 
-Then configure ``~/.config/pianobar/config``:
+Then configure `~/.config/pianobar/config`:
 
-.. code:: ini
+```ini
+websocket_port = 80
+websocket_host = 0.0.0.0
+```
 
-    websocket_port = 80
-    websocket_host = 0.0.0.0
-
-Note: You'll need to reapply ``setcap`` after each pianobar upgrade/rebuild.
+Note: You'll need to reapply `setcap` after each pianobar upgrade/rebuild.
 
 **Option 2: Port forwarding with iptables**
 
 Keep pianobar on a high port and forward port 80 to it:
 
-.. code:: bash
+```bash
+# Forward port 80 to port 8080
+sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 
-    # Forward port 80 to port 8080
-    sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
-    
-    # Make persistent
-    sudo apt install iptables-persistent
-    sudo netfilter-persistent save
+# Make persistent
+sudo apt install iptables-persistent
+sudo netfilter-persistent save
+```
 
-Configure ``~/.config/pianobar/config``:
+Configure `~/.config/pianobar/config`:
 
-.. code:: ini
+```ini
+websocket_port = 8080
+websocket_host = 0.0.0.0
+```
 
-    websocket_port = 8080
-    websocket_host = 0.0.0.0
-
-Access at ``http://your-ip/`` (externally routes to port 8080 internally).
+Access at `http://your-ip/` (externally routes to port 8080 internally).
 
 **Option 3: Reverse proxy with nginx (Recommended for production)**
 
 Install and configure nginx:
 
-.. code:: bash
+```bash
+sudo apt install nginx
+```
 
-    sudo apt install nginx
+Create `/etc/nginx/sites-available/pianobar`:
 
-Create ``/etc/nginx/sites-available/pianobar``:
+```nginx
+server {
+    listen 80;
+    server_name localhost;
 
-.. code:: nginx
-
-    server {
-        listen 80;
-        server_name localhost;
-        
-        location / {
-            proxy_pass http://127.0.0.1:8080;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_read_timeout 3600s;
-            proxy_send_timeout 3600s;
-        }
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
+}
+```
 
-Use long timeouts (e.g. 3600s) for ``proxy_read_timeout`` and ``proxy_send_timeout`` so the proxy does not close idle WebSocket connections before the server or clients do.
+Use long timeouts (e.g. 3600s) for `proxy_read_timeout` and `proxy_send_timeout` so the proxy does not close idle WebSocket connections before the server or clients do.
 
 Enable the site:
 
-.. code:: bash
+```bash
+sudo ln -s /etc/nginx/sites-available/pianobar /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl restart nginx
+```
 
-    sudo ln -s /etc/nginx/sites-available/pianobar /etc/nginx/sites-enabled/
-    sudo nginx -t
-    sudo systemctl restart nginx
+Configure `~/.config/pianobar/config`:
 
-Configure ``~/.config/pianobar/config``:
+```ini
+websocket_port = 8080
+websocket_host = 127.0.0.1
+```
 
-.. code:: ini
+This provides better security, logging, and SSL support. Note that `websocket_host` is set to `127.0.0.1` so only nginx can access pianobar directly.
 
-    websocket_port = 8080
-    websocket_host = 127.0.0.1
-
-This provides better security, logging, and SSL support. Note that ``websocket_host`` is set to ``127.0.0.1`` so only nginx can access pianobar directly.
-
-*How can I run pianobar in web mode as a daemon on system startup?*
+### How can I run pianobar in web mode as a daemon on system startup?
 
 You can use systemd to automatically start pianobar in daemon mode on boot. This works identically on both headless and GUI Ubuntu installations.
 
 **Step 1: Configure pianobar for daemon mode**
 
-Create or edit ``~/.config/pianobar/config``:
+Create or edit `~/.config/pianobar/config`:
 
-.. code:: ini
+```ini
+# Pandora credentials
+user = your_email@example.com
+password = your_password
 
-    # Pandora credentials
-    user = your_email@example.com
-    password = your_password
-    
-    # Daemon mode settings
-    ui_mode = web
-    websocket_port = 8080
-    websocket_host = 0.0.0.0
-    
-    # Daemon-specific settings
-    pid_file = /tmp/pianobar.pid
-    log_file = ~/.config/pianobar/pianobar.log
+# Daemon mode settings
+ui_mode = web
+websocket_port = 8080
+websocket_host = 0.0.0.0
+
+# Daemon-specific settings
+pid_file = /tmp/pianobar.pid
+log_file = ~/.config/pianobar/pianobar.log
+```
 
 **Step 2: Create systemd user service**
 
-Create ``~/.config/systemd/user/pianobar.service``:
+Create `~/.config/systemd/user/pianobar.service`:
 
-.. code:: ini
+```ini
+[Unit]
+Description=Remote Pianobar Daemon
+After=network-online.target
+Wants=network-online.target
 
-    [Unit]
-    Description=Remote Pianobar Daemon
-    After=network-online.target
-    Wants=network-online.target
-    
-    [Service]
-    Type=forking
-    ExecStartPre=/bin/sleep 5
-    ExecStart=/usr/local/bin/pianobar
-    Restart=on-failure
-    RestartSec=10
-    StandardOutput=journal
-    StandardError=journal
-    
-    [Install]
-    WantedBy=default.target
+[Service]
+Type=forking
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/pianobar
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
 
 **Step 3: Enable and start the service**
 
-.. code:: bash
+```bash
+# Reload systemd configuration
+systemctl --user daemon-reload
 
-    # Reload systemd configuration
-    systemctl --user daemon-reload
-    
-    # Enable service to start on boot
-    systemctl --user enable pianobar
-    
-    # Start service now
-    systemctl --user start pianobar
-    
-    # Check status
-    systemctl --user status pianobar
+# Enable service to start on boot
+systemctl --user enable pianobar
+
+# Start service now
+systemctl --user start pianobar
+
+# Check status
+systemctl --user status pianobar
+```
 
 **Step 4: Enable lingering for headless systems**
 
 On headless systems (no GUI login), the user's systemd manager only starts after login, which never happens. Enable "lingering" to start the user manager at boot:
 
-.. code:: bash
+```bash
+# Required for headless systems (e.g., Raspberry Pi without desktop)
+loginctl enable-linger $USER
 
-    # Required for headless systems (e.g., Raspberry Pi without desktop)
-    loginctl enable-linger $USER
-    
-    # Verify lingering is enabled
-    loginctl show-user $USER | grep Linger
+# Verify lingering is enabled
+loginctl show-user $USER | grep Linger
+```
 
 Skip this step if you always log in via GUI or SSH before needing pianobar.
 
 **Managing the daemon:**
 
-.. code:: bash
+```bash
+# View logs in real-time
+journalctl --user -u pianobar -f
 
-    # View logs in real-time
-    journalctl --user -u pianobar -f
-    
-    # Stop the service
-    systemctl --user stop pianobar
-    
-    # Restart the service
-    systemctl --user restart pianobar
-    
-    # Disable autostart
-    systemctl --user disable pianobar
+# Stop the service
+systemctl --user stop pianobar
 
-Access the web interface at ``http://localhost:8080/`` (or use your server's IP if ``websocket_host`` is set to ``0.0.0.0``).
+# Restart the service
+systemctl --user restart pianobar
 
-*The audio output does not work as expected. What can I do?*
+# Disable autostart
+systemctl --user disable pianobar
+```
 
-    pianobar uses libao and most problems are related to a broken libao
-    configuration. Have a look at issue `#167`_ for example.
-*Can I donate money? Do you have a Flattr/Bitcoin/… account?*
+Access the web interface at `http://localhost:8080/` (or use your server's IP if `websocket_host` is set to `0.0.0.0`).
 
-    No, money is not necessary to continue working on pianobar. There are many
-    other ways to support pianobar: Reporting bugs, creating `cool stuff`_
-    based on pianobar, blogging about it and the most important one: Keeping
-    Pandora alive.
+### The audio output does not work as expected. What can I do?
 
-.. _#167: https://github.com/PromyLOPh/pianobar/issues/167
-.. _cool stuff: `addons`_
+pianobar uses libao and most problems are related to a broken libao
+configuration. Have a look at issue [#167](https://github.com/PromyLOPh/pianobar/issues/167) for example.
 
-External projects
------------------
+### Can I donate money? Do you have a Flattr/Bitcoin/… account?
 
-Addons
-++++++
+No, money is not necessary to continue working on pianobar. There are many
+other ways to support pianobar: Reporting bugs, creating [cool stuff](#addons)
+based on pianobar, blogging about it and the most important one: Keeping
+Pandora alive.
 
-control-pianobar_
-    Scripts that interact with pianobar entirely through notification bubbles
-    and hotkeys
-pianobar.el_
-    Emacs interface for pianobar
-`pianobar-mediaplayer2`_
-    Control pianobar like any other media player through DBUS/MPRIS.
-PianobarNowPlayable_
-    Integrate pianobar with the Now Playing feature of macOS
+## External projects
 
-.. _control-pianobar: http://malabarba.github.io/control-pianobar/
-.. _pianobar.el: https://github.com/agrif/pianobar.el
-.. _pianobar-mediaplayer2: https://github.com/ryanswilson59/pianobar-mediaplayer2
-.. _PianobarNowPlayable: https://github.com/iDom818/PianobarNowPlayable
+### Addons
 
-Clients
-+++++++
+- **[control-pianobar](http://malabarba.github.io/control-pianobar/)** — Scripts that interact with pianobar entirely through notification bubbles and hotkeys
+- **[pianobar.el](https://github.com/agrif/pianobar.el)** — Emacs interface for pianobar
+- **[pianobar-mediaplayer2](https://github.com/ryanswilson59/pianobar-mediaplayer2)** — Control pianobar like any other media player through DBUS/MPRIS.
+- **[PianobarNowPlayable](https://github.com/iDom818/PianobarNowPlayable)** — Integrate pianobar with the Now Playing feature of macOS
 
-pithos_
-	Python/GTK desktop client
-pianod_
-    Pandora UNIX daemon, based on pianobar
-Hermes_
-    Pandora Client for OS X
-`Remote pianobar`_
-    Fork of pianobar, which includes a HTTP server and serves a
-    Websocket-powered frontend for remote control.
+### Clients
 
-.. _pithos: http://pithos.github.io/
-.. _pianod: http://deviousfish.com/pianod/
-.. _Hermes: http://hermesapp.org/
-.. _Remote pianobar: https://github.com/mr-light-show/remote-pianobar
+- **[pithos](http://pithos.github.io/)** — Python/GTK desktop client
+- **[pianod](http://deviousfish.com/pianod/)** — Pandora UNIX daemon, based on pianobar
+- **[Hermes](http://hermesapp.org/)** — Pandora Client for OS X
+- **[Remote pianobar](https://github.com/mr-light-show/remote-pianobar)** — Fork of pianobar, which includes a HTTP server and serves a Websocket-powered frontend for remote control.
 
-Standalone devices
-++++++++++++++++++
+### Standalone devices
 
-PandoraBar_
-    Beagleboard-based radio device running pianobar
-`Pandora’s Box`_
-    Raspberry Pi-based standalone devices running pianobar
-
-.. _PandoraBar: https://hackaday.com/2012/09/20/how-to-build-your-own-dedicated-pandora-radio/
-.. _Pandora’s Box: http://www.instructables.com/id/Pandoras-Box-An-Internet-Radio-player-made-with/
-
+- **[PandoraBar](https://hackaday.com/2012/09/20/how-to-build-your-own-dedicated-pandora-radio/)** — Beagleboard-based radio device running pianobar
+- **[Pandora’s Box](http://www.instructables.com/id/Pandoras-Box-An-Internet-Radio-player-made-with/)** — Raspberry Pi-based standalone devices running pianobar
