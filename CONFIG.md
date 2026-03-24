@@ -400,7 +400,7 @@ For a complete example with all available options, see `contrib/config-example`.
 
 ## See Also
 
-- `README.rst` - General usage and installation
+- `README.md` - General usage and installation
 - `contrib/config-example` - Example configuration file
 - `contrib/eventcmd-examples/` - Example event command scripts
 - `WEBSOCKET_API.md` - Remote API (including multi-account `process` fields and `app.pandora-reconnect` with `account_id`)

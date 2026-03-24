@@ -118,7 +118,7 @@ jobs:
           cp -r dist/webui/* package/usr/local/share/pianobar/webui/
           
           # Copy documentation
-          cp README.rst package/usr/local/share/doc/pianobar/
+          cp README.md package/usr/local/share/doc/pianobar/
           cp CONFIG.md package/usr/local/share/doc/pianobar/
           cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
           cp README_TESTING.md package/usr/local/share/doc/pianobar/
@@ -196,7 +196,7 @@ jobs:
           echo "Example configuration: /usr/local/share/doc/pianobar/contrib/config-example"
           echo ""
           echo "For WebSocket/Web UI setup, see:"
-          echo "  /usr/local/share/doc/pianobar/README.rst"
+          echo "  /usr/local/share/doc/pianobar/README.md"
           echo "  /usr/local/share/doc/pianobar/CONFIG.md"
           echo ""
           echo "Web UI files are located at: /usr/local/share/pianobar/webui"
@@ -314,7 +314,7 @@ jobs:
           cp -r dist/webui/* package/usr/local/share/pianobar/webui/
           
           # Copy documentation
-          cp README.rst package/usr/local/share/doc/pianobar/
+          cp README.md package/usr/local/share/doc/pianobar/
           cp CONFIG.md package/usr/local/share/doc/pianobar/
           cp DEVELOPMENT.md package/usr/local/share/doc/pianobar/
           cp README_TESTING.md package/usr/local/share/doc/pianobar/
@@ -385,7 +385,7 @@ jobs:
           echo "Example configuration: /usr/local/share/doc/pianobar/contrib/config-example"
           echo ""
           echo "For WebSocket/Web UI setup, see:"
-          echo "  /usr/local/share/doc/pianobar/README.rst"
+          echo "  /usr/local/share/doc/pianobar/README.md"
           echo "  /usr/local/share/doc/pianobar/CONFIG.md"
           echo ""
           echo "Web UI files are located at: /usr/local/share/pianobar/webui"
@@ -503,7 +503,7 @@ jobs:
           cp -r dist/webui/* "${APP_NAME}/share/pianobar/webui/"
           
           # Copy documentation
-          cp README.rst "${APP_NAME}/share/doc/pianobar/"
+          cp README.md "${APP_NAME}/share/doc/pianobar/"
           cp CONFIG.md "${APP_NAME}/share/doc/pianobar/"
           cp DEVELOPMENT.md "${APP_NAME}/share/doc/pianobar/"
           cp README_TESTING.md "${APP_NAME}/share/doc/pianobar/"
@@ -550,7 +550,7 @@ jobs:
           4. Open web interface:
              http://localhost:8080
           
-          For more information, see share/doc/pianobar/README.rst
+          For more information, see share/doc/pianobar/README.md
           
           Dependencies:
           

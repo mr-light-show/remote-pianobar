@@ -502,7 +502,7 @@ pianobar/
 ├── contrib/                 # Example configs and scripts
 ├── Makefile                 # Build system
 ├── build.sh                 # Unified build script
-└── README.rst              # User documentation
+└── README.md               # User documentation
 ```
 
 ---
@@ -789,5 +789,5 @@ git commit --no-verify
 - **Issues**: GitHub Issues
 - **Discussions**: GitHub Discussions
 - **IRC**: #pianobar on Libera.Chat
-- **Documentation**: README.rst, man page (contrib/pianobar.1)
+- **Documentation**: README.md, man page (contrib/pianobar.1)
 
