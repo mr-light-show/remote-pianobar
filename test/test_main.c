@@ -52,6 +52,7 @@ Suite *player_suite(void);
 Suite *bar_state_suite(void);
 Suite *l10n_suite(void);
 Suite *error_messages_suite(void);
+Suite *ui_act_suite(void);
 
 int main(void) {
 	int number_failed;
@@ -67,6 +68,7 @@ int main(void) {
 	srunner_add_suite(sr, bar_state_suite());
 	srunner_add_suite(sr, l10n_suite());
 	srunner_add_suite(sr, error_messages_suite());
+	srunner_add_suite(sr, ui_act_suite());
 	
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);

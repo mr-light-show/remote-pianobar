@@ -193,6 +193,15 @@ START_TEST (test_ws_err_returns_original_when_no_mapping) {
 }
 END_TEST
 
+/* Failed to transform: only station.addMusic / station.rename map; else fall through */
+START_TEST (test_ws_err_failed_to_transform_unmapped_operation) {
+	const char *msg = "Failed to transform station";
+	/* Operation must not match bar_ws_op_fallback_key or we return op label, not raw msg */
+	const char *r = BarWsGetFriendlyErrorMessage (NULL, "playback.pause", msg);
+	ck_assert_ptr_eq (r, msg);
+}
+END_TEST
+
 Suite *error_messages_suite (void) {
 	Suite *s = suite_create ("WebSocket error messages");
 	TCase *tc = tcase_create ("friendly");
@@ -214,6 +223,7 @@ Suite *error_messages_suite (void) {
 	tcase_add_test (tc, test_ws_err_exact_socket_strings);
 	tcase_add_test (tc, test_ws_err_op_fallback_each);
 	tcase_add_test (tc, test_ws_err_returns_original_when_no_mapping);
+	tcase_add_test (tc, test_ws_err_failed_to_transform_unmapped_operation);
 	suite_add_tcase (s, tc);
 	return s;
 }

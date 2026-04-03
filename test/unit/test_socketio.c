@@ -552,6 +552,65 @@ START_TEST (test_socketio_emit_error_ex_null_message) {
 }
 END_TEST
 
+/* app NULL: l10n NULL, still emits friendly error JSON */
+START_TEST (test_socketio_emit_error_ex_null_app) {
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitErrorEx (NULL, "music.search", "Network error", NULL);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "operation") != NULL);
+
+	clearBroadcastMock ();
+}
+END_TEST
+
+/* Empty stationId: omit stationId field */
+START_TEST (test_socketio_emit_error_ex_empty_station_id) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitErrorEx (&app, "station.change", "Station not found", "");
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "stationId") == NULL);
+
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+/* BarSocketIoEmitError delegates to EmitErrorEx with NULL stationId */
+START_TEST (test_socketio_emit_error_wrapper) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitError (&app, "playback.play", "Not connected to Pandora");
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "stationId") == NULL);
+
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -580,6 +639,9 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_translate, test_socketio_pandora_reconnect_unknown_account);
 	tcase_add_test(tc_translate, test_socketio_emit_error_ex_with_station_id);
 	tcase_add_test(tc_translate, test_socketio_emit_error_ex_null_message);
+	tcase_add_test(tc_translate, test_socketio_emit_error_ex_null_app);
+	tcase_add_test(tc_translate, test_socketio_emit_error_ex_empty_station_id);
+	tcase_add_test(tc_translate, test_socketio_emit_error_wrapper);
 	suite_add_tcase(s, tc_translate);
 	
 	/* Event handler tests */

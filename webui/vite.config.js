@@ -29,7 +29,13 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
-      exclude: ['node_modules/', 'test/', 'dist/', '../src/l10n_defaults_gen.c']
+      exclude: [
+        'node_modules/',
+        'test/',
+        'dist/',
+        '../src/l10n_defaults_gen.c',
+        'vite.config.js'
+      ]
     }
   }
 });

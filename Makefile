@@ -265,6 +265,7 @@ TEST_SRC:=\
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
 		${TEST_DIR}/unit/test_error_messages.c \
+		${TEST_DIR}/unit/test_ui_act_reconnect.c \
 		${TEST_DIR}/unit/test_l10n.c \
 		${TEST_DIR}/unit/test_settings.c \
 		${TEST_DIR}/unit/test_player.c \

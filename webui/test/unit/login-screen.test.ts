@@ -16,4 +16,18 @@ describe('LoginScreen', () => {
     expect(body?.textContent).toContain('disconnected from Pandora');
     expect(button?.textContent).toContain('Reconnect to Pandora');
   });
+
+  it('dispatches pandora-reconnect when button is clicked', async () => {
+    const el: LoginScreen = await fixture(html`<login-screen></login-screen>`);
+    await el.updateComplete;
+
+    let fired = false;
+    el.addEventListener('pandora-reconnect', () => {
+      fired = true;
+    });
+
+    const button = el.shadowRoot!.querySelector('button') as HTMLButtonElement;
+    button.click();
+    expect(fired).toBe(true);
+  });
 });

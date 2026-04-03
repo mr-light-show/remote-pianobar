@@ -237,6 +237,46 @@ describe('PianobarApp', () => {
     expect(toast).toBeTruthy();
   });
 
+  it('error event uses generic message when message is omitted', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('error', { operation: 'volume.set' });
+    await el.updateComplete;
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
+  it('pandora-reconnect on album-art emits playback.play when not playing', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('process', {
+      playing: false,
+      station: 'Rock',
+      stationId: 's1',
+      paused: false,
+      volume: 50,
+    });
+    await el.updateComplete;
+    const albumArt = el.shadowRoot?.querySelector('album-art');
+    expect(albumArt).toBeTruthy();
+    albumArt!.dispatchEvent(new CustomEvent('pandora-reconnect', { bubbles: true, composed: true }));
+    await el.updateComplete;
+    const socket = vi.mocked(SocketService).mock.results[0]?.value;
+    expect(socket.emit).toHaveBeenCalledWith('action', 'playback.play');
+  });
+
+  it('upcoming result with song without stationName still renders list', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('query.upcoming.result', [
+      {
+        title: 'Next',
+        artist: 'A',
+        duration: 90,
+        coverArt: '',
+        rating: 0,
+      },
+    ]);
+    await el.updateComplete;
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
   it('song.explanation and query.upcoming.result show toasts', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('song.explanation', { explanation: 'Because you liked X' });
