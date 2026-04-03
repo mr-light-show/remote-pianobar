@@ -1,6 +1,7 @@
 import { html } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t } from '../i18n';
 
 interface Account {
   id: string;
@@ -64,7 +65,7 @@ export class SwitchAccountModal extends ModalBase {
     `;
 
     const footer = this.renderStandardFooter(
-      'Switch',
+      t('web.ui.switch'),
       !this.selectedAccountId || this.selectedAccountId === this.currentAccountId,
       false,
       () => this.handleConfirm()

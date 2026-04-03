@@ -81,8 +81,8 @@ void BarSocketIoEmitProcess(BarApp_t *app);
 void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation);
 
 /* Emit 'error' event (error notification). stationId optional (e.g. for station.change "not found"). */
-void BarSocketIoEmitError(const char *operation, const char *message);
-void BarSocketIoEmitErrorEx(const char *operation, const char *message, const char *stationId);
+void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message);
+void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId);
 
 /* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", or "connection_lost") */
 void BarSocketIoEmitPandoraDisconnected(const char *reason);

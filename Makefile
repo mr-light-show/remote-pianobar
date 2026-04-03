@@ -8,6 +8,7 @@ BINDIR:=${PREFIX}/bin
 LIBDIR:=${PREFIX}/lib
 INCDIR:=${PREFIX}/include
 MANDIR:=${PREFIX}/share/man
+LOCALEDIR:=${PREFIX}/share/pianobar/locale
 DYNLINK:=0
 CFLAGS?=-O2 -DNDEBUG
 
@@ -29,6 +30,11 @@ ifeq (${CC},cc)
 endif
 
 PIANOBAR_DIR:=src
+LOCALE_YAML:=$(wildcard locale/*.yaml)
+LOCALE_GEN_MARKER:=${PIANOBAR_DIR}/l10n_defaults_gen.c
+# Updated when codegen runs; avoids re-running Python on every `make locale-codegen` (e.g. after
+# root `make`, webui `npm run prebuild` only prints GEN if YAML/script changed).
+LOCALE_CODEGEN_STAMP:=.locale-codegen.stamp
 PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/main.c \
 		${PIANOBAR_DIR}/log.c \
@@ -37,6 +43,8 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/bar_state.c \
 		${PIANOBAR_DIR}/playback_manager.c \
 		${PIANOBAR_DIR}/settings.c \
+		${PIANOBAR_DIR}/l10n.c \
+		${PIANOBAR_DIR}/l10n_defaults_gen.c \
 		${PIANOBAR_DIR}/station_display.c \
 		${PIANOBAR_DIR}/terminal.c \
 		${PIANOBAR_DIR}/ui_act.c \
@@ -114,6 +122,18 @@ ifneq ($(NOWEBSOCKET),1)
 	CHECK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs check)
 endif
 
+# First real rule was locale-codegen; without this, bare `make` only runs codegen and
+# never builds pianobar. Default goal must be the binary (locale-codegen is a dep of pianobar).
+.DEFAULT_GOAL := pianobar
+
+$(LOCALE_CODEGEN_STAMP): $(LOCALE_YAML) scripts/locale_codegen.py
+	@echo "  GEN   locale catalogs"
+	@python3 scripts/locale_codegen.py --repo-root .
+	@touch $(LOCALE_CODEGEN_STAMP)
+
+.PHONY: locale-codegen
+locale-codegen: $(LOCALE_CODEGEN_STAMP)
+
 # combine all flags
 ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
 			${LIBAV_CFLAGS} ${LIBCURL_CFLAGS} \
@@ -140,11 +160,11 @@ endif
 
 # build pianobar
 ifeq (${DYNLINK},1)
-pianobar: ${PIANOBAR_OBJ} libpiano.so.0
+pianobar: locale-codegen ${PIANOBAR_OBJ} libpiano.so.0
 	${SILENTECHO} "  LINK  $@"
 	${SILENTCMD}${CC} -o $@ ${PIANOBAR_OBJ} -L. -lpiano ${ALL_LDFLAGS}
 else
-pianobar: ${PIANOBAR_OBJ} ${LIBPIANO_OBJ}
+pianobar: locale-codegen ${PIANOBAR_OBJ} ${LIBPIANO_OBJ}
 	${SILENTECHO} "  LINK  $@"
 	${SILENTCMD}${CC} -o $@ ${PIANOBAR_OBJ} ${LIBPIANO_OBJ} ${ALL_LDFLAGS}
 endif
@@ -179,6 +199,9 @@ src/miniaudio_impl.o: src/miniaudio_impl.c
 	${SILENTECHO} "    CC  $<"
 	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} -Wno-deprecated-declarations -MMD -MF $*.d -MP $<
 
+# Ensure generated strings are up to date before compiling (safe with parallel -j).
+${PIANOBAR_DIR}/l10n_defaults_gen.o: $(LOCALE_CODEGEN_STAMP)
+
 # build standard object files
 %.o: %.c
 	${SILENTECHO} "    CC  $<"
@@ -193,7 +216,8 @@ clean:
 	${SILENTECHO} " CLEAN"
 	${SILENTCMD}${RM} ${PIANOBAR_OBJ} ${LIBPIANO_OBJ} \
 			${LIBPIANO_RELOBJ} pianobar libpiano.so* \
-			libpiano.a $(PIANOBAR_SRC:.c=.d) $(LIBPIANO_SRC:.c=.d)
+			libpiano.a $(PIANOBAR_SRC:.c=.d) $(LIBPIANO_SRC:.c=.d) \
+			$(LOCALE_CODEGEN_STAMP)
 
 all: pianobar
 	@echo "Build complete. Running tests..."
@@ -208,6 +232,10 @@ endif
 	install -m755 pianobar ${DESTDIR}${BINDIR}/
 	install -d ${DESTDIR}${MANDIR}/man1/
 	install -m644 contrib/pianobar.1 ${DESTDIR}${MANDIR}/man1/
+	install -d ${DESTDIR}${LOCALEDIR}/
+	@for f in locale/*; do \
+		case $$f in *.yaml) ;; *) test -f "$$f" && install -m644 "$$f" "${DESTDIR}${LOCALEDIR}/" ;; esac; \
+	done
 
 install-libpiano:
 	install -d ${DESTDIR}${LIBDIR}/
@@ -236,6 +264,9 @@ TEST_SRC:=\
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
+		${TEST_DIR}/unit/test_error_messages.c \
+		${TEST_DIR}/unit/test_ui_act_reconnect.c \
+		${TEST_DIR}/unit/test_l10n.c \
 		${TEST_DIR}/unit/test_settings.c \
 		${TEST_DIR}/unit/test_player.c \
 		${TEST_DIR}/unit/test_bar_state.c
@@ -243,9 +274,9 @@ TEST_OBJ:=${TEST_SRC:.c=.o}
 TEST_BIN:=pianobar_test
 
 # Build test suite (only link the modules being tested)
-${TEST_BIN}: ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
+${TEST_BIN}: locale-codegen ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}
@@ -281,6 +312,7 @@ test-coverage: clean
 	${SILENTECHO} "   COV   Generating coverage report..."
 	${SILENTCMD}lcov --capture --directory . --output-file coverage.info --rc lcov_branch_coverage=1
 	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info --rc lcov_branch_coverage=1
+	${SILENTCMD}lcov --remove coverage.info '*l10n_defaults_gen.c' --output-file coverage.info --rc lcov_branch_coverage=1
 	${SILENTECHO} "   COV   Coverage report: coverage.info"
 
 # Clean coverage files
@@ -341,4 +373,4 @@ test-asan clean-test-asan test-valgrind:
 	@exit 1
 endif
 
-.PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all
+.PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen

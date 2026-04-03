@@ -89,6 +89,12 @@ describe('PianobarApp', () => {
     expect(el.shadowRoot?.querySelector('h1')?.textContent).not.toBe('Disconnected');
   });
 
+  it('shows localized menu title when connected', async () => {
+    const el = await mountConnectedApp();
+    const menuBtn = el.shadowRoot?.querySelector('.menu-button') as HTMLButtonElement | null;
+    expect(menuBtn?.getAttribute('title')).toBe('Menu');
+  });
+
   it('applies start event and syncs station id from list when stationId missing', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('stations', [{ id: 'sx', name: 'Jazz FM' }]);
@@ -229,6 +235,46 @@ describe('PianobarApp', () => {
     await el.updateComplete;
     const toast = document.querySelector('toast-notification');
     expect(toast).toBeTruthy();
+  });
+
+  it('error event uses generic message when message is omitted', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('error', { operation: 'volume.set' });
+    await el.updateComplete;
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
+  it('pandora-reconnect on album-art emits playback.play when not playing', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('process', {
+      playing: false,
+      station: 'Rock',
+      stationId: 's1',
+      paused: false,
+      volume: 50,
+    });
+    await el.updateComplete;
+    const albumArt = el.shadowRoot?.querySelector('album-art');
+    expect(albumArt).toBeTruthy();
+    albumArt!.dispatchEvent(new CustomEvent('pandora-reconnect', { bubbles: true, composed: true }));
+    await el.updateComplete;
+    const socket = vi.mocked(SocketService).mock.results[0]?.value;
+    expect(socket.emit).toHaveBeenCalledWith('action', 'playback.play');
+  });
+
+  it('upcoming result with song without stationName still renders list', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('query.upcoming.result', [
+      {
+        title: 'Next',
+        artist: 'A',
+        duration: 90,
+        coverArt: '',
+        rating: 0,
+      },
+    ]);
+    await el.updateComplete;
+    expect(document.querySelector('toast-notification')).toBeTruthy();
   });
 
   it('song.explanation and query.upcoming.result show toasts', async () => {

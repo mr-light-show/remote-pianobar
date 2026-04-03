@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t } from '../i18n';
 
 interface Station {
   id: string;
@@ -81,7 +82,7 @@ export class QuickMixModal extends ModalBase {
       </div>
     `;
     
-    const footer = this.renderStandardFooter('Save', false, false, () => this.handleSave());
+    const footer = this.renderStandardFooter(t('web.ui.save'), false, false, () => this.handleSave());
     
     return this.renderModal(body, footer);
   }

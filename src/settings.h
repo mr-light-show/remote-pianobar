@@ -176,6 +176,8 @@ typedef struct {
 	
 	/* ALSA mixer control name (e.g., "Digital", "Master") */
 	char *alsaMixer;
+	/* BCP 47 language tag or short code (e.g. en, de); see README — localization */
+	char *locale;
 } BarSettings_t;
 
 #include <piano.h>

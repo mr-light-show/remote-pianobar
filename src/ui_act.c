@@ -364,7 +364,7 @@ BarUiActCallback(BarUiActExplain) {
 				"Receiving explanation", &pRet, &wRet);
 		#ifdef WEBSOCKET_ENABLED
 		if (!callSuccess) {
-			BarSocketIoEmitError("song.explain", "Failed to receive explanation");
+			BarSocketIoEmitError(app, "song.explain", "Failed to receive explanation");
 		}
 		#endif
 	}
@@ -378,7 +378,7 @@ BarUiActCallback(BarUiActExplain) {
 			/* Notify WebSocket clients that no explanation was available */
 			#ifdef WEBSOCKET_ENABLED
 			if (isWebSocketRequest) {
-				BarSocketIoEmitError("song.explain", "No explanation provided by Pandora");
+				BarSocketIoEmitError(app, "song.explain", "No explanation provided by Pandora");
 			}
 			#endif
 		} else {
@@ -681,7 +681,7 @@ BarUiActCallback(BarUiActPrintUpcoming) {
 		/* Notify WebSocket clients that no songs are queued */
 		#ifdef WEBSOCKET_ENABLED
 		if (isWebSocketRequest) {
-			BarSocketIoEmitError("query.upcoming", "No songs in queue");
+			BarSocketIoEmitError(app, "query.upcoming", "No songs in queue");
 		}
 		#endif
 	}
@@ -1223,7 +1223,7 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 		BarUiMsg(&app->settings, MSG_ERR, 
 			"Cannot reconnect: No credentials configured.\n");
 #ifdef WEBSOCKET_ENABLED
-		BarSocketIoEmitError("app.pandora-reconnect", "No credentials configured");
+		BarSocketIoEmitError(app, "app.pandora-reconnect", "No credentials configured");
 #endif
 		return;
 	}
@@ -1304,7 +1304,7 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 			BarStateSetNextStation(app, station);
 		} else {
 #ifdef WEBSOCKET_ENABLED
-			BarSocketIoEmitErrorEx("app.pandora-reconnect", "Last station was deleted", app->lastStationId);
+			BarSocketIoEmitErrorEx(app, "app.pandora-reconnect", "Last station was deleted", app->lastStationId);
 #endif
 		}
 		free(app->lastStationId);

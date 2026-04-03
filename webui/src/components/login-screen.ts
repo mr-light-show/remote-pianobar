@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 @customElement('login-screen')
 export class LoginScreen extends LitElement {
@@ -92,13 +93,13 @@ export class LoginScreen extends LitElement {
   render() {
     return html`
       <span class="icon material-icons">cloud_off</span>
-      <h2>Not Connected to Pandora</h2>
+      <h2>${t('web.ui.login_screen_heading')}</h2>
       <p class="description">
-        You've been disconnected from Pandora. Click below to reconnect and access your stations.
+        ${t('web.ui.login_screen_body')}
       </p>
       <button @click=${this.handleReconnect}>
         <span class="material-icons">login</span>
-        Reconnect to Pandora
+        ${t('web.ui.login_screen_button')}
       </button>
     `;
   }

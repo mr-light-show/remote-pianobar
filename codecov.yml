@@ -1,0 +1,8 @@
+# https://docs.codecov.com/docs/codecovyml-reference
+coverage:
+  status:
+    project: off
+    patch: off
+
+ignore:
+  - "src/l10n_defaults_gen.c"

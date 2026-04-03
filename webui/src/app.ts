@@ -2,6 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { SocketService } from './services/socket-service';
 import { resolveStationIdFromStationsList } from './station-sync';
+import { t, tf } from './i18n';
 
 import './components/album-art';
 import './components/progress-bar';
@@ -29,9 +30,9 @@ export class PianobarApp extends LitElement {
   
   @state() private connected = false;
   @state() private albumArt = '';
-  @state() private songTitle = 'Not Playing';
+  @state() private songTitle = t('web.ui.not_playing');
   @state() private albumName = '';
-  @state() private artistName = '—';
+  @state() private artistName = t('web.ui.em_dash');
   @state() private playing = false;
   @state() private paused = false;
   @state() private currentTime = 0;
@@ -354,9 +355,9 @@ export class PianobarApp extends LitElement {
       this.pandoraConnected = false;
       // Clear currently playing song / playback state; keep stations
       this.albumArt = '';
-      this.songTitle = 'Not Playing';
+      this.songTitle = t('web.ui.not_playing');
       this.albumName = '';
-      this.artistName = '—';
+      this.artistName = t('web.ui.em_dash');
       this.playing = false;
       this.paused = false;
       this.currentTime = 0;
@@ -382,9 +383,9 @@ export class PianobarApp extends LitElement {
       // Update UI with current state
       if (data.song) {
         this.albumArt = data.song.coverArt || '';
-        this.songTitle = data.song.title || 'Not Playing';
+        this.songTitle = data.song.title || t('web.ui.not_playing');
         this.albumName = data.song.album || '';
-        this.artistName = data.song.artist || '—';
+        this.artistName = data.song.artist || t('web.ui.em_dash');
         this.totalTime = data.song.duration || 0;
         this.playing = data.playing || false;
         this.rating = data.song.rating || 0;
@@ -398,11 +399,11 @@ export class PianobarApp extends LitElement {
       } else {
         // No song playing
         this.albumArt = '';
-        this.songTitle = 'Not Playing';
+        this.songTitle = t('web.ui.not_playing');
         this.albumName = '';
         // Check if a station is selected - if not, show helpful message
         const hasStation = data.station && data.station !== '';
-        this.artistName = hasStation ? '—' : 'Select a station to play';
+        this.artistName = hasStation ? t('web.ui.em_dash') : t('web.ui.select_station_to_play');
         this.playing = false;
         this.paused = false;
         this.currentTime = 0;
@@ -453,18 +454,18 @@ export class PianobarApp extends LitElement {
       if (Array.isArray(data) && data.length > 0) {
         this.showUpcomingSongsToast(data);
       } else {
-        this.showToast('No upcoming songs in queue');
+        this.showToast(t('web.query_upcoming_empty'));
       }
     });
     
     // Error event
     this.socket.on('error', (data: { operation?: string; message?: string; stationId?: string }) => {
       console.error('Received error:', data);
-      const message = data.message || 'An error occurred';
+      const message = data.message || t('web.ui.error_generic');
       const operation = data.operation || '';
       if (operation === 'station.change' && (message.toLowerCase().includes('not found') || data.stationId)) {
         const stationId = data.stationId || this.currentStationId;
-        this.showToast('Station was deleted or is no longer available');
+        this.showToast(t('web.ui.toast_station_deleted'));
         if (stationId) {
           this.stations = this.stations.filter((s: { id: string }) => s.id !== stationId);
           if (this.currentStationId === stationId) {
@@ -476,7 +477,7 @@ export class PianobarApp extends LitElement {
       }
       if (operation === 'app.pandora-reconnect' && message.toLowerCase().includes('last station')) {
         const stationId = data.stationId;
-        this.showToast('Last station was deleted. Please select a station.');
+        this.showToast(t('web.ui.toast_last_station_deleted'));
         if (stationId) {
           this.stations = this.stations.filter((s: { id: string }) => s.id !== stationId);
           if (this.currentStationId === stationId) {
@@ -490,7 +491,7 @@ export class PianobarApp extends LitElement {
       if (operation === 'playback.play' || operation === 'app.pandora-reconnect') {
         this.playing = false;
       }
-      this.showToast(`❌ ${message}`);
+      this.showToast(tf('web.ui.toast_error', { message }));
     });
   }
   
@@ -551,7 +552,7 @@ export class PianobarApp extends LitElement {
     this.switchAccountModalOpen = false;
     if (accountId && accountId !== this.currentAccountId) {
       this.currentAccountId = accountId;
-      this.showToast('Switching account...');
+      this.showToast(t('web.ui.toast_switching_account'));
       this.socket.emit('action', { action: 'app.pandora-reconnect', account_id: accountId });
     }
   }
@@ -651,7 +652,7 @@ export class PianobarApp extends LitElement {
     this.createStationModalOpen = false;
     this.searchResults = { categories: [] };
     this.searchLoading = false;
-    this.showToast('Adding shared station...');
+    this.showToast(t('web.ui.toast_adding_shared_station'));
   }
   
   handleBrowseGenres() {
@@ -670,7 +671,7 @@ export class PianobarApp extends LitElement {
   handleCancelPlayNewStation() {
     this.playNewStationModalOpen = false;
     this.newStationId = null;
-    this.showToast(`Station "${this.newStationName}" created`);
+    this.showToast(tf('web.ui.toast_station_created', { name: this.newStationName }));
   }
   
   handleInfoDeleteStation() {
@@ -681,7 +682,7 @@ export class PianobarApp extends LitElement {
     const station = this.stations.find(s => s.id === e.detail.stationId);
     if (station) {
       this.socket.emit('station.delete', station.id);
-      this.showToast(`Deleting station "${station.name}"...`);
+      this.showToast(tf('web.ui.toast_deleting_station', { name: station.name }));
       this.selectStationModalOpen = false;
     }
   }
@@ -716,7 +717,7 @@ export class PianobarApp extends LitElement {
     this.addMusicModalOpen = false;
     this.searchResults = { categories: [] };
     this.searchLoading = false;
-    this.showToast('Adding music to station...');
+    this.showToast(t('web.ui.toast_adding_music'));
   }
   
   handleAddMusicCancel() {
@@ -733,7 +734,7 @@ export class PianobarApp extends LitElement {
     const { stationId, newName } = e.detail;
     this.socket.emit('station.rename', { stationId, newName });
     this.renameStationModalOpen = false;
-    this.showToast('Renaming station...');
+    this.showToast(t('web.ui.toast_renaming_station'));
   }
   
   handleRenameStationCancel() {
@@ -747,7 +748,7 @@ export class PianobarApp extends LitElement {
       // Fetch modes immediately when opening modal
       this.handleGetStationModes();
     } else {
-      this.showToast('No station currently playing');
+      this.showToast(t('web.ui.toast_no_station_playing'));
     }
   }
   
@@ -764,7 +765,7 @@ export class PianobarApp extends LitElement {
     this.stationModeModalOpen = false;
     this.stationModes = [];
     this.modesLoading = false;
-    this.showToast('Setting station mode...');
+    this.showToast(t('web.ui.toast_setting_mode'));
   }
   
   handleStationModeCancel() {
@@ -780,7 +781,7 @@ export class PianobarApp extends LitElement {
       // Fetch station info immediately when opening modal
       this.handleGetStationInfo();
     } else {
-      this.showToast('No station currently playing');
+      this.showToast(t('web.ui.toast_no_station_playing'));
     }
   }
   
@@ -795,7 +796,7 @@ export class PianobarApp extends LitElement {
     const { seedId, seedType } = e.detail;
     if (this.currentStationId) {
       this.socket.emit('station.deleteSeed', { seedId, seedType, stationId: this.currentStationId });
-      this.showToast('Deleting seed...');
+      this.showToast(t('web.ui.toast_deleting_seed'));
       // Refresh station info after a short delay
       setTimeout(() => {
         if (this.currentStationId) {
@@ -810,7 +811,7 @@ export class PianobarApp extends LitElement {
     const { feedbackId } = e.detail;
     if (this.currentStationId) {
       this.socket.emit('station.deleteFeedback', { feedbackId, stationId: this.currentStationId });
-      this.showToast('Deleting feedback...');
+      this.showToast(t('web.ui.toast_deleting_feedback'));
       // Refresh station info after a short delay
       setTimeout(() => {
         if (this.currentStationId) {
@@ -850,7 +851,7 @@ export class PianobarApp extends LitElement {
     
     const content = html`
       <div>
-        <strong>Upcoming Songs</strong>
+        <strong>${t('web.ui.upcoming_heading')}</strong>
         <div class="song-list">
           ${songs.map((song, index) => html`
             <div class="song-item">
@@ -862,7 +863,7 @@ export class PianobarApp extends LitElement {
                 <p class="song-title">${song.title}</p>
                 <p class="song-artist">${song.artist}</p>
                 ${song.stationName ? html`
-                  <p class="song-station">Station: ${song.stationName}</p>
+                  <p class="song-station">${tf('web.ui.upcoming_station_label', { name: song.stationName })}</p>
                 ` : ''}
               </div>
               ${song.rating === 1 ? html`
@@ -886,7 +887,7 @@ export class PianobarApp extends LitElement {
       <div class="content-wrapper">
         ${this.connected ? html`
           <div class="menu-container">
-            <button class="menu-button" @click=${this.toggleMenu} title="Menu">
+            <button class="menu-button" @click=${this.toggleMenu} title="${t('web.ui.menu')}">
               <span class="material-icons">menu</span>
             </button>
             <info-menu
@@ -914,9 +915,9 @@ export class PianobarApp extends LitElement {
         ></album-art>
         
         <div class="song-info">
-          <h1>${this.connected ? this.songTitle : 'Disconnected'}</h1>
+          <h1>${this.connected ? this.songTitle : t('web.ui.disconnected')}</h1>
           ${this.connected && this.albumName ? html`<p class="album">${this.albumName}</p>` : ''}
-          <p class="artist">${this.connected ? this.artistName : '—'}</p>
+          <p class="artist">${this.connected ? this.artistName : t('web.ui.em_dash')}</p>
         </div>
         
         <progress-bar 
@@ -937,7 +938,7 @@ export class PianobarApp extends LitElement {
                   class="rating-button ${this.rating === 1 ? 'loved' : ''}"
                   ?disabled="${!this.currentStationId}"
                   @click=${this.toggleRatingMenu}
-                  title="${!this.currentStationId ? 'Select a station first' : (this.rating === 1 ? 'Loved' : 'Rate this song')}"
+                  title="${!this.currentStationId ? t('web.ui.select_station_first_tooltip') : (this.rating === 1 ? t('web.ui.loved_tooltip') : t('web.ui.rate_song_tooltip'))}"
                 >
                   <span class="${this.rating === 1 ? 'material-icons' : 'material-icons-outlined'}">
                     ${this.rating === 1 ? 'thumb_up' : 'thumbs_up_down'}
@@ -1030,8 +1031,8 @@ export class PianobarApp extends LitElement {
         
         <select-station-modal
           ?open="${this.selectStationModalOpen}"
-          title="Delete Station"
-          confirmText="Delete"
+          title="${t('web.ui.delete_station_modal_title')}"
+          .confirmText=${t('web.ui.delete')}
           ?confirmDanger="${true}"
           .stations="${this.stations}"
           @station-select=${this.handleStationSelectedForDelete}

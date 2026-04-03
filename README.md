@@ -334,6 +334,30 @@ For more information, see:
 - API protocol: `WEBSOCKET_PROTOCOL.md`
 - Original repository: https://github.com/PromyLOPh/pianobar
 
+### Localization (player and web UI)
+
+User-visible strings for the C player, WebSocket error payloads, daemon, and bundled **web UI** are maintained in **one canonical YAML file per language** under `locale/` (for example `locale/en.yaml`). Nested groups in YAML are flattened to dot-separated keys (for example `web.ui.cancel`, `error.ws.network`).
+
+**Regenerate build artifacts** after editing YAML (requires **Python 3** with **PyYAML**):
+
+```bash
+make locale-codegen
+```
+
+This updates, from every `locale/<lang>.yaml`:
+
+- `locale/<lang>` — single-line `key = value` files consumed by the C locale loader (`src/l10n.c`)
+- `webui/src/locales/<lang>.json` — flat JSON for the Lit app (`webui/src/i18n.ts` via `t()` / `tf()`)
+- `src/l10n_defaults_gen.c` — compiled-in fallback table when no external file is found
+
+The root `Makefile` runs `locale-codegen` before linking the binary and tests. For web UI–only work, `npm test` / `npm run build` under `webui/` run `make -C .. locale-codegen` first via `pretest` / `prebuild`.
+
+**Runtime lookup order** for the C player: optional environment `PIANOBAR_LOCALE_DIR/<lang>`; then `locale/<lang>` under `$XDG_CONFIG_HOME/pianobar` or `~/.config/pianobar`; then `$PIANOBAR_INSTALL_PREFIX/share/pianobar/locale/<lang>` (prefix defaults to `/usr/local` if unset); finally the embedded defaults from `l10n_defaults_gen.c`. Set the **`locale`** key in the pianobar config (for example `locale = de`) to choose a language id matching `locale/<id>.yaml`.
+
+**Adding a language:** add `locale/<id>.yaml` (copy `en.yaml` as a template), run `make locale-codegen`, and install the generated `locale/<id>` file with the rest of the locale directory. **Smoke test:** copy `locale/en` to `locale/de`, change one string, set `locale = de`, and confirm that string appears in the CLI or web UI.
+
+Cross-repo note: Home Assistant (`remote-pianobar-ha`) and the Lovelace card (`remote_pianobar_card`) keep their own translation files; when the same user-facing concept appears in more than one repo, align **keys and English** manually (see `.cursor/rules/localization-user-facing.mdc`).
+
 ## FAQ
 
 ### How can I have pianobar use port 80 on Ubuntu?

@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 @customElement('album-art')
 export class AlbumArt extends LitElement {
@@ -130,11 +131,11 @@ export class AlbumArt extends LitElement {
       return html`
         <div class="reconnect-panel error">
           <span class="icon material-icons">sync_problem</span>
-          <h3>Connection Lost</h3>
-          <p>Unable to connect to pianobar server.</p>
-          <button @click=${this.handleWebsocketReconnect} title="Reconnect">
+          <h3>${t('web.ui.connection_lost_heading')}</h3>
+          <p>${t('web.ui.connection_lost_body')}</p>
+          <button @click=${this.handleWebsocketReconnect} title="${t('web.ui.reconnect')}">
             <span class="material-icons">sync</span>
-            Reconnect
+            ${t('web.ui.reconnect')}
           </button>
         </div>
       `;
@@ -145,11 +146,11 @@ export class AlbumArt extends LitElement {
       return html`
         <div class="reconnect-panel">
           <span class="icon material-icons">cloud_off</span>
-          <h3>Not Connected to Pandora</h3>
-          <p>Click below to reconnect and access your stations.</p>
-          <button @click=${this.handlePandoraReconnect} title="Reconnect">
+          <h3>${t('web.ui.pandora_off_heading')}</h3>
+          <p>${t('web.ui.pandora_off_body_short')}</p>
+          <button @click=${this.handlePandoraReconnect} title="${t('web.ui.reconnect')}">
             <span class="material-icons">login</span>
-            Reconnect
+            ${t('web.ui.reconnect')}
           </button>
         </div>
       `;

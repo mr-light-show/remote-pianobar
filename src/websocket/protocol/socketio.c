@@ -688,20 +688,21 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 }
 
 /* Emit 'error' event (error notification) */
-void BarSocketIoEmitError(const char *operation, const char *message) {
-	BarSocketIoEmitErrorEx(operation, message, NULL);
+void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message) {
+	BarSocketIoEmitErrorEx(app, operation, message, NULL);
 }
 
-void BarSocketIoEmitErrorEx(const char *operation, const char *message, const char *stationId) {
+void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId) {
 	json_object *data;
 	const char *friendlyMessage;
+	const BarL10nContext_t *l10n = app ? &app->l10n : NULL;
 	
 	if (!operation || !message) {
 		return;
 	}
 	
 	/* Translate to user-friendly message */
-	friendlyMessage = BarWsGetFriendlyErrorMessage(operation, message);
+	friendlyMessage = BarWsGetFriendlyErrorMessage(l10n, operation, message);
 	
 	data = json_object_new_object();
 	json_object_object_add(data, "operation", 
@@ -758,7 +759,7 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 	BarSocketIoOnPandoraRequestFailed(*pRet);
 	char buf[BAR_BUF_SMALL];
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
-	BarSocketIoEmitError(operation, buf);
+	BarSocketIoEmitError(app, operation, buf);
 	return false;
 }
 
@@ -1011,7 +1012,7 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	/* Check if station is shared (QuickMix) and transform if needed */
 	if (!BarWsTransformIfShared(app, station)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - failed to transform\n");
-		BarSocketIoEmitError("station.addMusic", "Failed to transform station");
+		BarSocketIoEmitError(app, "station.addMusic", "Failed to transform station");
 		return;
 	}
 	
@@ -1065,7 +1066,7 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	/* Check if station is shared and transform if needed */
 	if (!BarWsTransformIfShared(app, station)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - failed to transform\n");
-		BarSocketIoEmitError("station.rename", "Failed to transform station");
+		BarSocketIoEmitError(app, "station.rename", "Failed to transform station");
 		return;
 	}
 	
@@ -1617,7 +1618,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			if (accountId) {
 				if (!BarSettingsSetActiveAccountById(&app->settings, accountId)) {
 					log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown account_id: %s\n", accountId);
-					BarSocketIoEmitErrorEx("app.pandora-reconnect", "Unknown account", accountId);
+					BarSocketIoEmitErrorEx(app, "app.pandora-reconnect", "Unknown account", accountId);
 					return;
 				}
 				log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to account '%s', calling reconnect directly\n", accountId);
@@ -1685,7 +1686,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		}
 		
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' failed: %s\n", action, errorMsg);
-		BarSocketIoEmitError(action, errorMsg);
+		BarSocketIoEmitError(app, action, errorMsg);
 		return;
 	}
 
@@ -1748,7 +1749,7 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
-		BarSocketIoEmitErrorEx("station.change", "Station not found", stationId);
+		BarSocketIoEmitErrorEx(app, "station.change", "Station not found", stationId);
 	}
 }
 

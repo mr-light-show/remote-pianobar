@@ -1,6 +1,7 @@
 import { html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t, tf } from '../i18n';
 
 interface StationMode {
   id: number;
@@ -34,7 +35,7 @@ export class StationModeModal extends ModalBase {
     super.updated(changedProperties);
     // Update title when station name changes
     if (changedProperties.has('currentStationName') && this.currentStationName) {
-      this.title = `Station Mode: ${this.currentStationName}`;
+      this.title = tf('web.ui.station_mode_header', { name: this.currentStationName });
     }
   }
 
@@ -43,7 +44,7 @@ export class StationModeModal extends ModalBase {
     if (!id) {
       return nothing;
     }
-    return html`<div class="station-id-compact" title="Station ID">${id}</div>`;
+    return html`<div class="station-id-compact" title="${t('web.ui.station_id_title')}">${id}</div>`;
   }
   
   handleModeSelect(modeId: number) {
@@ -173,10 +174,10 @@ export class StationModeModal extends ModalBase {
   render() {
     const body = html`
       <div class="info-note">
-        Note: Changing the station mode will restart playback.
+        ${t('web.ui.station_mode_restart_note')}
       </div>
       
-      ${this.modesLoading ? this.renderLoading('Loading modes...') : html`
+      ${this.modesLoading ? this.renderLoading(t('web.ui.loading_modes')) : html`
         <div class="modes-list">
           ${this.modes.map(mode => html`
             <div 
@@ -192,7 +193,7 @@ export class StationModeModal extends ModalBase {
                   @change=${() => this.handleModeSelect(mode.id)}
                 >
                 <span class="mode-name">${mode.name}</span>
-                ${mode.active ? html`<span class="mode-active-badge">ACTIVE</span>` : ''}
+                ${mode.active ? html`<span class="mode-active-badge">${t('web.ui.active_badge')}</span>` : ''}
               </div>
               <div class="mode-description">${mode.description}</div>
             </div>
@@ -202,7 +203,7 @@ export class StationModeModal extends ModalBase {
     `;
     
     const footer = this.renderStandardFooter(
-      'Set Mode',
+      t('web.ui.set_mode'),
       this.selectedModeId === null || this.modesLoading,
       false,
       () => this.handleSetMode()

@@ -162,7 +162,8 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 	
 	/* ALSA mixer cleanup */
 	free (settings->alsaMixer);
-	
+	free (settings->locale);
+
 	/* Free station display name overrides */
 	if (settings->stationDisplayNameOverrides) {
 		for (size_t i = 0; i < settings->stationDisplayNameOverrideCount; i++) {
@@ -699,6 +700,9 @@ void BarSettingsRead (BarSettings_t *settings) {
 			} else if (streq ("fifo", key)) {
 				free (settings->fifo);
 				settings->fifo = BarSettingsExpandTilde (val, userhome);
+			} else if (streq ("locale", key)) {
+				free (settings->locale);
+				settings->locale = strdup (val);
 			} else if (streq ("audio_pipe", key)) {
 				free (settings->audioPipe);
 				settings->audioPipe = BarSettingsExpandTilde (val, userhome);

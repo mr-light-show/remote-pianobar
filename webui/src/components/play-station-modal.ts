@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t } from '../i18n';
 
 @customElement('play-station-modal')
 export class PlayStationModal extends ModalBase {
@@ -8,7 +9,7 @@ export class PlayStationModal extends ModalBase {
   
   constructor() {
     super();
-    this.title = 'Station Created!';
+    this.title = t('web.ui.play_station_title');
   }
   
   handlePlay() {
@@ -58,14 +59,14 @@ export class PlayStationModal extends ModalBase {
   render() {
     const body = html`
       <p class="message">
-        Play <span class="station-name">${this.stationName}</span> now?
+        ${t('web.ui.play_station_before')}<span class="station-name">${this.stationName}</span>${t('web.ui.play_station_after')}
       </p>
       <div class="buttons">
         <button class="button-cancel" @click=${this.handleCancel}>
-          Later
+          ${t('web.ui.later')}
         </button>
         <button class="button-confirm" @click=${this.handlePlay}>
-          Play Now
+          ${t('web.ui.play_now')}
         </button>
       </div>
     `;

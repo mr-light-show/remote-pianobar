@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include <piano.h>
 
 #include "player.h"
+#include "l10n.h"
 #include "settings.h"
 #include "ui_readline.h"
 
@@ -55,6 +56,7 @@ typedef struct {
 	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: read for getters, write for setters and BarStateCallPandora */
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
 	#endif
+	BarL10nContext_t l10n;
 } BarApp_t;
 
 #include <signal.h>
