@@ -3,7 +3,8 @@
 Generate player locale artifacts from canonical locale/<lang>.yaml files:
   - locale/<lang>           (key = value, settings-style lines)
   - webui/src/locales/<lang>.json
-  - src/l10n_defaults_gen.c (embedded English defaults for bsearch fallback)
+  - src/l10n_defaults_gen.c (embedded English defaults for bsearch fallback; generated —
+    exclude from coverage expectations, see codecov.yml / Makefile test-coverage)
 """
 from __future__ import annotations
 

@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <json-c/json.h>
 #include "../../src/main.h"
+#include "../../src/l10n.h"
 #include "../../src/settings.h"
 #include "../../src/system_volume.h"
 #include "../../src/websocket/core/websocket.h"
@@ -508,6 +509,49 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 }
 END_TEST
 
+/* BarSocketIoEmitErrorEx includes stationId in JSON when set */
+START_TEST (test_socketio_emit_error_ex_with_station_id) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitErrorEx (&app, "station.rename", "Network error", "station-42");
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "stationId") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "station-42") != NULL);
+
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+/* Null message: no broadcast */
+START_TEST (test_socketio_emit_error_ex_null_message) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitErrorEx (&app, "op", NULL, "sid");
+
+	ck_assert_ptr_null (lastBroadcastMessage);
+
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -534,6 +578,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_translate, test_socketio_reject_invalid_command);
 	tcase_add_test(tc_translate, test_socketio_reject_single_letter);
 	tcase_add_test(tc_translate, test_socketio_pandora_reconnect_unknown_account);
+	tcase_add_test(tc_translate, test_socketio_emit_error_ex_with_station_id);
+	tcase_add_test(tc_translate, test_socketio_emit_error_ex_null_message);
 	suite_add_tcase(s, tc_translate);
 	
 	/* Event handler tests */

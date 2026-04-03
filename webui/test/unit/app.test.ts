@@ -89,6 +89,12 @@ describe('PianobarApp', () => {
     expect(el.shadowRoot?.querySelector('h1')?.textContent).not.toBe('Disconnected');
   });
 
+  it('shows localized menu title when connected', async () => {
+    const el = await mountConnectedApp();
+    const menuBtn = el.shadowRoot?.querySelector('.menu-button') as HTMLButtonElement | null;
+    expect(menuBtn?.getAttribute('title')).toBe('Menu');
+  });
+
   it('applies start event and syncs station id from list when stationId missing', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('stations', [{ id: 'sx', name: 'Jazz FM' }]);

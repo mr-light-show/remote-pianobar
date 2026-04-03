@@ -192,6 +192,28 @@ START_TEST (test_settings_get_active_account_empty) {
 }
 END_TEST
 
+START_TEST (test_settings_locale_from_config) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = u\n"
+			"password = p\n"
+			"locale = de_AT.UTF-8\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_ptr_nonnull (s.locale);
+	ck_assert_str_eq (s.locale, "de_AT.UTF-8");
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
 Suite *settings_suite (void) {
 	Suite *s = suite_create ("Settings");
 	TCase *tc = tcase_create ("Core");
@@ -200,6 +222,7 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_main_plus_file_accounts_default);
 	tcase_add_test (tc, test_settings_set_active_account_by_id);
 	tcase_add_test (tc, test_settings_get_active_account_empty);
+	tcase_add_test (tc, test_settings_locale_from_config);
 	suite_add_tcase (s, tc);
 	return s;
 }

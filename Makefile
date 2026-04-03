@@ -264,6 +264,7 @@ TEST_SRC:=\
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
+		${TEST_DIR}/unit/test_error_messages.c \
 		${TEST_DIR}/unit/test_l10n.c \
 		${TEST_DIR}/unit/test_settings.c \
 		${TEST_DIR}/unit/test_player.c \
@@ -310,6 +311,7 @@ test-coverage: clean
 	${SILENTECHO} "   COV   Generating coverage report..."
 	${SILENTCMD}lcov --capture --directory . --output-file coverage.info --rc lcov_branch_coverage=1
 	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info --rc lcov_branch_coverage=1
+	${SILENTCMD}lcov --remove coverage.info '*l10n_defaults_gen.c' --output-file coverage.info --rc lcov_branch_coverage=1
 	${SILENTECHO} "   COV   Coverage report: coverage.info"
 
 # Clean coverage files

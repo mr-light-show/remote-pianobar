@@ -159,6 +159,17 @@ describe('AddMusicModal', () => {
       expect(noResults!.textContent).toContain('Search for an artist or song');
     });
 
+    it('shows localized no results after search returns empty categories', async () => {
+      const element = await setupSearchStage();
+      (element as any).searchPerformed = true;
+      element.searchResults = { categories: [] };
+      element.loading = false;
+      await element.updateComplete;
+
+      const noResults = element.shadowRoot!.querySelector('.no-results');
+      expect(noResults?.textContent).toBe('No results found');
+    });
+
     it('disables search button when input is empty', async () => {
       const element = await setupSearchStage();
 
