@@ -50,6 +50,7 @@ Suite *socketio_suite(void);
 Suite *settings_suite(void);
 Suite *player_suite(void);
 Suite *bar_state_suite(void);
+Suite *l10n_suite(void);
 
 int main(void) {
 	int number_failed;
@@ -63,6 +64,7 @@ int main(void) {
 	srunner_add_suite(sr, settings_suite());
 	srunner_add_suite(sr, player_suite());
 	srunner_add_suite(sr, bar_state_suite());
+	srunner_add_suite(sr, l10n_suite());
 	
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);

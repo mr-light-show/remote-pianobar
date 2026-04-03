@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024
+Copyright (c) 2026
 	Kyle Hawes
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,8 +23,30 @@ THE SOFTWARE.
 
 #pragma once
 
-#include "../../l10n.h"
+#include "settings.h"
 
-/* Translate generic error messages into user-friendly, action-specific messages */
-const char* BarWsGetFriendlyErrorMessage(const BarL10nContext_t *l10n,
-		const char *operation, const char *originalError);
+#include <stddef.h>
+#include <stdbool.h>
+
+typedef struct {
+	char **keys;
+	char **values;
+	size_t count;
+} BarL10nContext_t;
+
+/* Embedded defaults table (generated). */
+const char *BarL10nDefaultLookup (const char *key);
+
+bool BarL10nInit (BarL10nContext_t *ctx, const BarSettings_t *settings);
+void BarL10nDestroy (BarL10nContext_t *ctx);
+
+/* Lookup in loaded file, then embedded defaults. */
+const char *BarL10nGet (const BarL10nContext_t *ctx, const char *key);
+
+/* Try key.module, then key.default, then key. module may be NULL. */
+const char *BarL10nGetModule (const BarL10nContext_t *ctx, const char *baseKey,
+		const char *module);
+
+/* Format string comes from locale at runtime (BarL10nGet(key)); not a compile-time literal. */
+void BarL10nFormat (const BarL10nContext_t *ctx, char *buf, size_t len,
+		const char *key, ...);

@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t, tf } from '../i18n';
 
 interface ArtistSeed {
   seedId: string;
@@ -43,14 +44,14 @@ export class StationSeedsModal extends ModalBase {
   
   constructor() {
     super();
-    this.title = 'Manage Seeds & Feedback';
+    this.title = t('web.ui.station_seeds_title');
   }
   
   updated(changedProperties: Map<string, any>) {
     super.updated(changedProperties);
     // Update title when station name changes
     if (changedProperties.has('currentStationName') && this.currentStationName) {
-      this.title = `Seeds: ${this.currentStationName}`;
+      this.title = tf('web.ui.station_seeds_header', { name: this.currentStationName });
     }
   }
   
@@ -242,10 +243,10 @@ export class StationSeedsModal extends ModalBase {
     );
     
     const body = html`
-      ${this.infoLoading ? this.renderLoading('Loading station info...') : html`
+      ${this.infoLoading ? this.renderLoading(t('web.ui.loading_station_info')) : html`
         ${!hasAnyItems ? html`
           <div class="no-items">
-            No seeds or feedback available for this station.
+            ${t('web.ui.station_seeds_empty')}
           </div>
         ` : html`
           <div class="seeds-container">
@@ -255,7 +256,7 @@ export class StationSeedsModal extends ModalBase {
                   <span class="material-icons chevron ${this.expandedSections.has('artistSeeds') ? 'expanded' : ''}">
                     chevron_right
                   </span>
-                  <span class="section-title">Artist Seeds</span>
+                  <span class="section-title">${t('web.ui.section_artist_seeds')}</span>
                   <span class="section-count">(${this.stationInfo.artistSeeds.length})</span>
                 </div>
                 ${this.expandedSections.has('artistSeeds') ? html`
@@ -267,7 +268,7 @@ export class StationSeedsModal extends ModalBase {
                           <div class="seed-name">${artist.name}</div>
                         </div>
                         <button class="delete-button" @click=${() => this.handleDeleteSeed(artist.seedId, 'artist')}>
-                          Delete
+                          ${t('web.ui.delete')}
                         </button>
                       </div>
                     `)}
@@ -282,7 +283,7 @@ export class StationSeedsModal extends ModalBase {
                   <span class="material-icons chevron ${this.expandedSections.has('songSeeds') ? 'expanded' : ''}">
                     chevron_right
                   </span>
-                  <span class="section-title">Song Seeds</span>
+                  <span class="section-title">${t('web.ui.section_song_seeds')}</span>
                   <span class="section-count">(${this.stationInfo.songSeeds.length})</span>
                 </div>
                 ${this.expandedSections.has('songSeeds') ? html`
@@ -295,7 +296,7 @@ export class StationSeedsModal extends ModalBase {
                           <div class="seed-artist">${song.artist}</div>
                         </div>
                         <button class="delete-button" @click=${() => this.handleDeleteSeed(song.seedId, 'song')}>
-                          Delete
+                          ${t('web.ui.delete')}
                         </button>
                       </div>
                     `)}
@@ -310,7 +311,7 @@ export class StationSeedsModal extends ModalBase {
                   <span class="material-icons chevron ${this.expandedSections.has('stationSeeds') ? 'expanded' : ''}">
                     chevron_right
                   </span>
-                  <span class="section-title">Station Seeds</span>
+                  <span class="section-title">${t('web.ui.section_station_seeds')}</span>
                   <span class="section-count">(${this.stationInfo.stationSeeds.length})</span>
                 </div>
                 ${this.expandedSections.has('stationSeeds') ? html`
@@ -322,7 +323,7 @@ export class StationSeedsModal extends ModalBase {
                           <div class="seed-name">${station.name}</div>
                         </div>
                         <button class="delete-button" @click=${() => this.handleDeleteSeed(station.seedId, 'station')}>
-                          Delete
+                          ${t('web.ui.delete')}
                         </button>
                       </div>
                     `)}
@@ -337,7 +338,7 @@ export class StationSeedsModal extends ModalBase {
                   <span class="material-icons chevron ${this.expandedSections.has('feedback') ? 'expanded' : ''}">
                     chevron_right
                   </span>
-                  <span class="section-title">Feedback</span>
+                  <span class="section-title">${t('web.ui.section_feedback')}</span>
                   <span class="section-count">(${this.stationInfo.feedback.length})</span>
                 </div>
                 ${this.expandedSections.has('feedback') ? html`
@@ -352,7 +353,7 @@ export class StationSeedsModal extends ModalBase {
                           <div class="seed-artist">${feedback.artist}</div>
                         </div>
                         <button class="delete-button" @click=${() => this.handleDeleteFeedback(feedback.feedbackId)}>
-                          Delete
+                          ${t('web.ui.delete')}
                         </button>
                       </div>
                     `)}
@@ -366,7 +367,7 @@ export class StationSeedsModal extends ModalBase {
     `;
     
     const footer = this.renderStandardFooter(
-      'Close',
+      t('web.ui.close'),
       false,
       false,
       () => this.handleCancel()

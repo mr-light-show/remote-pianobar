@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t, tf } from '../i18n';
 
 interface SearchResult {
   name?: string;
@@ -47,7 +48,7 @@ export class CreateStationModal extends ModalBase {
   
   constructor() {
     super();
-    this.title = 'Create Station';
+    this.title = t('web.ui.create_station_title');
   }
   
   handleSelectArtist() {
@@ -353,7 +354,7 @@ export class CreateStationModal extends ModalBase {
           <input
             type="text"
             class="search-input"
-            placeholder="Search for artist or song..."
+            placeholder="${t('web.ui.search_placeholder')}"
             .value=${this.searchQuery}
             @input=${this.handleSearchInput}
             @keydown=${this.handleSearchKeyDown}
@@ -363,7 +364,7 @@ export class CreateStationModal extends ModalBase {
             @click=${this.handleSearch}
             ?disabled=${!this.searchQuery.trim() || this.loading}
           >
-            Search
+            ${t('web.ui.search_button')}
           </button>
         </div>
         
@@ -371,7 +372,7 @@ export class CreateStationModal extends ModalBase {
           <input
             type="text"
             class="search-input"
-            placeholder="Enter shared station ID (digits only)"
+            placeholder="${t('web.ui.shared_station_placeholder')}"
             .value=${this.sharedStationId}
             @input=${this.handleSharedStationInput}
             @keydown=${this.handleSharedStationKeyDown}
@@ -381,20 +382,20 @@ export class CreateStationModal extends ModalBase {
             @click=${this.handleAddSharedStation}
             ?disabled=${!this.sharedStationId.trim()}
           >
-            Add
+            ${t('web.ui.add')}
           </button>
         </div>
       </div>
       
       <div class="divider"></div>
       
-      <div class="search-label">Or create from:</div>
+      <div class="search-label">${t('web.ui.or_create_from')}</div>
       
       <div class="select-options">
         <button class="option-button" @click=${this.handleSelectArtist} ?disabled=${!this.currentTrackToken}>
           <div class="option-main">
             <span class="material-icons">person</span>
-            <span>The current Artist</span>
+            <span>${t('web.ui.create_from_current_artist')}</span>
           </div>
           ${this.currentArtistName ? html`
             <div class="option-detail">${this.currentArtistName}</div>
@@ -404,7 +405,7 @@ export class CreateStationModal extends ModalBase {
         <button class="option-button" @click=${this.handleSelectSong} ?disabled=${!this.currentTrackToken}>
           <div class="option-main">
             <span class="material-icons">music_note</span>
-            <span>The current Song</span>
+            <span>${t('web.ui.create_from_current_song')}</span>
           </div>
           ${this.currentSongName ? html`
             <div class="option-detail">${this.currentSongName}</div>
@@ -414,9 +415,9 @@ export class CreateStationModal extends ModalBase {
         <button class="option-button" @click=${this.handleBrowseGenres}>
           <div class="option-main">
             <span class="material-icons">library_music</span>
-            <span>Genre</span>
+            <span>${t('web.ui.create_from_genre')}</span>
           </div>
-          <div class="option-detail">Select a genre</div>
+          <div class="option-detail">${t('web.ui.create_from_genre_detail')}</div>
         </button>
       </div>
     `;
@@ -430,7 +431,7 @@ export class CreateStationModal extends ModalBase {
         <input
           type="text"
           class="search-input"
-          placeholder="Search for artist or song..."
+          placeholder="${t('web.ui.search_placeholder')}"
           .value=${this.searchQuery}
           @input=${this.handleSearchInput}
           @keydown=${this.handleSearchKeyDown}
@@ -440,7 +441,7 @@ export class CreateStationModal extends ModalBase {
           @click=${this.handleSearch}
           ?disabled=${!this.searchQuery.trim() || this.loading}
         >
-          Search
+          ${t('web.ui.search_button')}
         </button>
       </div>
     `;
@@ -448,9 +449,9 @@ export class CreateStationModal extends ModalBase {
     let resultsContent;
     
     if (this.loading) {
-      resultsContent = this.renderLoading('Searching...');
+      resultsContent = this.renderLoading(t('web.ui.searching'));
     } else if (!this.searchResults?.categories || this.searchResults.categories.length === 0) {
-      resultsContent = html`<div class="no-results">No results found for "${this.searchQuery}"</div>`;
+      resultsContent = html`<div class="no-results">${tf('web.ui.no_results_for_query', { query: this.searchQuery })}</div>`;
     } else {
       resultsContent = html`
         <div class="category-list">
@@ -477,7 +478,7 @@ export class CreateStationModal extends ModalBase {
                         >
                         <span class="result-item-name">
                           ${result.name || result.title}
-                          ${result.artist ? html`<span class="result-item-artist">by ${result.artist}</span>` : ''}
+                          ${result.artist ? html`<span class="result-item-artist">${tf('web.ui.result_by_artist', { artist: result.artist })}</span>` : ''}
                         </span>
                       </label>
                     </div>
@@ -496,7 +497,7 @@ export class CreateStationModal extends ModalBase {
     `;
     
     const footer = this.renderStandardFooter(
-      'Create Station',
+      t('web.ui.create_station_footer'),
       !this.selectedMusicId || this.loading,
       false,
       () => this.handleCreate()
@@ -509,9 +510,9 @@ export class CreateStationModal extends ModalBase {
     let content;
     
     if (this.genreLoading) {
-      content = this.renderLoading('Loading genres...');
+      content = this.renderLoading(t('web.ui.loading_genres'));
     } else if (!this.genreCategories || this.genreCategories.length === 0) {
-      content = html`<div class="no-results">No genres available</div>`;
+      content = html`<div class="no-results">${t('web.ui.no_genres_available')}</div>`;
     } else {
       content = html`
         <div class="category-list">
@@ -553,14 +554,14 @@ export class CreateStationModal extends ModalBase {
     const footer = html`
       <div class="modal-footer">
         <button class="button-cancel" @click=${this.handleBackToSelect}>
-          Back
+          ${t('web.ui.back')}
         </button>
         <button 
           class="button-confirm"
           ?disabled=${!this.selectedMusicId || this.genreLoading}
           @click=${this.handleGenreCreate}
         >
-          Create Station
+          ${t('web.ui.create_station_footer')}
         </button>
       </div>
     `;

@@ -146,10 +146,8 @@ END_TEST
 /* Test: Action dispatch - playback commands */
 START_TEST(test_socketio_translate_playback_commands) {
 	BarApp_t app;
-	BarSettings_t settings;
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
@@ -170,6 +168,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
 }
@@ -178,10 +177,8 @@ END_TEST
 /* Test: Action dispatch - song commands */
 START_TEST(test_socketio_translate_song_commands) {
 	BarApp_t app;
-	BarSettings_t settings;
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
@@ -203,6 +200,7 @@ START_TEST(test_socketio_translate_song_commands) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
 }
@@ -211,12 +209,10 @@ END_TEST
 /* Test: Command translation - volume commands */
 START_TEST(test_socketio_translate_volume_commands) {
 	BarApp_t app;
-	BarSettings_t settings;
 	player_t player;
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
 	memset(&player, 0, sizeof(player));
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	app.player = player;
 	pthread_mutex_init(&app.player.lock, NULL);
@@ -238,6 +234,7 @@ START_TEST(test_socketio_translate_volume_commands) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
 }
@@ -246,10 +243,8 @@ END_TEST
 /* Test: Action dispatch - reject invalid commands */
 START_TEST(test_socketio_reject_invalid_command) {
 	BarApp_t app;
-	BarSettings_t settings;
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
@@ -265,6 +260,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
 }
@@ -273,10 +269,8 @@ END_TEST
 /* Test: Action dispatch - reject single-letter commands */
 START_TEST(test_socketio_reject_single_letter) {
 	BarApp_t app;
-	BarSettings_t settings;
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
@@ -292,6 +286,7 @@ START_TEST(test_socketio_reject_single_letter) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
 }
@@ -300,11 +295,9 @@ END_TEST
 /* Test: Handle query event */
 START_TEST(test_socketio_handle_query) {
 	BarApp_t app;
-	BarSettings_t settings;
 	PianoStation_t station;
 	
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
 	memset(&station, 0, sizeof(station));
 	
 	/* Setup minimal station */
@@ -314,7 +307,7 @@ START_TEST(test_socketio_handle_query) {
 	
 	/* Setup app with station and settings */
 	app.ph.stations = &station;
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.sortOrder = 0;  /* BAR_SORT_NAME_AZ */
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
@@ -335,6 +328,7 @@ START_TEST(test_socketio_handle_query) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	
 	clearBroadcastMock();
 }
@@ -343,10 +337,8 @@ END_TEST
 /* Test: Client keepalive "ping" event is a no-op (no crash, no broadcast) */
 START_TEST(test_socketio_ping_keepalive_noop) {
 	BarApp_t app;
-	BarSettings_t settings;
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);
@@ -364,6 +356,7 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
 }
 END_TEST
@@ -371,12 +364,10 @@ END_TEST
 /* Test: Rating commands emit state update */
 START_TEST(test_socketio_rating_emits_state) {
 	BarApp_t app;
-	BarSettings_t settings;
 	PianoSong_t song;
 	PianoStation_t station;
 	
 	memset(&app, 0, sizeof(app));
-	memset(&settings, 0, sizeof(settings));
 	memset(&song, 0, sizeof(song));
 	memset(&station, 0, sizeof(station));
 	
@@ -394,7 +385,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	
 	app.playlist = &song;
 	app.curStation = &station;
-	app.settings = settings;
+	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
@@ -416,7 +407,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
-	
+	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
 }
 END_TEST
@@ -441,11 +432,9 @@ static void free_settings_accounts (BarApp_t *app) {
 /* EmitProcess JSON includes accounts and current_account when accountCount > 0 */
 START_TEST (test_socketio_emit_process_includes_accounts) {
 	BarApp_t app;
-	BarSettings_t settings;
 
 	memset (&app, 0, sizeof (app));
-	memset (&settings, 0, sizeof (settings));
-	app.settings = settings;
+	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app.settings.volume = 55;
@@ -474,6 +463,7 @@ START_TEST (test_socketio_emit_process_includes_accounts) {
 	ck_assert (strstr (lastBroadcastMessage, "Beta") != NULL);
 
 	free_settings_accounts (&app);
+	BarSettingsDestroy (&app.settings);
 	pthread_mutex_destroy (&app.player.lock);
 	clearBroadcastMock ();
 }
@@ -482,13 +472,11 @@ END_TEST
 /* app.pandora-reconnect with unknown account_id emits error and leaves active index */
 START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 	BarApp_t app;
-	BarSettings_t settings;
 	BarWsContext_t ctx;
 
 	memset (&app, 0, sizeof (app));
-	memset (&settings, 0, sizeof (settings));
 	memset (&ctx, 0, sizeof (ctx));
-	app.settings = settings;
+	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	app.wsContext = &ctx;
 
@@ -515,6 +503,7 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 	ck_assert (strstr (lastBroadcastMessage, "ghost") != NULL);
 
 	free_settings_accounts (&app);
+	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
 }
 END_TEST

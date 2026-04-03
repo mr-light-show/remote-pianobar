@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 @customElement('info-menu')
 export class InfoMenu extends LitElement {
@@ -171,17 +172,17 @@ export class InfoMenu extends LitElement {
         ${this.showAccountSwitch ? html`
           <button class="action-button" @click=${this.handleSwitchAccount}>
             <span class="material-icons">account_circle</span>
-            <span>Switch Account</span>
+            <span>${t('web.ui.menu_switch_account')}</span>
           </button>
           <div class="menu-divider"></div>
         ` : ''}
         <button class="action-button" @click=${this.handleExplain}>
           <span class="material-icons">help_outline</span>
-          <span>Explain why this song is playing</span>
+          <span>${t('web.ui.menu_explain_song')}</span>
         </button>
         <button class="action-button" @click=${this.handleUpcoming}>
           <span class="material-icons">queue_music</span>
-          <span>Show upcoming songs</span>
+          <span>${t('web.ui.menu_upcoming')}</span>
         </button>
         <button class="action-button" @click=${this.handleStationMode}>
           <span class="material-icons">tune</span>
@@ -189,30 +190,30 @@ export class InfoMenu extends LitElement {
         </button>
         <button class="action-button" @click=${this.handleStationSeeds}>
           <span class="material-icons">manage_search</span>
-          <span>Manage Seeds & Feedback</span>
+          <span>${t('web.ui.menu_seeds_feedback')}</span>
         </button>
         
         <div class="menu-divider"></div>
         
         <button class="action-button" @click=${this.handleQuickMix}>
           <span class="material-icons">library_music</span>
-          <span>Set QuickMix stations</span>
+          <span>${t('web.ui.menu_quickmix')}</span>
         </button>
         <button class="action-button" @click=${this.handleCreateStation}>
           <span class="material-icons">add_circle</span>
-          <span>Create station</span>
+          <span>${t('web.ui.menu_create_station')}</span>
         </button>
         <button class="action-button" @click=${this.handleAddMusic}>
           <span class="material-icons">library_add</span>
-          <span>Add music to station</span>
+          <span>${t('web.ui.menu_add_music')}</span>
         </button>
         <button class="action-button" @click=${this.handleRenameStation}>
           <span class="material-icons">edit</span>
-          <span>Rename station</span>
+          <span>${t('web.ui.menu_rename_station')}</span>
         </button>
         <button class="action-button delete" @click=${this.handleDeleteStation}>
           <span class="material-icons">delete</span>
-          <span>Delete station</span>
+          <span>${t('web.ui.menu_delete_station')}</span>
         </button>
       </div>
     `;

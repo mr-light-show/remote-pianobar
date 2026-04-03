@@ -95,9 +95,12 @@ static bool BarMainLoginUser (BarApp_t *app) {
 	reqData.step = 0;
 
 	if (acct && acct->label) {
-		BarUiMsg (&app->settings, MSG_INFO, "Login (%s)... ", acct->label);
+		char lb[256];
+		BarL10nFormat (&app->l10n, lb, sizeof (lb), "cli.login_label", acct->label);
+		BarUiMsg (&app->settings, MSG_INFO, "%s", lb);
 	} else {
-		BarUiMsg (&app->settings, MSG_INFO, "Login... ");
+		BarUiMsg (&app->settings, MSG_INFO, "%s",
+				BarL10nGet (&app->l10n, "cli.login"));
 	}
 	ret = BarUiPianoCall (app, PIANO_REQUEST_LOGIN, &reqData, &pRet, &wRet);
 	BarUiStartEventCmd (&app->settings, "userlogin", NULL, NULL, &app->player,
@@ -109,15 +112,19 @@ static bool BarMainLoginUser (BarApp_t *app) {
 /*	Run a password_command and return the result, or NULL on failure.
  *	Caller must free the returned string.
  */
-static char *BarRunPasswordCommand (const BarSettings_t *settings, const char *cmd) {
+static char *BarRunPasswordCommand (BarApp_t *app, const char *cmd) {
 	pid_t chld;
 	int pipeFd[2];
 	char passBuf[BAR_INPUT_MAX];
+	BarSettings_t *settings = &app->settings;
 
-	BarUiMsg (settings, MSG_INFO, "Requesting password from external helper... ");
+	BarUiMsg (settings, MSG_INFO, "%s",
+			BarL10nGet (&app->l10n, "cli.password_helper"));
 
 	if (pipe (pipeFd) == -1) {
-		BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
+		char eb[256];
+		BarL10nFormat (&app->l10n, eb, sizeof (eb), "error.errno", strerror (errno));
+		BarUiMsg (settings, MSG_NONE, "%s", eb);
 		return NULL;
 	}
 
@@ -130,7 +137,9 @@ static char *BarRunPasswordCommand (const BarSettings_t *settings, const char *c
 		close (pipeFd[1]);
 		exit (1);
 	} else if (chld == -1) {
-		BarUiMsg (settings, MSG_NONE, "Error: %s\n", strerror (errno));
+		char eb[256];
+		BarL10nFormat (&app->l10n, eb, sizeof (eb), "error.errno", strerror (errno));
+		BarUiMsg (settings, MSG_NONE, "%s", eb);
 		return NULL;
 	} else {
 		int status;
@@ -140,7 +149,10 @@ static char *BarRunPasswordCommand (const BarSettings_t *settings, const char *c
 		close (pipeFd[0]);
 
 		if (bytesRead < 0) {
-			BarUiMsg (settings, MSG_NONE, "Error reading password: %s\n", strerror (errno));
+			char eb[256];
+			BarL10nFormat (&app->l10n, eb, sizeof (eb), "cli.password_read_error",
+					strerror (errno));
+			BarUiMsg (settings, MSG_NONE, "%s", eb);
 			waitpid (chld, &status, 0);
 			return NULL;
 		}
@@ -153,10 +165,14 @@ static char *BarRunPasswordCommand (const BarSettings_t *settings, const char *c
 
 		waitpid (chld, &status, 0);
 		if (WEXITSTATUS (status) == 0) {
-			BarUiMsg (settings, MSG_NONE, "Ok.\n");
+			BarUiMsg (settings, MSG_NONE, "%s",
+					BarL10nGet (&app->l10n, "cli.password_ok"));
 			return strdup (passBuf);
 		} else {
-			BarUiMsg (settings, MSG_NONE, "Error: Exit status %i.\n", WEXITSTATUS (status));
+			char eb[256];
+			BarL10nFormat (&app->l10n, eb, sizeof (eb), "cli.password_exit_status",
+					WEXITSTATUS (status));
+			BarUiMsg (settings, MSG_NONE, "%s", eb);
 			return NULL;
 		}
 	}
@@ -166,10 +182,10 @@ static char *BarRunPasswordCommand (const BarSettings_t *settings, const char *c
  *	Sets acct->password if password_command succeeds.
  *	@return true if password is available after resolution.
  */
-static bool BarResolveAccountPassword (const BarSettings_t *settings, BarAccount_t *acct) {
+static bool BarResolveAccountPassword (BarApp_t *app, BarAccount_t *acct) {
 	if (acct->password != NULL) return true;
 	if (acct->passwordCmd != NULL) {
-		acct->password = BarRunPasswordCommand (settings, acct->passwordCmd);
+		acct->password = BarRunPasswordCommand (app, acct->passwordCmd);
 		return (acct->password != NULL);
 	}
 	return false;
@@ -177,8 +193,8 @@ static bool BarResolveAccountPassword (const BarSettings_t *settings, BarAccount
 
 /*	ask for username/password if none were provided in settings
  */
-static bool BarMainGetLoginCredentials (BarSettings_t *settings,
-		BarReadlineFds_t *input) {
+static bool BarMainGetLoginCredentials (BarApp_t *app, BarReadlineFds_t *input) {
+	BarSettings_t *settings = &app->settings;
 
 	bool usernameFromConfig = true;
 
@@ -188,28 +204,38 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		if (acct->username == NULL) {
 			#ifdef WEBSOCKET_ENABLED
 			if (settings->uiMode == BAR_UI_MODE_WEB) {
-				BarUiMsg (settings, MSG_ERR, "Error: Account '%s' has no username.\n",
+				char eb[256];
+				BarL10nFormat (&app->l10n, eb, sizeof (eb), "cli.account_no_username_web",
 						acct->id);
+				BarUiMsg (settings, MSG_ERR, "%s", eb);
 				return false;
 			}
 			#endif
 			char nameBuf[BAR_INPUT_MAX];
-			BarUiMsg (settings, MSG_QUESTION, "Email for account '%s': ", acct->id);
+			char eq[256];
+			BarL10nFormat (&app->l10n, eq, sizeof (eq), "cli.email_for_account",
+					acct->id);
+			BarUiMsg (settings, MSG_QUESTION, "%s", eq);
 			if (BarReadlineStr (nameBuf, sizeof (nameBuf), input, BAR_RL_DEFAULT) == 0)
 				return false;
 			acct->username = strdup (nameBuf);
 		}
 		if (acct->password == NULL) {
-			if (!BarResolveAccountPassword (settings, acct)) {
+			if (!BarResolveAccountPassword (app, acct)) {
 				#ifdef WEBSOCKET_ENABLED
 				if (settings->uiMode == BAR_UI_MODE_WEB) {
-					BarUiMsg (settings, MSG_ERR, "Error: Account '%s' has no password.\n",
-							acct->id);
+					char eb[256];
+					BarL10nFormat (&app->l10n, eb, sizeof (eb),
+							"cli.account_no_password_web", acct->id);
+					BarUiMsg (settings, MSG_ERR, "%s", eb);
 					return false;
 				}
 				#endif
 				char passBuf[BAR_INPUT_MAX];
-				BarUiMsg (settings, MSG_QUESTION, "Password for account '%s': ", acct->id);
+				char pq[256];
+				BarL10nFormat (&app->l10n, pq, sizeof (pq), "cli.password_for_account",
+						acct->id);
+				BarUiMsg (settings, MSG_QUESTION, "%s", pq);
 				if (BarReadlineStr (passBuf, sizeof (passBuf), input, BAR_RL_NOECHO) == 0) {
 					puts ("");
 					return false;
@@ -230,15 +256,16 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 	if (settings->username == NULL) {
 		#ifdef WEBSOCKET_ENABLED
 		if (settings->uiMode == BAR_UI_MODE_WEB) {
-			BarUiMsg (settings, MSG_ERR, "Error: Username not found in config file. "
-					"In web-only mode, credentials must be provided in the config.\n");
+			BarUiMsg (settings, MSG_ERR, "%s",
+					BarL10nGet (&app->l10n, "cli.username_missing_web"));
 			return false;
 		}
 		#endif
 
 		char nameBuf[BAR_INPUT_MAX];
 
-		BarUiMsg (settings, MSG_QUESTION, "Email: ");
+		BarUiMsg (settings, MSG_QUESTION, "%s",
+				BarL10nGet (&app->l10n, "cli.email_prompt"));
 		if (BarReadlineStr (nameBuf, sizeof (nameBuf), input, BAR_RL_DEFAULT) == 0) {
 			return false;
 		}
@@ -249,8 +276,8 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 	if (settings->password == NULL) {
 		#ifdef WEBSOCKET_ENABLED
 		if (settings->uiMode == BAR_UI_MODE_WEB) {
-			BarUiMsg (settings, MSG_ERR, "Error: Password not found in config file. "
-					"In web-only mode, credentials must be provided in the config.\n");
+			BarUiMsg (settings, MSG_ERR, "%s",
+					BarL10nGet (&app->l10n, "cli.password_missing_web"));
 			return false;
 		}
 		#endif
@@ -258,11 +285,15 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 		char passBuf[BAR_INPUT_MAX];
 
 		if (usernameFromConfig) {
-			BarUiMsg (settings, MSG_QUESTION, "Email: %s\n", settings->username);
+			char ee[256];
+			BarL10nFormat (&app->l10n, ee, sizeof (ee), "cli.email_echo",
+					settings->username);
+			BarUiMsg (settings, MSG_QUESTION, "%s", ee);
 		}
 
 		if (settings->passwordCmd == NULL) {
-			BarUiMsg (settings, MSG_QUESTION, "Password: ");
+			BarUiMsg (settings, MSG_QUESTION, "%s",
+					BarL10nGet (&app->l10n, "cli.password_prompt"));
 			if (BarReadlineStr (passBuf, sizeof (passBuf), input, BAR_RL_NOECHO) == 0) {
 				puts ("");
 				return false;
@@ -270,7 +301,7 @@ static bool BarMainGetLoginCredentials (BarSettings_t *settings,
 			puts ("");
 			settings->password = strdup (passBuf);
 		} else {
-			settings->password = BarRunPasswordCommand (settings, settings->passwordCmd);
+			settings->password = BarRunPasswordCommand (app, settings->passwordCmd);
 			if (settings->password == NULL) return false;
 		}
 	}
@@ -285,7 +316,8 @@ static bool BarMainGetStations (BarApp_t *app) {
 	CURLcode wRet;
 	bool ret;
 
-	BarUiMsg (&app->settings, MSG_INFO, "Get stations... ");
+	BarUiMsg (&app->settings, MSG_INFO, "%s",
+			BarL10nGet (&app->l10n, "cli.get_stations"));
 	ret = BarUiPianoCall (app, PIANO_REQUEST_GET_STATIONS, NULL, &pRet, &wRet);
 	
 	/* Update display names after stations are fetched */
@@ -307,22 +339,22 @@ static void BarMainGetInitialStation (BarApp_t *app) {
 				app->settings.autostartStation);
 		BarStateSetNextStation(app, station);
 		if (station == NULL) {
-			BarUiMsg (&app->settings, MSG_ERR,
-					"Error: Autostart station not found.\n");
+			BarUiMsg (&app->settings, MSG_ERR, "%s",
+					BarL10nGet (&app->l10n, "cli.autostart_not_found"));
 		}
 	}
 	
 	/* In web-only mode, don't prompt for station - let the web UI handle it */
 	if (BarIsWebOnlyMode(app) && BarStateGetNextStation(app) == NULL) {
-		BarUiMsg (&app->settings, MSG_INFO,
-				"Waiting for station selection via web interface...\n");
+		BarUiMsg (&app->settings, MSG_INFO, "%s",
+				BarL10nGet (&app->l10n, "cli.wait_station_web"));
 		return;
 	}
 	
 	/* no autostart? ask the user */
 	if (BarStateGetNextStation(app) == NULL) {
 		PianoStation_t *station = BarUiSelectStation (app, BarStateGetStationList(app),
-				"Select station: ", NULL, app->settings.autoselect);
+				BarL10nGet (&app->l10n, "cli.select_station"), NULL, app->settings.autoselect);
 		BarStateSetNextStation(app, station);
 	}
 }
@@ -354,14 +386,16 @@ void BarMainGetPlaylist (BarApp_t *app) {
 	reqData.station = BarStateGetNextStation(app);
 	reqData.quality = app->settings.audioQuality;
 
-	BarUiMsg (&app->settings, MSG_INFO, "Receiving new playlist... ");
+	BarUiMsg (&app->settings, MSG_INFO, "%s",
+			BarL10nGet (&app->l10n, "cli.receiving_playlist"));
 	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
 			&reqData, &pRet, &wRet)) {
 		BarStateSetNextStation(app, NULL);
 	} else {
 		BarStateSetPlaylist(app, reqData.retPlaylist);
 		if (BarStateGetPlaylist(app) == NULL) {
-			BarUiMsg (&app->settings, MSG_INFO, "No tracks left.\n");
+			BarUiMsg (&app->settings, MSG_INFO, "%s",
+					BarL10nGet (&app->l10n, "cli.no_tracks_left"));
 			BarStateSetNextStation(app, NULL);
 		}
 	}
@@ -389,7 +423,8 @@ void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 	/* avoid playing local files */
 	if (curSong->audioUrl == NULL ||
 			strncmp (curSong->audioUrl, httpPrefix, strlen (httpPrefix)) != 0) {
-		BarUiMsg (&app->settings, MSG_ERR, "Invalid song url.\n");
+		BarUiMsg (&app->settings, MSG_ERR, "%s",
+				BarL10nGet (&app->l10n, "cli.invalid_song_url"));
 	} else {
 		player_t * const player = &app->player;
 		BarPlayerReset (player);
@@ -442,7 +477,8 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 	}
 
 	if (!threadExited) {
-		BarUiMsg(&app->settings, MSG_ERR, "Player thread did not exit within 10s, detaching\n");
+		BarUiMsg(&app->settings, MSG_ERR, "%s",
+				BarL10nGet (&app->l10n, "cli.player_thread_detach"));
 		pthread_detach(*playerThread);
 		threadRet = (void *)PLAYER_RET_HARDFAIL;
 	}
@@ -514,7 +550,7 @@ static void BarMainLoop (BarApp_t *app) {
 
 
 
-	if (!BarMainGetLoginCredentials (&app->settings, &app->input)) {
+	if (!BarMainGetLoginCredentials (app, &app->input)) {
 		return;
 	}
 
@@ -545,12 +581,12 @@ static void BarMainLoop (BarApp_t *app) {
 		    BarStateGetCurrentStation(app) == NULL) {
 			#ifdef WEBSOCKET_ENABLED
 			if (app->settings.uiMode == BAR_UI_MODE_WEB) {
-				BarUiMsg(&app->settings, MSG_INFO,
-				         "Waiting for station selection via web interface...\n");
+				BarUiMsg(&app->settings, MSG_INFO, "%s",
+				         BarL10nGet (&app->l10n, "cli.wait_station_web_alt"));
 			} else {
 			#endif
-				BarUiMsg(&app->settings, MSG_INFO,
-				         "No station selected. Press 's' to select a station.\n");
+				BarUiMsg(&app->settings, MSG_INFO, "%s",
+				         BarL10nGet (&app->l10n, "cli.no_station_press_s"));
 			#ifdef WEBSOCKET_ENABLED
 			}
 			#endif
@@ -788,6 +824,11 @@ int main (int argc, char **argv) {
 	BarSettingsInit (&app.settings);
 	BarSettingsRead (&app.settings);
 
+	if (!BarL10nInit (&app.l10n, &app.settings)) {
+		fprintf (stderr, "Failed to initialize localization\n");
+		return 1;
+	}
+
 	/* On macOS with ui_mode=web, relaunch using fork+exec to avoid CoreAudio XPC issues.
 	 * Do this BEFORE acquiring lock so the daemon process is the one that holds the lock. */
 #ifdef __APPLE__
@@ -818,6 +859,8 @@ int main (int argc, char **argv) {
 			
 			if (app.lockFd < 0) {
 				log_write(LOG_ERROR, "Error: Could not acquire lock. Another instance may still be running.\n");
+				BarL10nDestroy (&app.l10n);
+				BarSettingsDestroy (&app.settings);
 				return 1;
 			}
 		}
@@ -915,6 +958,8 @@ int main (int argc, char **argv) {
 			/* Do daemonization steps FIRST to detach from terminal immediately */
 			if (!BarDaemonizeSteps(&app)) {
 				log_write(LOG_ERROR, "Failed to perform daemonization steps\n");
+				BarL10nDestroy (&app.l10n);
+				BarSettingsDestroy (&app.settings);
 				return 1;
 			}
 			
@@ -924,6 +969,8 @@ int main (int argc, char **argv) {
 		} else {
 			/* Should have been relaunched earlier - this shouldn't happen */
 			log_write(LOG_ERROR, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
+			BarL10nDestroy (&app.l10n);
+			BarSettingsDestroy (&app.settings);
 			return 1;
 		}
 #else
@@ -931,6 +978,8 @@ int main (int argc, char **argv) {
 		/* Normal daemonization on non-macOS platforms */
 		if (!BarWsDaemonize(&app)) {
 			log_write(LOG_ERROR, "Failed to daemonize\n");
+			BarL10nDestroy (&app.l10n);
+			BarSettingsDestroy (&app.settings);
 			return 1;
 		}
 
@@ -954,8 +1003,13 @@ int main (int argc, char **argv) {
 	if ((pret = PianoInit (&app.ph, app.settings.partnerUser,
 			app.settings.partnerPassword, app.settings.device,
 			app.settings.inkey, app.settings.outkey)) != PIANO_RET_OK) {
-		BarUiMsg (&app.settings, MSG_ERR, "Initialization failed:"
-				" %s\n", PianoErrorToStr (pret));
+		char einit[256];
+		BarL10nFormat (&app.l10n, einit, sizeof (einit), "cli.piano_init_failed",
+				PianoErrorToStr (pret));
+		BarUiMsg (&app.settings, MSG_ERR, "%s", einit);
+		BarPlayerDestroy (&app.player);
+		BarL10nDestroy (&app.l10n);
+		BarSettingsDestroy (&app.settings);
 		return 0;
 	}
 	
@@ -965,9 +1019,10 @@ int main (int argc, char **argv) {
 		if (app.settings.keys[BAR_KS_HELP] == BAR_KS_DISABLED) {
 			BarUiMsg (&app.settings, MSG_NONE, "\n");
 		} else {
-			BarUiMsg (&app.settings, MSG_NONE,
-					"Press %c for a list of commands.\n",
+			char ph[256];
+			BarL10nFormat (&app.l10n, ph, sizeof (ph), "cli.press_help",
 					app.settings.keys[BAR_KS_HELP]);
+			BarUiMsg (&app.settings, MSG_NONE, "%s", ph);
 		}
 	}
 
@@ -997,13 +1052,18 @@ int main (int argc, char **argv) {
 			/* check for file type, must be fifo */
 			fstat (app.input.fds[1], &s);
 			if (!S_ISFIFO (s.st_mode)) {
-				BarUiMsg (&app.settings, MSG_ERR, "File at %s is not a fifo\n", app.settings.fifo);
+				char fnf[256];
+				BarL10nFormat (&app.l10n, fnf, sizeof (fnf), "cli.fifo_not_fifo",
+						app.settings.fifo);
+				BarUiMsg (&app.settings, MSG_ERR, "%s", fnf);
 				close (app.input.fds[1]);
 				app.input.fds[1] = -1;
 			} else {
 				FD_SET(app.input.fds[1], &app.input.set);
-				BarUiMsg (&app.settings, MSG_INFO, "Control fifo at %s opened\n",
+				char fo[256];
+				BarL10nFormat (&app.l10n, fo, sizeof (fo), "cli.fifo_opened",
 						app.settings.fifo);
+				BarUiMsg (&app.settings, MSG_INFO, "%s", fo);
 			}
 		}
 		app.input.maxfd = app.input.fds[0] > app.input.fds[1] ? app.input.fds[0] :
@@ -1021,7 +1081,8 @@ int main (int argc, char **argv) {
 
 	/* Initialize WebSocket server if enabled */
 	if (!BarWsInit(&app)) {
-		BarUiMsg (&app.settings, MSG_ERR, "Failed to start WebSocket server\n");
+		BarUiMsg (&app.settings, MSG_ERR, "%s",
+				BarL10nGet (&app.l10n, "cli.ws_start_failed"));
 	} else {
 	}
 
@@ -1065,6 +1126,7 @@ int main (int argc, char **argv) {
 	BarSystemVolumeDestroy();
 	
 	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 
 	/* restore terminal attributes, zsh doesn't need this, bash does... */

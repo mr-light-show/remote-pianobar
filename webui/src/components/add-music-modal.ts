@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t, tf } from '../i18n';
 
 interface SearchResult {
   name?: string;
@@ -40,7 +41,7 @@ export class AddMusicModal extends ModalBase {
   
   constructor() {
     super();
-    this.title = 'Add Music to Station';
+    this.title = t('web.ui.add_music_title');
   }
   
   handleStationSelect(stationId: string, stationName: string) {
@@ -51,13 +52,13 @@ export class AddMusicModal extends ModalBase {
   handleNext() {
     if (this.selectedStationId) {
       this.stage = 'search';
-      this.title = `Add Music to ${this.selectedStationName}`;
+      this.title = tf('web.ui.add_music_header', { name: this.selectedStationName });
     }
   }
   
   handleBack() {
     this.stage = 'select-station';
-    this.title = 'Add Music to Station';
+    this.title = t('web.ui.add_music_title');
     this.searchQuery = '';
     this.selectedMusicId = null;
     this.expandedCategories.clear();
@@ -115,7 +116,7 @@ export class AddMusicModal extends ModalBase {
   
   protected onCancel() {
     this.stage = 'select-station';
-    this.title = 'Add Music to Station';
+    this.title = t('web.ui.add_music_title');
     this.selectedStationId = null;
     this.selectedStationName = '';
     this.selectedMusicId = null;
@@ -296,7 +297,7 @@ export class AddMusicModal extends ModalBase {
     `;
     
     const footer = this.renderStandardFooter(
-      'Next',
+      t('web.ui.next'),
       !this.selectedStationId,
       false,
       () => this.handleNext()
@@ -312,7 +313,7 @@ export class AddMusicModal extends ModalBase {
           <input
             type="text"
             class="search-input"
-            placeholder="Search for artist or song..."
+            placeholder="${t('web.ui.search_placeholder')}"
             .value=${this.searchQuery}
             @input=${this.handleSearchInput}
             @keydown=${this.handleSearchKeyDown}
@@ -322,7 +323,7 @@ export class AddMusicModal extends ModalBase {
             @click=${this.handleSearch}
             ?disabled=${!this.searchQuery.trim() || this.loading}
           >
-            Search
+            ${t('web.ui.search_button')}
           </button>
         </div>
       </div>
@@ -331,12 +332,12 @@ export class AddMusicModal extends ModalBase {
     let resultsContent;
     
     if (this.loading) {
-      resultsContent = this.renderLoading('Searching...');
+      resultsContent = this.renderLoading(t('web.ui.searching'));
     } else if (!this.searchResults?.categories || this.searchResults.categories.length === 0) {
       if (this.searchPerformed) {
-        resultsContent = html`<div class="no-results">No results found</div>`;
+        resultsContent = html`<div class="no-results">${t('web.ui.add_music_no_results')}</div>`;
       } else {
-        resultsContent = html`<div class="no-results">Search for an artist or song to add</div>`;
+        resultsContent = html`<div class="no-results">${t('web.ui.add_music_hint_search')}</div>`;
       }
     } else {
       resultsContent = html`
@@ -364,7 +365,7 @@ export class AddMusicModal extends ModalBase {
                         >
                         <span class="result-item-name">
                           ${result.name || result.title}
-                          ${result.artist ? html`<span class="result-item-artist">by ${result.artist}</span>` : ''}
+                          ${result.artist ? html`<span class="result-item-artist">${tf('web.ui.result_by_artist', { artist: result.artist })}</span>` : ''}
                         </span>
                       </label>
                     </div>
@@ -385,17 +386,17 @@ export class AddMusicModal extends ModalBase {
     const footer = html`
       <div class="modal-footer">
         <button class="button-cancel back-button" @click=${this.handleBack}>
-          Back
+          ${t('web.ui.back')}
         </button>
         <button class="button-cancel" @click=${this.handleCancel}>
-          Cancel
+          ${t('web.ui.cancel')}
         </button>
         <button 
           class="button-confirm" 
           ?disabled=${!this.selectedMusicId || this.loading}
           @click=${this.handleAddMusic}
         >
-          Add Music
+          ${t('web.ui.add_music_button')}
         </button>
       </div>
     `;

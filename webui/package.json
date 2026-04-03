@@ -7,6 +7,8 @@
     "url": "https://github.com/mr-light-show/remote-pianobar.git"
   },
   "scripts": {
+    "prebuild": "make -C .. locale-codegen",
+    "pretest": "make -C .. locale-codegen",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

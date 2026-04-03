@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t, tf } from '../i18n';
 
 interface Station {
   id: string;
@@ -19,7 +20,7 @@ export class RenameStationModal extends ModalBase {
   
   constructor() {
     super();
-    this.title = 'Rename Station';
+    this.title = t('web.ui.rename_station_title');
   }
   
   handleStationSelect(stationId: string, stationName: string) {
@@ -31,13 +32,13 @@ export class RenameStationModal extends ModalBase {
     if (this.selectedStationId) {
       this.stage = 'enter-name';
       this.newName = this.selectedStationName; // Pre-fill with current name
-      this.title = `Rename: ${this.selectedStationName}`;
+      this.title = tf('web.ui.rename_station_header', { name: this.selectedStationName });
     }
   }
   
   handleBack() {
     this.stage = 'select-station';
-    this.title = 'Rename Station';
+    this.title = t('web.ui.rename_station_title');
     this.newName = '';
   }
   
@@ -59,7 +60,7 @@ export class RenameStationModal extends ModalBase {
   
   protected onCancel() {
     this.stage = 'select-station';
-    this.title = 'Rename Station';
+    this.title = t('web.ui.rename_station_title');
     this.selectedStationId = null;
     this.selectedStationName = '';
     this.newName = '';
@@ -178,7 +179,7 @@ export class RenameStationModal extends ModalBase {
     `;
     
     const footer = this.renderStandardFooter(
-      'Next',
+      t('web.ui.next'),
       !this.selectedStationId,
       false,
       () => this.handleNext()
@@ -193,13 +194,13 @@ export class RenameStationModal extends ModalBase {
     const body = html`
       <div class="name-input-section">
         <div class="current-station">
-          Current name: <strong>${this.selectedStationName}</strong>
+          ${t('web.ui.current_name_label')} <strong>${this.selectedStationName}</strong>
         </div>
         
         <input
           type="text"
           class="name-input"
-          placeholder="Enter new station name"
+          placeholder="${t('web.ui.new_station_name_placeholder')}"
           .value=${this.newName}
           @input=${this.handleNameInput}
           @keydown=${(e: KeyboardEvent) => {
@@ -211,7 +212,7 @@ export class RenameStationModal extends ModalBase {
         >
         
         <div class="info-note">
-          Note: Pandora may not allow some stations to be renamed.
+          ${t('web.ui.rename_station_note')}
         </div>
       </div>
     `;
@@ -219,17 +220,17 @@ export class RenameStationModal extends ModalBase {
     const footer = html`
       <div class="modal-footer">
         <button class="button-cancel back-button" @click=${this.handleBack}>
-          Back
+          ${t('web.ui.back')}
         </button>
         <button class="button-cancel" @click=${this.handleCancel}>
-          Cancel
+          ${t('web.ui.cancel')}
         </button>
         <button 
           class="button-confirm" 
           ?disabled=${!isChanged}
           @click=${this.handleRename}
         >
-          Rename
+          ${t('web.ui.rename')}
         </button>
       </div>
     `;

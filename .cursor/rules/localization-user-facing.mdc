@@ -1,0 +1,47 @@
+---
+description: Localize user-facing text (HA integration, Lovelace card, player)
+alwaysApply: true
+---
+
+# Localize user-facing text
+
+If the active project supports localization for a surface, **do not** add new user-visible copy as raw English literals in code. Put strings in the appropriate translation layer in the **same change** as the feature.
+
+## User-facing (must go through i18n when supported)
+
+- UI labels, buttons, menus, tooltips, placeholders, section titles, checkboxes, empty/loading states, toasts/snackbars, confirmation text.
+- Home Assistant: config/options flow, entity/device names, service names and field descriptions, `ServiceValidationError` / `HomeAssistantError` text shown in UI, browse/media titles.
+- Lovelace card: visual editor (`pianobar-card-editor`), runtime components, `alt` / `title` on controls and artwork.
+- **Not** user-facing: developer logs, internal IDs, wire protocol constants (`eventcmd` field names stay English), code comments.
+
+## Per-repo sources (no shared monorepo catalog)
+
+| Repo | Authoring source | Generated / runtime artifacts |
+|------|------------------|-------------------------------|
+| **remote-pianobar** | `locale/<lang>.yaml` (canonical) | `locale/<lang>` (`key = value`), `webui/src/locales/<lang>.json`, `src/l10n_defaults_gen.c` via `make locale-codegen`; C uses `BarL10n*`; web UI uses `webui/src/i18n.ts` (`t`, `tf`). |
+| **remote-pianobar-ha** | `custom_components/pianobar/translations/<lang>.json` | Home Assistant translation JSON (nested keys). |
+| **remote_pianobar_card** | `src/translations/<lang>.json` | Flat dot-keys for `cardLocalize` where used. |
+
+## Cross-repo manual sync
+
+When the same user-facing **concept** appears in more than one repo, use the **same logical key** and the **same English string** where formats allow. Edit **`remote-pianobar/locale/en.yaml` first** for player-related copy, then update HA and/or card catalogs in the same PR when practical. There is **no** automated merge across repos; alignment is **manual**, guided by this rule. HA uses nested JSON; card and player web UI use flattened dot keys (for example `web.ui.cancel`); match **`type.name`** (and optional surface suffix) when concepts overlap.
+
+## `remote-pianobar-ha` (integration)
+
+- Use `translation_key` on entities/devices; `translation_domain` + `translation_key` on service errors; translated browse/media titles where applicable.
+- Keep `services.yaml` lean; long prose belongs in the `services` section of translations.
+
+## `remote_pianobar_card` (Lovelace card)
+
+- Prefer `cardLocalize` / `cardLocalizeFormat` with keys in `src/translations/en.json`, and `hass.localize('component.pianobar.…')` when the key exists on the integration.
+- Ensure components that render text receive `hass` from the parent card when lookup depends on it.
+
+## `remote-pianobar` (player)
+
+- **Canonical English** for CLI, WebSocket-friendly errors, and web UI strings lives in `locale/en.yaml`. Run `make locale-codegen` (PyYAML required) so `locale/*`, `webui/src/locales/*.json`, and `l10n_defaults_gen.c` stay in sync. Do not hand-edit generated files.
+- C code uses `BarL10nGet` / `BarL10nFormat` / `BarL10nGetModule`; web UI uses `t` / `tf` from `webui/src/i18n.ts`.
+
+## Checklist for new UI
+
+1. Add or reuse translation keys; avoid duplicate phrasing under different keys.
+2. For HA + card + player overlap, align keys and English across repos manually when the concept is shared.

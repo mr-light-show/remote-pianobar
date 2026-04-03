@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, state, property } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 @customElement('song-actions-menu')
 export class SongActionsMenu extends LitElement {
@@ -141,15 +142,15 @@ export class SongActionsMenu extends LitElement {
       <div class="menu-popup ${this.menuOpen ? '' : 'hidden'}">
         <button class="action-button love ${this.rating === 1 ? 'active' : ''}" @click=${this.handleLove}>
           <span class="material-icons">thumb_up</span>
-          <span>Love Song</span>
+          <span>${t('web.ui.song_actions_love')}</span>
         </button>
         <button class="action-button ban" @click=${this.handleBan}>
           <span class="material-icons">thumb_down</span>
-          <span>Ban Song</span>
+          <span>${t('web.ui.song_actions_ban')}</span>
         </button>
         <button class="action-button tired" @click=${this.handleTired}>
           <span class="material-icons">snooze</span>
-          <span>Snooze (1 month)</span>
+          <span>${t('web.ui.song_actions_snooze')}</span>
         </button>
       </div>
     `;

@@ -1,6 +1,7 @@
 *.o
 *.lo
 *.d
+.locale-codegen.stamp
 # vim swap files
 .*.sw*
 pianobar

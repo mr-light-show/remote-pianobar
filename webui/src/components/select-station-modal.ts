@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { ModalBase } from './modal-base';
+import { t } from '../i18n';
 
 interface Station {
   id: string;
@@ -10,7 +11,7 @@ interface Station {
 
 @customElement('select-station-modal')
 export class SelectStationModal extends ModalBase {
-  @property({ type: String }) confirmText = 'Select';
+  @property({ type: String }) confirmText = t('web.ui.select_station_confirm');
   @property({ type: Boolean }) confirmDanger = false;
   @property({ type: Array }) stations: Station[] = [];
   @property({ type: Boolean}) excludeQuickMix = false;
@@ -54,7 +55,7 @@ export class SelectStationModal extends ModalBase {
       
     const body = html`
       <div class="list-container">
-        ${selectableStations.length === 0 ? html`<p>No stations available.</p>` : ''}
+        ${selectableStations.length === 0 ? html`<p>${t('web.ui.select_station_modal_empty')}</p>` : ''}
         ${selectableStations.map(station => html`
           <div 
             class="list-item ${this.selectedStationId === station.id ? 'selected' : ''}"

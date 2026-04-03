@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import { property } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 export class ModalBase extends LitElement {
   @property({ type: Boolean }) open = false;
@@ -58,7 +59,7 @@ export class ModalBase extends LitElement {
     return html`
       <div class="modal-footer">
         <button class="button-cancel" @click=${this.handleCancel}>
-          Cancel
+          ${t('web.ui.cancel')}
         </button>
         <button 
           class="button-confirm ${confirmDanger ? 'button-danger' : ''}" 

@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 @customElement('playback-controls')
 export class PlaybackControls extends LitElement {
@@ -89,14 +90,14 @@ export class PlaybackControls extends LitElement {
         @click=${this.handlePlay} 
         class="primary" 
         ?disabled=${this.disabled}
-        title="${this.disabled ? 'Select a station first' : (this.playing && !this.paused ? 'Pause' : 'Play')}"
+        title="${this.disabled ? t('web.ui.select_station_first_tooltip') : (this.playing && !this.paused ? t('web.ui.pause_tooltip') : t('web.ui.play_tooltip'))}"
       >
         <span class="material-icons">${this.playing && !this.paused ? 'pause' : 'play_arrow'}</span>
       </button>
       <button 
         @click=${this.handleNext} 
         ?disabled=${this.disabled}
-        title="${this.disabled ? 'Select a station first' : 'Next Song'}"
+        title="${this.disabled ? t('web.ui.select_station_first_tooltip') : t('web.ui.next_song_tooltip')}"
       >
         <span class="material-icons">skip_next</span>
       </button>

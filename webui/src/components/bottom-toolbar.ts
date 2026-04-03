@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import './stations-popup';
+import { t } from '../i18n';
 
 interface Station {
   id: string;
@@ -112,7 +113,7 @@ export class BottomToolbar extends LitElement {
     const isQuickMix = currentStationObj?.isQuickMix || false;
     
     // Determine what to display on the button
-    let stationDisplayName = this.currentStation || 'Select Station';
+    let stationDisplayName = this.currentStation || t('web.ui.select_station');
     
     if (isQuickMix && this.songStationName) {
       // If it's QuickMix, show the song's station name
@@ -121,7 +122,7 @@ export class BottomToolbar extends LitElement {
     
     return html`
       <div class="button-group">
-        <button @click=${this.toggleStations} title="Select Station">
+        <button @click=${this.toggleStations} title="${t('web.ui.select_station')}">
           <span class="material-icons">${isQuickMix ? 'shuffle' : 'radio'}</span>
           <span>${stationDisplayName}</span>
         </button>

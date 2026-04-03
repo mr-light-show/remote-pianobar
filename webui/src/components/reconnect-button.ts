@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement } from 'lit/decorators.js';
+import { t } from '../i18n';
 
 @customElement('reconnect-button')
 export class ReconnectButton extends LitElement {
@@ -64,7 +65,7 @@ export class ReconnectButton extends LitElement {
   
   render() {
     return html`
-      <button @click=${this.handleReconnect} title="Reconnect">
+      <button @click=${this.handleReconnect} title="${t('web.ui.reconnect')}">
         <span class="material-icons">sync</span>
       </button>
     `;
