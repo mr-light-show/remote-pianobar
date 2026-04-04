@@ -52,6 +52,8 @@ size_t BarUiListSongs (const BarApp_t * const app,
 void BarUiStartEventCmd (const BarSettings_t *, const char *,
 		const PianoStation_t *, const PianoSong_t *, player_t *,
 		PianoStation_t *, PianoReturn_t, CURLcode);
+void BarUiPianoHttpMutexInit (BarApp_t *app);
+void BarUiPianoHttpMutexDestroy (BarApp_t *app);
 bool BarUiPianoCall (BarApp_t * const, const PianoRequestType_t,
 		void *, PianoReturn_t *, CURLcode *);
 bool BarUiPianoCallLogged (BarApp_t * const, const PianoRequestType_t,

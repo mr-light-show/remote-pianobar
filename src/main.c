@@ -1031,6 +1031,7 @@ int main (int argc, char **argv) {
 	
 
 	assert (app.http != NULL);
+	BarUiPianoHttpMutexInit (&app);
 
 
 	/* init fds */
@@ -1105,6 +1106,7 @@ int main (int argc, char **argv) {
 	PianoDestroy (&app.ph);
 	PianoDestroyPlaylist (app.songHistory);
 	PianoDestroyPlaylist (app.playlist);
+	BarUiPianoHttpMutexDestroy (&app);
 	curl_easy_cleanup (app.http);
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);
