@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include <strings.h>
 #include <assert.h>
 #include <ctype.h> /* tolower() */
+#include <pthread.h>
 
 /* waitpid () */
 #include <sys/types.h>
@@ -293,14 +294,34 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	return httpret;
 }
 
+void BarUiPianoHttpMutexInit (BarApp_t *app) {
+	pthread_mutexattr_t attr;
+
+	assert (app != NULL);
+	pthread_mutexattr_init (&attr);
+	pthread_mutexattr_settype (&attr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init (&app->pianoHttpMutex, &attr);
+	pthread_mutexattr_destroy (&attr);
+}
+
+void BarUiPianoHttpMutexDestroy (BarApp_t *app) {
+	if (!app) {
+		return;
+	}
+	pthread_mutex_destroy (&app->pianoHttpMutex);
+}
+
 /*	piano wrapper: prepare/execute http request and pass result back to
- *	libpiano
+ *	libpiano. Holds pianoHttpMutex for the whole call (including nested
+ *	re-login) so only one thread uses app->http / overlapping Piano state.
  */
 bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
 	PianoReturn_t pRetLocal = PIANO_RET_OK;
 	CURLcode wRetLocal = CURLE_OK;
 	bool ret = false;
+
+	pthread_mutex_lock (&app->pianoHttpMutex);
 
 	/* repeat as long as there are http requests to do */
 	do {
@@ -362,6 +383,8 @@ cleanup:
 
 	*pRet = pRetLocal;
 	*wRet = wRetLocal;
+
+	pthread_mutex_unlock (&app->pianoHttpMutex);
 
 	return ret;
 }

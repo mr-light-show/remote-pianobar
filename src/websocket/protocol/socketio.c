@@ -1703,6 +1703,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	 * - BarStateGetCurrentStation() acquires/releases stateRwlock (read)
 	 * - BarStateGetPlaylist() acquires/releases stateRwlock (read)
 	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
+	 * - BarUiPianoCall (Pandora HTTP) serializes on app->pianoHttpMutex
 	 * 
 	 * Lock ordering is safe: stateRwlock (if needed) → player.lock (if needed)
 	 * See src/THREAD_SAFETY.md for details */

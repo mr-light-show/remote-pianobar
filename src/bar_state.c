@@ -30,12 +30,13 @@ THE SOFTWARE.
 #include <string.h>
 #include <stdarg.h>
 
-/*	State rwlock: read for getters, write for setters and BarStateCallPandora.
+/*	State rwlock: read for getters, write for setters (BAR_UI_MODE_BOTH only).
  *	LOCK HIERARCHY: This is Lock #1 in the hierarchy
  *	Must be acquired BEFORE player.lock if both are needed
- *	PROTECTS: Pandora state (stations, playlist, curStation, nextStation, ph)
+ *	PROTECTS: Pointer fields playlist, curStation, nextStation, ph list heads
  *	DURATION: Should be held for microseconds, not milliseconds
  *	NO I/O: Never hold this lock during network calls, disk I/O, or console output
+ *	Pandora HTTP is serialized separately in BarUiPianoCall via pianoHttpMutex.
  *	See src/THREAD_SAFETY.md for complete documentation
  */
 static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operation) {
@@ -103,7 +104,7 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 	     state_rwlock_unlock_internal(app, op_name, fmt, ##__VA_ARGS__), \
 	     _lock_held = 1)
 
-/*	Macro for write-lock + return value (e.g. BarStateCallPandora)
+/*	Macro for write-lock + return value
  */
 #define WITH_STATE_LOCK_WRITE_RETURN(app, op_name, result_var, fmt, ...) \
 	for (int _lock_held = (state_rwlock_wrlock_internal(app, op_name), 0); \
@@ -300,45 +301,6 @@ bool BarStateGetPlayerPaused(const BarApp_t *app) {
 	bool paused = app->player.doPause;
 	pthread_mutex_unlock((pthread_mutex_t *)&app->player.lock);
 	return paused;
-}
-
-/*	Make Pandora API call (thread-safe)
- *	
- *	IMPORTANT: This function holds stateRwlock (write) during network I/O.
- *	This is the ONE documented exception to the "no I/O under lock" rule.
- *	
- *	Why this is necessary:
- *	- BarUiPianoCall() performs: prepare → network → parse → modify state
- *	- The parse step (PianoResponse) directly modifies app->ph.stations,
- *	  app->ph.genreStations, and other Pandora state structures
- *	- These modifications must be atomic - we cannot allow other threads
- *	  to observe partially-updated state (e.g., playlist with some songs
- *	  from old request, some from new request)
- *	
- *	Performance impact:
- *	- Lock hold time: 100-500ms (typical Pandora API latency)
- *	- Call frequency: Low (startup, every ~30min, user actions)
- *	- Affected threads: WebSocket and CLI threads briefly blocked
- *	- Tradeoff: We accept brief blocking to guarantee state consistency
- *	
- *	Alternative considered but rejected:
- *	- Unlock → network call → lock → apply response
- *	- Requires deep refactoring of libpiano to support copy-on-write
- *	- Complex merge logic prone to race conditions and bugs
- *	- Cost/benefit analysis: not worth the implementation complexity
- *	
- *	See src/THREAD_SAFETY.md for complete documentation
- */
-bool BarStateCallPandora(BarApp_t *app, PianoRequestType_t type,
-                         void *data, PianoReturn_t *pRet, CURLcode *wRet) {
-	assert(app != NULL);
-	
-	bool result;
-	WITH_STATE_LOCK_WRITE_RETURN(app, "CallPandora", result,
-	                             "State: CallPandora type=%d -> %s\n", type, result ? "true" : "false") {
-		result = BarUiPianoCall(app, type, data, pRet, wRet);
-	}
-	return result;
 }
 
 /*	Check if logged in to Pandora
