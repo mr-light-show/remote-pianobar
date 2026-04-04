@@ -460,11 +460,15 @@ jobs:
             json-c \
             ffmpeg \
             libwebsockets \
+            check \
             node \
             create-dmg
           # Ensure packages are linked (cache may restore Cellar but not symlinks)
           brew link --overwrite ffmpeg json-c libwebsockets libgcrypt libao || true
-      
+          # Makefile runs pkg-config for `check` on every invocation when WEBSOCKET=1 (test flags).
+          # Locale codegen (make → pianobar → locale-codegen) needs PyYAML.
+          python3 -m pip install pyyaml --break-system-packages
+
       - name: Setup Node.js with caching
         uses: actions/setup-node@v5
         with:
