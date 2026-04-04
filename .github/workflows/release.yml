@@ -1,15 +1,19 @@
 name: Build and Release
 
+# GitHub "immutable releases" (org/repo setting) block adding or replacing assets
+# after a release is published. Triggers on `published` run too late — uploads get
+# HTTP 422. Use `created` so CI runs when the release is created (create a DRAFT
+# release for the tag, let this workflow upload .deb/.dmg, then click Publish).
 permissions:
   contents: write
 
 on:
   release:
-    types: [published]
+    types: [created]
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build and release (e.g. v1.2.3). Create the tag in the repo first, then run this workflow and enter the same tag.'
+        description: 'Tag to build (e.g. v1.2.3). Prefer a draft release for that tag so uploads succeed with immutable releases; or run after creating the tag.'
         required: true
         type: string
 
@@ -29,7 +33,7 @@ jobs:
             RELEASE_TAG="${{ github.event.inputs.tag }}"
           fi
           if [ -z "$RELEASE_TAG" ]; then
-            echo "::error::No tag: provide tag input for workflow_dispatch or publish a release for release event"
+            echo "::error::No tag: provide tag input for workflow_dispatch or create a release for release event"
             exit 1
           fi
           VERSION="${RELEASE_TAG#v}"
@@ -44,7 +48,7 @@ jobs:
           RELEASE_TAG="${{ steps.set.outputs.release_tag }}"
           gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" || \
             gh release create "$RELEASE_TAG" --repo "${{ github.repository }}" \
-              --title "$RELEASE_TAG" --notes ""
+              --draft --title "$RELEASE_TAG" --notes "Building packages… publish after CI uploads assets."
 
   build-amd64:
     name: Build Linux Package (noble_amd64)

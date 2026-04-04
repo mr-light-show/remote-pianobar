@@ -449,6 +449,8 @@ npm run test:e2e
 # Web UI is served from dist/webui/
 ```
 
+**GitHub Releases (immutable releases):** If the repository uses GitHub’s immutable releases, create a **draft** release for the tag first so `.github/workflows/release.yml` can upload `.deb` / `.dmg` assets. When CI finishes, publish the draft. Publishing before uploads complete causes `HTTP 422: Cannot upload assets to an immutable release`. Alternatively run the workflow manually (**Actions → Build and Release → Run workflow**) and enter the tag.
+
 ---
 
 ## Project Structure
