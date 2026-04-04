@@ -76,7 +76,8 @@ jobs:
           sudo apt-get install -y \
             build-essential libao-dev libcurl4-openssl-dev libgcrypt20-dev libjson-c-dev \
             libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libswresample-dev \
-            libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check
+            libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check \
+            python3-yaml
 
       - name: Ensure BLAS/LAPACK installed (required by libsphinxbase)
         run: sudo apt-get update && sudo apt-get install -y libblas-dev liblapack-dev
@@ -294,6 +295,7 @@ jobs:
                 libblas-dev \
                 liblapack-dev \
                 check \
+                python3-yaml \
                 nodejs \
                 npm && \
               make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" clean && \
