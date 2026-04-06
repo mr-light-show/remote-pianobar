@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -18,6 +18,11 @@ jobs:
             libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
             libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
             libblas-dev liblapack-dev check lcov
+
+      # Match build.yml: omit default -DNDEBUG on PRs so HAVE_DEBUGLOG is defined (PIANOBAR_DEBUG).
+      - name: Debug-friendly C flags on pull requests
+        if: github.event_name == 'pull_request'
+        run: echo 'CFLAGS=-g -O0' >> $GITHUB_ENV
 
       - name: Build and test with coverage
         run: make test-coverage

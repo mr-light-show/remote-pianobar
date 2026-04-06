@@ -1,6 +1,9 @@
 *.o
 *.lo
 *.d
+# gcc/gcov coverage (make test-coverage)
+*.gcda
+*.gcno
 .locale-codegen.stamp
 # vim swap files
 .*.sw*
