@@ -62,6 +62,8 @@ Pianobar uses **several synchronization primitives**:
 
 **`pianoHttpMutex` usage:** Initialized with `PTHREAD_MUTEX_RECURSIVE` after `curl_easy_init()` (`BarUiPianoHttpMutexInit`). Every call path that performs Pandora RPC must go through [`BarUiPianoCall`](ui.c) (or `BarUiPianoCallLogged`, which delegates to it). The mutex is held for the full outer call, including nested re-authentication (`LOGIN` from inside the same thread). Destroyed before `curl_easy_cleanup()` (`BarUiPianoHttpMutexDestroy`).
 
+**Session teardown (`PianoDestroy` / `PianoInit`):** [`BarUiDoPandoraDisconnect`](ui_act.c) and [`BarUiActPandoraReconnect`](ui_act.c) reset `app->ph` under the same **`pianoHttpMutex`**, so no thread can run [`BarUiPianoCall`](ui.c) concurrently while the handle is destroyed or re-initialized.
+
 **Key design:** `stateRwlock` and `pianoHttpMutex` address different concerns: quick pointer consistency (BOTH mode) vs **libcurl thread-safety** and serial application of API responses to `app->ph`.
 
 ### Player Lock Architecture

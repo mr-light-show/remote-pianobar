@@ -770,13 +770,21 @@ BarUiActCallback(BarUiActQuit) {
 /*	Internal stop helper - full reset without quitting
  *	Stops playback, clears station/playlist, disconnects from Pandora
  *	@param app application handle
- *	@param reason "user" for manual stop, "idle_timeout" for pause timeout
+ *	@param reason "user" for manual stop, "idle_timeout" for pause timeout,
+ *		"playlist_session_error" when getPlaylist returns P_INTERNAL
+ *	@param resume_station_id_override if non-NULL/non-empty, used for lastStationId
+ *		(e.g. attempted next station); else current station id
  */
-void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
+void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
+		const char *resume_station_id_override) {
 	/* Save station ID for auto-resume on reconnect */
 	PianoStation_t *curStation = BarStateGetCurrentStation(app);
 	free(app->lastStationId);
-	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
+	if (resume_station_id_override != NULL && resume_station_id_override[0] != '\0') {
+		app->lastStationId = strdup(resume_station_id_override);
+	} else {
+		app->lastStationId = curStation ? strdup(curStation->id) : NULL;
+	}
 	
 	/* Stop current playback and wait for the playback manager to finish
 	 * cleaning up the player thread.  This prevents a race where we
@@ -800,12 +808,13 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
 		app->songHistory = NULL;
 	}
 	
-	/* Disconnect from Pandora (destroys stations, user info, partner) */
+	/* Disconnect from Pandora (destroys stations, user info, partner).
+	 * Serialize with BarUiPianoCall — same app->ph. */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	PianoDestroy(&app->ph);
-	
-	/* Re-initialize for next login */
 	PianoInit(&app->ph, app->settings.partnerUser, app->settings.partnerPassword,
 	          app->settings.device, app->settings.inkey, app->settings.outkey);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	
 #ifdef WEBSOCKET_ENABLED
 	/* Notify connected clients; do not close WebSocket so UI can show "Not Connected to Pandora" */
@@ -814,6 +823,9 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
 	
 	if (strcmp(reason, "idle_timeout") == 0) {
 		BarUiMsg(&app->settings, MSG_INFO, "Playback stopped due to inactivity.\n");
+	} else if (strcmp(reason, "playlist_session_error") == 0) {
+		BarUiMsg(&app->settings, MSG_INFO, "%s",
+				BarL10nGet(&app->l10n, "cli.playlist_session_error"));
 	} else {
 		BarUiMsg(&app->settings, MSG_INFO, "Playback stopped, disconnected from Pandora.\n");
 	}
@@ -822,7 +834,7 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason) {
 /*	stop - full reset without quitting (UI action wrapper)
  */
 BarUiActCallback(BarUiActPandoraDisconnect) {
-	BarUiDoPandoraDisconnect(app, "user");
+	BarUiDoPandoraDisconnect(app, "user", NULL);
 }
 
 /*	song history
@@ -1259,9 +1271,11 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	BarStateSetCurrentStation(app, NULL);
 	BarStateSetNextStation(app, NULL);
 
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	PianoDestroy(&app->ph);
 	PianoInit(&app->ph, app->settings.partnerUser, app->settings.partnerPassword,
 	          app->settings.device, app->settings.inkey, app->settings.outkey);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 
 	if (acct && acct->label) {
 		BarUiMsg(&app->settings, MSG_INFO, "Reconnecting to Pandora (%s)... ",
