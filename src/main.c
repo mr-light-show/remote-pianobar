@@ -390,7 +390,15 @@ void BarMainGetPlaylist (BarApp_t *app) {
 			BarL10nGet (&app->l10n, "cli.receiving_playlist"));
 	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
 			&reqData, &pRet, &wRet)) {
-		BarStateSetNextStation(app, NULL);
+		if (pRet == PIANO_RET_P_INTERNAL) {
+			const char *resumeId = NULL;
+			if (reqData.station != NULL && reqData.station->id != NULL) {
+				resumeId = reqData.station->id;
+			}
+			BarUiDoPandoraDisconnect(app, "playlist_session_error", resumeId);
+		} else {
+			BarStateSetNextStation(app, NULL);
+		}
 	} else {
 		BarStateSetPlaylist(app, reqData.retPlaylist);
 		if (BarStateGetPlaylist(app) == NULL) {
@@ -1031,6 +1039,7 @@ int main (int argc, char **argv) {
 	
 
 	assert (app.http != NULL);
+	BarUiPianoHttpMutexInit (&app);
 
 
 	/* init fds */
@@ -1105,6 +1114,7 @@ int main (int argc, char **argv) {
 	PianoDestroy (&app.ph);
 	PianoDestroyPlaylist (app.songHistory);
 	PianoDestroyPlaylist (app.playlist);
+	BarUiPianoHttpMutexDestroy (&app);
 	curl_easy_cleanup (app.http);
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);

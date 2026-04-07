@@ -48,18 +48,23 @@ Pianobar supports two UI modes:
                          └────────────────────────┘
 ```
 
-### Three Independent Locks
+### Locks (state, player, HTTP)
 
-Pianobar uses **multiple independent locks** that protect different data:
+Pianobar uses **several synchronization primitives**:
 
 | Lock | Purpose | Scope | File |
 |------|---------|-------|------|
-| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and `BarStateCallPandora` (Pandora state) | Only in `BAR_UI_MODE_BOTH` | [`bar_state.c`](bar_state.c) |
+| `app->pianoHttpMutex` | **Recursive** mutex: serializes all of [`BarUiPianoCall`](ui.c) (shared `CURL *`, `PianoRequest`/`PianoResponse` on `app->ph`) so only one thread performs Pandora HTTP at a time | Always (after init in `main`) | [`main.h`](main.h), [`ui.c`](ui.c) |
+| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters (playlist/station pointers, not Piano HTTP) | Only in `BAR_UI_MODE_BOTH` | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
 
-**Key Design Principle:** These locks are **independent** and protect **non-overlapping data**. This minimizes lock contention and simplifies reasoning about deadlocks.
+**`pianoHttpMutex` usage:** Initialized with `PTHREAD_MUTEX_RECURSIVE` after `curl_easy_init()` (`BarUiPianoHttpMutexInit`). Every call path that performs Pandora RPC must go through [`BarUiPianoCall`](ui.c) (or `BarUiPianoCallLogged`, which delegates to it). The mutex is held for the full outer call, including nested re-authentication (`LOGIN` from inside the same thread). Destroyed before `curl_easy_cleanup()` (`BarUiPianoHttpMutexDestroy`).
+
+**Session teardown (`PianoDestroy` / `PianoInit`):** [`BarUiDoPandoraDisconnect`](ui_act.c) and [`BarUiActPandoraReconnect`](ui_act.c) reset `app->ph` under the same **`pianoHttpMutex`**, so no thread can run [`BarUiPianoCall`](ui.c) concurrently while the handle is destroyed or re-initialized.
+
+**Key design:** `stateRwlock` and `pianoHttpMutex` address different concerns: quick pointer consistency (BOTH mode) vs **libcurl thread-safety** and serial application of API responses to `app->ph`.
 
 ### Player Lock Architecture
 
@@ -118,37 +123,25 @@ pthread_mutex_unlock(&player->decoderLock);
 
 ### Lock Ordering Rules
 
-When multiple locks must be acquired, **always follow this order**:
+When **`stateRwlock`** and **`player.lock`** must both be acquired, **always follow this order**:
 
 ```
-1. app->stateRwlock    (Pandora state - rdlock/wrlock)
+1. app->stateRwlock    (BOTH mode: rdlock/wrlock for BarState* pointer fields)
    ↓
 2. app->player.lock    (Player state)
 ```
 
 **Never reverse this order.** Violating lock ordering is the #1 cause of deadlocks.
 
+**Do not** acquire `stateRwlock` while holding `pianoHttpMutex`, or vice versa. In normal codepaths Pandora HTTP runs only inside [`BarUiPianoCall`](ui.c), which takes **`pianoHttpMutex` only** — not `stateRwlock`.
+
 ### Lock Duration Guidelines
 
 - **Minimize lock duration**: Hold locks for the shortest time possible
-- **No I/O under lock**: Never make network calls, read files, or print to console while holding a lock (see exception below)
-- **No allocations under lock**: Avoid `malloc`/`free` while holding locks (use stack buffers or pre-allocate)
-- **No nested locks**: Prefer releasing one lock before acquiring another
-
-**Exception: `BarStateCallPandora()`**
-
-There is ONE documented exception to the "no I/O under lock" rule: `BarStateCallPandora()` in [`bar_state.c`](bar_state.c).
-
-This function holds `stateRwlock` (write) during network I/O (100-500ms) because:
-1. The libpiano library's `PianoResponse()` directly modifies `app->ph.stations` and other shared state structures
-2. These modifications must be atomic - no partial updates can be visible to other threads
-3. Alternative approaches (copy-on-write, delta merging) would require extensive refactoring with high bug risk
-
-**Rationale for accepting this exception:**
-- Pandora API calls are infrequent (startup, every ~30 minutes, user actions)
-- Lock hold time (100-500ms) is acceptable given low call frequency
-- Consistency guarantee outweighs brief thread blocking
-- See detailed analysis in function comment in [`bar_state.c`](bar_state.c) lines 301-328
+- **No I/O under `stateRwlock` or `player.lock`**: Never make network calls while holding those locks
+- **Pandora HTTP**: Blocking I/O happens only inside [`BarUiPianoCall`](ui.c) while holding **`pianoHttpMutex`** (by design — libcurl requires a single-threaded `CURL *` easy handle)
+- **No allocations under lock** where possible: Avoid `malloc`/`free` while holding `stateRwlock` / `player.lock`
+- **Player locks**: Never hold `player.lock` and `decoderLock` at the same time
 
 ### Conditional Locking
 
@@ -235,20 +228,17 @@ BarStateGetPlayerTime(app, &played, &duration);
 
 ### Pattern 4: Making Pandora API Calls
 
-**Always use the wrapper function**:
+**Always go through [`BarUiPianoCall`](ui.c)** (or `BarUiPianoCallLogged`, which calls it):
 
 ```c
-// ✓ SAFE: Wrapper handles locking
+// ✓ SAFE: BarUiPianoCall holds pianoHttpMutex for the whole request/response
 PianoReturn_t pRet;
 CURLcode wRet;
-bool success = BarStateCallPandora(app, PIANO_REQUEST_GET_PLAYLIST, 
-                                    &reqData, &pRet, &wRet);
+bool success = BarUiPianoCall(app, PIANO_REQUEST_GET_PLAYLIST,
+                               &reqData, &pRet, &wRet);
 ```
 
-**Why:** The wrapper (`BarStateCallPandora` in [`bar_state.c`](bar_state.c)) ensures that:
-1. The `stateRwlock` is held during the API call
-2. State modifications from the response are atomic
-3. Other threads see consistent state (e.g., not partial playlist updates)
+**Why:** One shared [`app->http`](main.h) easy handle and overlapping `PianoResponse` updates to `app->ph` must not run concurrently. The **recursive** `pianoHttpMutex` enforces that. In `BAR_UI_MODE_BOTH`, use [`BarStateGet*`](bar_state.c) / [`BarStateSet*`](bar_state.c) for playlist/station **pointers**; those use `stateRwlock` for short critical sections only, not for HTTP.
 
 ### Pattern 5: Switching Stations
 
@@ -336,22 +326,22 @@ pthread_rwlock_unlock(&app->stateRwlock);
 
 **Even better:** Avoid nested locks entirely by using state getters/setters.
 
-### Anti-Pattern 3: Holding Lock During I/O
+### Anti-Pattern 3: Holding `stateRwlock` During Piano HTTP
 
 ```c
-// ✗ UNSAFE: Network I/O under lock
+// ✗ UNSAFE: Long hold on stateRwlock + duplicates locking story
 pthread_rwlock_wrlock(&app->stateRwlock);
-BarUiPianoCall(app, PIANO_REQUEST_GET_PLAYLIST, ...);  // Blocks for seconds!
+BarUiPianoCall(app, PIANO_REQUEST_GET_PLAYLIST, ...);
 pthread_rwlock_unlock(&app->stateRwlock);
 ```
 
-**Problem:** Network calls can take seconds. Holding the lock blocks all other threads from accessing state.
+**Problem:** Blocks other threads from `BarState*` accessors for the whole HTTP round-trip. **`BarUiPianoCall` already takes `pianoHttpMutex`**; do not wrap it in `stateRwlock` unless you have a rare, carefully ordered need (avoid).
 
-**Fix:** Use the wrapper (which is designed for this):
+**Fix:** Call `BarUiPianoCall` **without** holding `stateRwlock`:
 
 ```c
-// ✓ SAFE: Wrapper handles locking efficiently
-BarStateCallPandora(app, PIANO_REQUEST_GET_PLAYLIST, ...);
+// ✓ SAFE
+BarUiPianoCall(app, PIANO_REQUEST_GET_PLAYLIST, ...);
 ```
 
 ### Anti-Pattern 4: Returning with Lock Held
@@ -650,11 +640,11 @@ static void doNetworkCall(BarApp_t *app) {
 
 ### The Golden Rules
 
-1. **Use state abstractions**: Always use `BarState*()` functions
-2. **Lock ordering**: `stateRwlock` before `player.lock` (if both needed)
-3. **Minimize lock duration**: Hold locks for microseconds, not milliseconds
-4. **No I/O under lock**: Release locks before network/disk/console operations
-5. **Broadcast after unlock**: Call `BarWsBroadcast*()` functions after releasing locks
+1. **Use state abstractions**: Always use `BarState*()` functions for shared pointers (BOTH mode)
+2. **Lock ordering**: `stateRwlock` before `player.lock` (if both needed); never mix `stateRwlock` with `pianoHttpMutex` in nested fashion
+3. **Minimize lock duration**: Hold `stateRwlock` / `player.lock` for microseconds, not milliseconds
+4. **Pandora HTTP**: Only via `BarUiPianoCall` — it holds `pianoHttpMutex` for the full transfer (recursive)
+5. **Broadcast after unlock**: Call `BarWsBroadcast*()` functions after releasing `stateRwlock` / `player.lock`
 6. **Test with BOTH mode**: Always test multi-threaded execution
 
 ### Quick Reference
@@ -669,7 +659,7 @@ static void doNetworkCall(BarApp_t *app) {
 | Drain playlist | `BarStateDrainPlaylist()` | `stateRwlock` (write) |
 | Get player paused | `BarStateGetPlayerPaused()` | `player.lock` |
 | Get player time | `BarStateGetPlayerTime()` | `player.lock` |
-| Make Pandora API call | `BarStateCallPandora()` | `stateRwlock` (write) |
+| Make Pandora API call | `BarUiPianoCall()` | `pianoHttpMutex` (recursive, whole call) |
 
 ### Resources
 

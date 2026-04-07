@@ -48,12 +48,17 @@ typedef struct {
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
 	char *lastStationId;  /* Station ID to auto-resume after reconnect */
-	
+	/* Serializes all use of `http` and overlapping PianoRequest/PianoResponse
+	 * work in BarUiPianoCall (recursive: re-login path calls BarUi again).
+	 * Placed after playlist/station fields so their offsets match pre-mutex
+	 * layouts used by tests; initialized in main after curl_easy_init.
+	 * See THREAD_SAFETY.md. */
+	pthread_mutex_t pianoHttpMutex;
 	/* WebSocket support (conditional compilation) */
 	#ifdef WEBSOCKET_ENABLED
 	void *wsContext;  /* BarWsContext_t */
 	pthread_t playbackThread;  /* Playback manager thread */
-	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: read for getters, write for setters and BarStateCallPandora */
+	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: read for getters, write for setters (BAR_UI_MODE_BOTH only) */
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
 	#endif
 	BarL10nContext_t l10n;

@@ -7,6 +7,7 @@ cli:
   login_label: "Login (%s)... "
   get_stations: "Get stations... "
   receiving_playlist: "Receiving new playlist... "
+  playlist_session_error: "Pandora session error; disconnected. Reconnect to resume playback.\n"
   no_tracks_left: "No tracks left.\n"
   wait_station_web: "Waiting for station selection via web interface...\n"
   select_station: "Select station: "

@@ -41,7 +41,8 @@
 #define HAVE_AV_REGISTER_ALL
 #endif
 
-#ifndef NDEBUG
+/* May also be set by -DHAVE_DEBUGLOG (e.g. release CI); avoid redefinition warnings. */
+#if !defined(HAVE_DEBUGLOG) && !defined(NDEBUG)
 #define HAVE_DEBUGLOG
 #endif
 /* Use log_write() from log.h for diagnostics; debug() macro removed. */

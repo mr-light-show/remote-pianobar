@@ -389,14 +389,13 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 			/* Song started - state tracked via player->mode */
 			/* TODO: Extract song data from msg->data and emit */
 			break;
-			
-	case MSG_TYPE_BROADCAST_STOP:
-		/* Song stopped - state tracked via player->mode */
-		/* Emit stop event via Socket.IO */
-		BarSocketIoEmit("stop", NULL);
-		break;
-			
-	case MSG_TYPE_BROADCAST_PROGRESS: {
+
+		case MSG_TYPE_BROADCAST_STOP:
+			/* Song stopped - state tracked via player->mode */
+			/* stop is emitted synchronously from BarWebsocketBroadcastSongStop via BarSocketIoEmitStop */
+			break;
+
+		case MSG_TYPE_BROADCAST_PROGRESS: {
 		/* Progress update - data contains elapsed time (unsigned int) */
 		if (msg->data && msg->dataLen >= sizeof(unsigned int) * 2) {
 		/* ARM64 FIX: Use memcpy to avoid unaligned access */

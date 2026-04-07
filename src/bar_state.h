@@ -140,9 +140,7 @@ BarPlayerMode BarStateGetPlayerMode(const BarApp_t *app);
 void BarStateGetPlayerTime(const BarApp_t *app, unsigned int *played, unsigned int *duration);
 bool BarStateGetPlayerPaused(const BarApp_t *app);
 
-/* Pandora API calls (thread-safe) */
-bool BarStateCallPandora(BarApp_t *app, PianoRequestType_t type,
-                         void *data, PianoReturn_t *pRet, CURLcode *wRet);
+/* Pandora HTTP/API: use BarUiPianoCall (serialized via app->pianoHttpMutex); see THREAD_SAFETY.md */
 
 /* Check if logged in to Pandora */
 bool BarStateIsPandoraConnected(const BarApp_t *app);

@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include "../../src/main.h"
 #include "../../src/l10n.h"
 #include "../../src/settings.h"
+#include "../../src/ui.h"
 #include "../../src/system_volume.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/core/queue.h"
@@ -150,6 +151,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 	memset(&app, 0, sizeof(app));
 	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
+	BarUiPianoHttpMutexInit(&app);
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
@@ -169,6 +171,7 @@ START_TEST(test_socketio_translate_playback_commands) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarUiPianoHttpMutexDestroy(&app);
 	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
@@ -181,6 +184,7 @@ START_TEST(test_socketio_translate_song_commands) {
 	memset(&app, 0, sizeof(app));
 	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
+	BarUiPianoHttpMutexInit(&app);
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
@@ -201,6 +205,7 @@ START_TEST(test_socketio_translate_song_commands) {
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif
+	BarUiPianoHttpMutexDestroy(&app);
 	BarSettingsDestroy(&app.settings);
 	
 	/* If we reach here without crashing, the test passes */
@@ -490,6 +495,8 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 	app.settings.accounts[1].label = strdup ("B");
 	app.settings.activeAccountIndex = 0;
 
+	BarUiPianoHttpMutexInit (&app);
+
 	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
 	clearBroadcastMock ();
 
@@ -504,6 +511,7 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 	ck_assert (strstr (lastBroadcastMessage, "ghost") != NULL);
 
 	free_settings_accounts (&app);
+	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
 }

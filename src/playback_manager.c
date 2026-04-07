@@ -48,7 +48,8 @@ extern void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread);
 extern sig_atomic_t *interrupted;
 
 /* Forward declaration from ui_act.c (avoid circular include with ui_act.h) */
-extern void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason);
+extern void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
+		const char *resume_station_id_override);
 
 static pthread_t g_playbackThread;
 static volatile bool g_running = false;
@@ -203,7 +204,7 @@ static void *BarPlaybackManagerThread(void *data) {
 			if (elapsed >= (time_t)(app->settings.pauseTimeout * 60)) {
 				log_write(DEBUG_UI, "PlaybackMgr: Pause timeout expired (%u minutes), stopping\n",
 				           app->settings.pauseTimeout);
-				BarUiDoPandoraDisconnect(app, "idle_timeout");
+				BarUiDoPandoraDisconnect(app, "idle_timeout", NULL);
 			}
 		}
 		
