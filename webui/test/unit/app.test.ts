@@ -262,6 +262,50 @@ describe('PianobarApp', () => {
     expect(socket.emit).toHaveBeenCalledWith('action', 'playback.play');
   });
 
+  it('pandora-reconnect on album-art emits playback.play when paused with track', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('start', {
+      title: 'T',
+      artist: 'A',
+      duration: 100,
+      station: 'Rock',
+      stationId: 's1',
+    });
+    await el.updateComplete;
+    hoisted.fire('playState', { paused: true });
+    await el.updateComplete;
+    const socket = vi.mocked(SocketService).mock.results[0]?.value;
+    vi.mocked(socket.emit).mockClear();
+    const albumArt = el.shadowRoot?.querySelector('album-art');
+    expect(albumArt).toBeTruthy();
+    albumArt!.dispatchEvent(new CustomEvent('pandora-reconnect', { bubbles: true, composed: true }));
+    await el.updateComplete;
+    expect(socket.emit).toHaveBeenCalledWith('action', 'playback.play');
+  });
+
+  it('after external pause first play click emits playback.play not pause', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('start', {
+      title: 'T',
+      artist: 'A',
+      duration: 100,
+      station: 'Rock',
+      stationId: 's1',
+    });
+    await el.updateComplete;
+    hoisted.fire('playState', { paused: true });
+    await el.updateComplete;
+    const socket = vi.mocked(SocketService).mock.results[0]?.value;
+    vi.mocked(socket.emit).mockClear();
+    const playback = el.shadowRoot?.querySelector('playback-controls');
+    const playBtn = playback?.shadowRoot?.querySelector('button.primary') as HTMLButtonElement;
+    expect(playBtn).toBeTruthy();
+    playBtn.click();
+    await el.updateComplete;
+    expect(socket.emit).toHaveBeenCalledWith('action', 'playback.play');
+    expect(socket.emit).not.toHaveBeenCalledWith('action', 'playback.pause');
+  });
+
   it('upcoming result with song without stationName still renders list', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('query.upcoming.result', [
