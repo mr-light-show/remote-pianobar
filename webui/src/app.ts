@@ -496,12 +496,13 @@ export class PianobarApp extends LitElement {
   }
   
   handlePlayPause() {
-    if (this.playing) {
+    if (this.playing && !this.paused) {
       this.socket.emit('action', 'playback.pause');
-      this.playing = false;
+      this.paused = true;
     } else {
       this.socket.emit('action', 'playback.play');
       this.playing = true;
+      this.paused = false;
     }
   }
   
@@ -537,9 +538,10 @@ export class PianobarApp extends LitElement {
   }
   
   handlePandoraReconnect() {
-    if (!this.playing) {
+    if (!this.playing || this.paused) {
       this.socket.emit('action', 'playback.play');
       this.playing = true;
+      this.paused = false;
     }
   }
 
