@@ -34,11 +34,16 @@ typedef enum {
 	DEBUG_UI = 4,
 	DEBUG_WEBSOCKET = 8,
 	DEBUG_WEBSOCKET_PROGRESS = 16,  /* Progress updates (noisy) */
+	DEBUG_CLI = 32,                 /* BarUiMsg mirror; emits when any PIANOBAR_DEBUG bit is set */
 } logKind;
 
 /* Initialize log module (reads PIANOBAR_DEBUG for debug mask). Call once at startup. */
 void log_init(void);
 
-/* Log message. LOG_ERROR always emits; other kinds emit only when corresponding PIANOBAR_DEBUG bit is set. */
+/* True after log_init if PIANOBAR_DEBUG was non-zero (HAVE_DEBUGLOG only). */
+bool log_is_any_debug_enabled(void);
+
+/* Log message. LOG_ERROR always emits; DEBUG_CLI emits when any debug bit is set;
+ * other DEBUG_* kinds emit when the corresponding PIANOBAR_DEBUG bit is set. */
 void log_write(logKind kind, const char *format, ...)
 	__attribute__((format(printf, 2, 3)));

@@ -121,14 +121,46 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	}
 
 	va_start (fmtargs, format);
-	vprintf (format, fmtargs);
-	va_end (fmtargs);
+	{
+		va_list fmtargs_cli;
+		va_copy (fmtargs_cli, fmtargs);
 
-	if (settings->msgFormat[type].postfix != NULL) {
-		fputs (settings->msgFormat[type].postfix, stdout);
+		vprintf (format, fmtargs);
+
+		if (settings->msgFormat[type].postfix != NULL) {
+			fputs (settings->msgFormat[type].postfix, stdout);
+		}
+
+		fflush (stdout);
+
+#ifdef HAVE_DEBUGLOG
+#ifdef WEBSOCKET_ENABLED
+		if (log_is_any_debug_enabled () &&
+		    (settings->uiMode == BAR_UI_MODE_WEB ||
+		     settings->uiMode == BAR_UI_MODE_BOTH) &&
+		    type != MSG_TIME) {
+			char body[BAR_BUF_LARGE];
+			(void) vsnprintf (body, sizeof (body), format, fmtargs_cli);
+			const char *pre = settings->msgFormat[type].prefix != NULL
+			    ? settings->msgFormat[type].prefix : "";
+			const char *post = settings->msgFormat[type].postfix != NULL
+			    ? settings->msgFormat[type].postfix : "";
+			char line[8192];
+			snprintf (line, sizeof (line), "%s%s%s", pre, body, post);
+			size_t len = strlen (line);
+			if (len == 0 || line[len - 1] != '\n') {
+				if (len + 1 < sizeof (line)) {
+					line[len] = '\n';
+					line[len + 1] = '\0';
+				}
+			}
+			log_write (DEBUG_CLI, "%s", line);
+		}
+#endif
+#endif
+		va_end (fmtargs_cli);
 	}
-
-	fflush (stdout);
+	va_end (fmtargs);
 }
 
 typedef struct {

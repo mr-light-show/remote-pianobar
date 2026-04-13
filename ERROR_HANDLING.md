@@ -40,7 +40,7 @@ Use the logging API based on who needs to see the message:
 - `log_write(DEBUG_*, ...)` for diagnostic output that should respect `PIANOBAR_DEBUG`.
 - `BarUiMsg(..., MSG_ERR, ...)` or `MSG_NONE` for user-facing CLI messages.
 
-The logging module in [src/log.c](src/log.c) timestamps output in `HAVE_DEBUGLOG` builds, prints a **kind label** (`Network`, `Audio`, `UI`, `WebSocket`, `WS_Progress`, or `Error`) after the timestamp in the same color as the timestamp, then the message body in the default color. Downstream docs and tooling should expect ANSI escape sequences when stderr is captured from such builds.
+The logging module in [src/log.c](src/log.c) timestamps output in `HAVE_DEBUGLOG` builds, prints a **kind label** (`Network`, `Audio`, `UI`, `WebSocket`, `WS_Progress`, `CLI`, or `Error`) after the timestamp in the same color as the timestamp, then the message body in the default color. **`DEBUG_CLI`** mirrors [`BarUiMsg`](src/ui.c) when any `PIANOBAR_DEBUG` bit is set and UI mode is web or both. Downstream docs and tooling should expect ANSI escape sequences when stderr is captured from such builds.
 
 ## Common pattern
 

@@ -560,6 +560,7 @@ Debug flags are bitfield values that can be combined:
 - `4` - `DEBUG_UI` - User interface (green)
 - `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (bold magenta)
 - `16` - `DEBUG_WEBSOCKET_PROGRESS` - Progress updates every second (normal magenta, very noisy)
+- `32` - `DEBUG_CLI` - Kind label for **BarUiMsg** lines mirrored to stderr (bright blue). You do **not** need to set bit `32` in `PIANOBAR_DEBUG` to enable those lines: whenever **any** debug bit is non-zero and `ui_mode` is **web** or **both**, each `BarUiMsg` (except `MSG_TIME`) is also logged as `[time] CLI: …` with the same configured prefixes (`(i)`, `|>`, …).
 
 #### Usage Examples
 
@@ -594,14 +595,17 @@ PIANOBAR_DEBUG=15 ./pianobar 2>&1 | tee debug.log
 
 #### Color-Coded Output
 
-When stderr is a terminal and `HAVE_DEBUGLOG` is enabled, each line has the form **`[hh:mm:ss.mmm] Kind: message`**. The **timestamp** and the **kind label** (`Network`, `Audio`, `UI`, `WebSocket`, `WS_Progress`, or `Error`) share the same ANSI color for that `logKind`; the rest of the line (subsystem tags such as `Socket.IO:`, and the message body) uses the default terminal color.
+When stderr is a terminal and `HAVE_DEBUGLOG` is enabled, each line has the form **`[hh:mm:ss.mmm] Kind: message`**. The **timestamp** and the **kind label** share the same ANSI color for that `logKind`; the rest of the line uses the default terminal color.
 
 - **Red**: `LOG_ERROR` (always logged)
 - **Cyan**: Network (`DEBUG_NETWORK`)
 - **Yellow**: Audio (`DEBUG_AUDIO`)
-- **Green**: UI (`DEBUG_UI`)
+- **Green**: UI (`DEBUG_UI`) — state/rwlock and similar
 - **Bold magenta**: WebSocket (`DEBUG_WEBSOCKET`, bit 8)
 - **Normal magenta**: WebSocket progress (`DEBUG_WEBSOCKET_PROGRESS`, bit 16)
+- **Bright blue**: CLI (`DEBUG_CLI`) — mirrored `BarUiMsg` when any `PIANOBAR_DEBUG` bit is set and `ui_mode` is web or both
+
+Startup banner: when `PIANOBAR_DEBUG` is non-zero, **CLI** is always listed (mirroring is active whenever any category is enabled).
 
 ### Debugging TypeScript/Web UI
 
