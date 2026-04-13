@@ -866,7 +866,7 @@ int main (int argc, char **argv) {
 			}
 			
 			if (app.lockFd < 0) {
-				log_write(LOG_ERROR, "Error: Could not acquire lock. Another instance may still be running.\n");
+				log_write(LOG_ERROR, "Could not acquire lock. Another instance may still be running.\n");
 				BarL10nDestroy (&app.l10n);
 				BarSettingsDestroy (&app.settings);
 				return 1;
@@ -976,7 +976,7 @@ int main (int argc, char **argv) {
 			BarPrintStartupInfo(&app, getpid(), true, stderr);
 		} else {
 			/* Should have been relaunched earlier - this shouldn't happen */
-			log_write(LOG_ERROR, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
+			log_write(LOG_ERROR, "ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
 			BarL10nDestroy (&app.l10n);
 			BarSettingsDestroy (&app.settings);
 			return 1;

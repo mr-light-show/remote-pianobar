@@ -529,6 +529,8 @@ Pianobar uses a single logging API for diagnostics and errors.
 
 Do not use raw `fprintf(stderr, ...)` for diagnostics or errors; use `log_write(LOG_ERROR, ...)` or the appropriate DEBUG_* kind so that output is consistent (timestamps, optional color) and can be directed to the log file when configured.
 
+When `HAVE_DEBUGLOG` is enabled, each line is prefixed with a colored timestamp and a **kind label** matching the `logKind` (same color as the timestamp); do not repeat that label in the format string (e.g. omit a leading `WebSocket:` when using `DEBUG_WEBSOCKET`). Subsystem tags such as `Socket.IO:` or `PlaybackMgr:` remain in the message body.
+
 ---
 
 ## Debugging Tools

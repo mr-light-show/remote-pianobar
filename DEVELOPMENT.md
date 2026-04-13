@@ -594,12 +594,14 @@ PIANOBAR_DEBUG=15 ./pianobar 2>&1 | tee debug.log
 
 #### Color-Coded Output
 
-When stderr is a terminal, the **timestamp** on each line is color-coded by subsystem; the message text after it uses the default color:
-- **Cyan**: Network operations
-- **Yellow**: Audio processing
-- **Green**: UI interactions
-- **Bold magenta**: WebSocket events (bit 8)
-- **Normal magenta**: WebSocket progress spam (bit 16)
+When stderr is a terminal and `HAVE_DEBUGLOG` is enabled, each line has the form **`[hh:mm:ss.mmm] Kind: message`**. The **timestamp** and the **kind label** (`Network`, `Audio`, `UI`, `WebSocket`, `WS_Progress`, or `Error`) share the same ANSI color for that `logKind`; the rest of the line (subsystem tags such as `Socket.IO:`, and the message body) uses the default terminal color.
+
+- **Red**: `LOG_ERROR` (always logged)
+- **Cyan**: Network (`DEBUG_NETWORK`)
+- **Yellow**: Audio (`DEBUG_AUDIO`)
+- **Green**: UI (`DEBUG_UI`)
+- **Bold magenta**: WebSocket (`DEBUG_WEBSOCKET`, bit 8)
+- **Normal magenta**: WebSocket progress (`DEBUG_WEBSOCKET_PROGRESS`, bit 16)
 
 ### Debugging TypeScript/Web UI
 

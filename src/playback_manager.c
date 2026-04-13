@@ -289,7 +289,7 @@ bool BarPlaybackManagerStart(BarApp_t *app) {
 	
 	g_running = true;
 	if (pthread_create(&g_playbackThread, NULL, BarPlaybackManagerThread, app) != 0) {
-		log_write(LOG_ERROR, "Error: Failed to create playback manager thread\n");
+		log_write(LOG_ERROR, "Failed to create playback manager thread\n");
 		g_running = false;
 		return false;
 	}

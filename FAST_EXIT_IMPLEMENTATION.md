@@ -56,15 +56,15 @@ When you press 'q' to quit while music is playing:
 [18:45:23.125] Player: Quit requested, stopping sound immediately
 [18:45:23.126] Sound cleaned up
 [18:45:23.130] Finish cleanup complete
-[18:45:23.230] PlaybackMgr: Thread stopped
-[18:45:23.231] PlaybackMgr: Thread joined
-[18:45:23.232] BarPlayerDestroy: Stopping engine before uninit
-[18:45:23.233] BarPlayerDestroy: Calling ma_engine_uninit
-[18:45:23.234] BarPlayerDestroy: ma_engine_uninit completed
-[18:45:23.250] WebSocket: Stopping server...
-[18:45:23.251] WebSocket: Waiting for thread to stop...
-[18:45:23.260] WebSocket: Thread stopped
-[18:45:23.270] WebSocket: Server stopped
+[18:45:23.230] UI: PlaybackMgr: Thread stopped
+[18:45:23.231] UI: PlaybackMgr: Thread joined
+[18:45:23.232] Audio: BarPlayerDestroy: Stopping engine before uninit
+[18:45:23.233] Audio: BarPlayerDestroy: Calling ma_engine_uninit
+[18:45:23.234] Audio: BarPlayerDestroy: ma_engine_uninit completed
+[18:45:23.250] Error: Stopping server...
+[18:45:23.251] Error: Waiting for thread to stop...
+[18:45:23.260] Error: Thread stopped
+[18:45:23.270] Error: Server stopped
 ```
 
 **Notice:** Total exit time from "Exiting..." to "Server stopped" is now < 200ms!

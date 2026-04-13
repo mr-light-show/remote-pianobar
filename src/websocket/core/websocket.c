@@ -272,7 +272,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 			
 	case LWS_CALLBACK_ESTABLISHED: {
 		/* New client connected - track it */
-		log_write(DEBUG_WEBSOCKET, "WebSocket: Client connected\n");
+		log_write(DEBUG_WEBSOCKET, "Client connected\n");
 		
 		if (app && app->wsContext) {
 			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
@@ -287,7 +287,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 					        sizeof(ctx->connections[i].protocol) - 1);
 					ctx->numConnections++;
 					
-					log_write(DEBUG_WEBSOCKET, "WebSocket: Client tracked (slot %zu, total %zu)\n", 
+					log_write(DEBUG_WEBSOCKET, "Client tracked (slot %zu, total %zu)\n", 
 					           i, ctx->numConnections);
 					
 					/* Send current state to new client only (unicast) */
@@ -301,7 +301,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 		
 	case LWS_CALLBACK_CLOSED: {
 		/* Client disconnected - remove from tracking */
-		log_write(DEBUG_WEBSOCKET, "WebSocket: Client disconnected\n");
+		log_write(DEBUG_WEBSOCKET, "Client disconnected\n");
 		
 		if (app && app->wsContext) {
 			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
@@ -313,7 +313,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 					ctx->connections[i].protocol[0] = '\0';
 					ctx->numConnections--;
 					
-					log_write(DEBUG_WEBSOCKET, "WebSocket: Client removed (slot %zu, total %zu)\n", 
+					log_write(DEBUG_WEBSOCKET, "Client removed (slot %zu, total %zu)\n", 
 					           i, ctx->numConnections);
 					break;
 				}
@@ -404,7 +404,7 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 		unsigned int elapsed = times[0];
 		unsigned int duration = times[1];
 		
-		log_write(DEBUG_WEBSOCKET_PROGRESS, "WebSocket: Progress broadcast - elapsed=%u, duration=%u\n", 
+		log_write(DEBUG_WEBSOCKET_PROGRESS, "Progress broadcast - elapsed=%u, duration=%u\n", 
 		           elapsed, duration);
 			
 			/* We can't access BarApp_t here, but we can call SocketIO directly
@@ -431,7 +431,7 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 			/* ARM64 FIX: Use memcpy to avoid unaligned access */
 			int volume;
 			memcpy(&volume, msg->data, sizeof(volume));
-			log_write(DEBUG_WEBSOCKET, "WebSocket: Volume broadcast - volume=%d\n", volume);
+			log_write(DEBUG_WEBSOCKET, "Volume broadcast - volume=%d\n", volume);
 			
 			/* Emit volume event via Socket.IO */
 			json_object *data = json_object_new_int(volume);
@@ -467,7 +467,7 @@ void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs) {
 	ctx->delayedVolumeBroadcast.scheduleTime = nowMs + delayMs;
 	ctx->delayedVolumeBroadcast.pending = true;
 	
-	log_write(DEBUG_WEBSOCKET, "WebSocket: Scheduled volume broadcast in %dms (will use current volume at broadcast time)\n", 
+	log_write(DEBUG_WEBSOCKET, "Scheduled volume broadcast in %dms (will use current volume at broadcast time)\n", 
 	           delayMs);
 	
 	pthread_mutex_unlock(&ctx->volumeBroadcastMutex);
@@ -505,12 +505,12 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
 		if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 			volumePercent = BarSystemVolumeGet();
 			if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
-			log_write(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %d%% (system volume)\n", 
+			log_write(DEBUG_WEBSOCKET, "Executing delayed volume broadcast - %d%% (system volume)\n", 
 			           volumePercent);
 		} else {
 			/* Player mode: volume is already 0-100 linear */
 			volumePercent = app->settings.volume;
-			log_write(DEBUG_WEBSOCKET, "WebSocket: Executing delayed volume broadcast - %d%% (player volume)\n", 
+			log_write(DEBUG_WEBSOCKET, "Executing delayed volume broadcast - %d%% (player volume)\n", 
 			           volumePercent);
 		}
 		
@@ -542,7 +542,7 @@ static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
 	
 	/* Check if default audio device changed and refresh if needed */
 	if (BarSystemVolumeRefreshDevice()) {
-		log_write(DEBUG_WEBSOCKET, "WebSocket: Default audio output device changed\n");
+		log_write(DEBUG_WEBSOCKET, "Default audio output device changed\n");
 	}
 	
 	/* Read current system volume */
@@ -553,7 +553,7 @@ static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
 	
 	/* Check if volume changed from last known value */
 	if (currentVolume != ctx->lastPolledVolume) {
-		log_write(DEBUG_WEBSOCKET, "WebSocket: System volume changed externally: %d%% → %d%%\n",
+		log_write(DEBUG_WEBSOCKET, "System volume changed externally: %d%% → %d%%\n",
 		           ctx->lastPolledVolume, currentVolume);
 		ctx->lastPolledVolume = currentVolume;
 		
@@ -571,7 +571,7 @@ static void* BarWebsocketThread(void *arg) {
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
-	log_write(DEBUG_WEBSOCKET, "WebSocket: Thread started\n");
+	log_write(DEBUG_WEBSOCKET, "Thread started\n");
 	
 	while (ctx->threadRunning && !app->doQuit) {
 		bool didWork = false;
@@ -627,7 +627,7 @@ static void* BarWebsocketThread(void *arg) {
 		 */
 	}
 	
-	log_write(DEBUG_WEBSOCKET, "WebSocket: Thread stopped\n");
+	log_write(DEBUG_WEBSOCKET, "Thread stopped\n");
 	return NULL;
 }
 
@@ -642,7 +642,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Allocate WebSocket context */
 	app->wsContext = calloc(1, sizeof(BarWsContext_t));
 	if (!app->wsContext) {
-		log_write(LOG_ERROR, "WebSocket: Failed to allocate context\n");
+		log_write(LOG_ERROR, "Failed to allocate context\n");
 		return false;
 	}
 	
@@ -670,7 +670,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	
 	ctx->context = lws_create_context(&info);
 	if (!ctx->context) {
-		log_write(LOG_ERROR, "WebSocket: Failed to create context on port %d\n",
+		log_write(LOG_ERROR, "Failed to create context on port %d\n",
 		        app->settings.websocketPort);
 		free(ctx);
 		app->wsContext = NULL;
@@ -695,13 +695,13 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Set up Socket.IO broadcast callback */
 	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);
 	
-	log_write(LOG_ERROR, "WebSocket: Server started on port %d\n",
+	log_write(LOG_ERROR, "Server started on port %d\n",
 	        app->settings.websocketPort);
 	
 	/* Start WebSocket thread */
 	ctx->threadRunning = true;
 	if (pthread_create(&ctx->thread, NULL, BarWebsocketThread, app) != 0) {
-		log_write(LOG_ERROR, "WebSocket: Failed to create thread\n");
+		log_write(LOG_ERROR, "Failed to create thread\n");
 		
 		/* Cleanup on failure */
 		BarWsBucketsDestroy(ctx);
@@ -712,7 +712,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 		return false;
 	}
 	
-	log_write(LOG_ERROR, "WebSocket: Thread created successfully\n");
+	log_write(LOG_ERROR, "Thread created successfully\n");
 	
 	return true;
 }
@@ -723,7 +723,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		return;
 	}
 	
-	log_write(LOG_ERROR, "WebSocket: Stopping server...\n");
+	log_write(LOG_ERROR, "Stopping server...\n");
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
@@ -736,9 +736,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	}
 	
 	/* Wait for thread to finish */
-	log_write(LOG_ERROR, "WebSocket: Waiting for thread to stop...\n");
+	log_write(LOG_ERROR, "Waiting for thread to stop...\n");
 	pthread_join(ctx->thread, NULL);
-	log_write(LOG_ERROR, "WebSocket: Thread stopped\n");
+	log_write(LOG_ERROR, "Thread stopped\n");
 	
 	/* Now safe to cleanup (thread is dead) */
 	if (ctx->context) {
@@ -762,7 +762,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	free(ctx);
 	app->wsContext = NULL;
 	
-	log_write(LOG_ERROR, "WebSocket: Server stopped\n");
+	log_write(LOG_ERROR, "Server stopped\n");
 }
 
 /* Get current elapsed time from player */
@@ -864,7 +864,7 @@ void BarWebsocketBroadcastProgress(BarApp_t *app) {
 /* Broadcast message to all connected WebSocket clients */
 static void BarWebsocketBroadcast(const char *message, size_t len) {
 	if (!g_wsContext || !message || len == 0) {
-		log_write(DEBUG_WEBSOCKET, "WebSocket: Broadcast called with null/empty message\n");
+		log_write(DEBUG_WEBSOCKET, "Broadcast called with null/empty message\n");
 		return;
 	}
 	
@@ -874,7 +874,7 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 	bool isProgress = (len > 13 && strncmp(message, "2[ \"progress\"", 13) == 0);
 	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
 
-	log_write(dbgFlag, "WebSocket: Broadcasting to %zu clients (%zu bytes): %.*s%s\n",
+	log_write(dbgFlag, "Broadcasting to %zu clients (%zu bytes): %.*s%s\n",
 	           ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 	
 	/* Check for unicast mode - if set, only send to target client */
@@ -890,34 +890,34 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 				continue;
 			}
 			
-			log_write(dbgFlag, "WebSocket: Sending to client %zu (wsi=%p)\n", i, wsi);
+			log_write(dbgFlag, "Sending to client %zu (wsi=%p)\n", i, wsi);
 			
 			/* Allocate buffer with LWS_PRE padding */
 			unsigned char *buf = malloc(LWS_PRE + len);
 			if (!buf) {
-				log_write(dbgFlag, "WebSocket: Failed to allocate buffer for client %zu\n", i);
+				log_write(dbgFlag, "Failed to allocate buffer for client %zu\n", i);
 				continue;
 			}
 			
 			/* Copy message after LWS_PRE padding */
 			memcpy(&buf[LWS_PRE], message, len);
 			
-			log_write(dbgFlag, "WebSocket: About to call lws_write (len=%zu)\n", len);
+			log_write(dbgFlag, "About to call lws_write (len=%zu)\n", len);
 			
 			/* Send to this client */
 			int written = lws_write(wsi, &buf[LWS_PRE], len, LWS_WRITE_TEXT);
 			
 			if (written < 0) {
-				log_write(dbgFlag, "WebSocket: lws_write failed for client %zu (error=%d)\n", i, written);
+				log_write(dbgFlag, "lws_write failed for client %zu (error=%d)\n", i, written);
 			} else {
-				log_write(dbgFlag, "WebSocket: lws_write succeeded for client %zu (%d bytes)\n", i, written);
+				log_write(dbgFlag, "lws_write succeeded for client %zu (%d bytes)\n", i, written);
 			}
 			
 			free(buf);
 		}
 	}
 	
-	log_write(dbgFlag, "WebSocket: Broadcast complete\n");
+	log_write(dbgFlag, "Broadcast complete\n");
 }
 
 /* Handle incoming WebSocket message */
@@ -930,7 +930,7 @@ void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
 	/* Route to appropriate protocol handler */
 	if (strcmp(protocol, "homeassistant") == 0) {
 		/* TODO: Call BarHaBridgeHandleMessage(app, message); */
-		log_write(DEBUG_WEBSOCKET, "WebSocket: HA message received (not yet implemented)\n");
+		log_write(DEBUG_WEBSOCKET, "HA message received (not yet implemented)\n");
 	} else {
 		/* Default to Socket.IO */
 		BarSocketIoHandleMessage(app, message, wsi);
@@ -945,7 +945,7 @@ void BarWebsocketDisconnectAllClients(BarApp_t *app) {
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
-	log_write(DEBUG_WEBSOCKET, "WebSocket: Disconnecting all clients (%zu connected)\n", 
+	log_write(DEBUG_WEBSOCKET, "Disconnecting all clients (%zu connected)\n", 
 	           ctx->numConnections);
 	
 	/* Close each connected client */
@@ -953,7 +953,7 @@ void BarWebsocketDisconnectAllClients(BarApp_t *app) {
 		if (ctx->connections[i].wsi != NULL) {
 			struct lws *wsi = (struct lws *)ctx->connections[i].wsi;
 			
-			log_write(DEBUG_WEBSOCKET, "WebSocket: Closing client %zu (wsi=%p)\n", i, wsi);
+			log_write(DEBUG_WEBSOCKET, "Closing client %zu (wsi=%p)\n", i, wsi);
 			
 			/* Mark connection for close - will be handled in SERVER_WRITEABLE */
 			ctx->connections[i].pendingClose = true;
@@ -967,6 +967,6 @@ void BarWebsocketDisconnectAllClients(BarApp_t *app) {
 		}
 	}
 	
-	log_write(DEBUG_WEBSOCKET, "WebSocket: All clients marked for disconnect\n");
+	log_write(DEBUG_WEBSOCKET, "All clients marked for disconnect\n");
 }
 

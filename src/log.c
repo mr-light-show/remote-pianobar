@@ -80,6 +80,20 @@ static void log_to_stderr(const char *format, va_list args)
 }
 
 #ifdef HAVE_DEBUGLOG
+/* Label after [time]; same strings as log_init() banner (NETWORK, AUDIO, …). */
+static const char *log_kind_prefix_label(logKind kind)
+{
+	switch (kind) {
+	case LOG_ERROR:                return "Error";
+	case DEBUG_NETWORK:            return "Network";
+	case DEBUG_AUDIO:             return "Audio";
+	case DEBUG_UI:                 return "UI";
+	case DEBUG_WEBSOCKET:          return "WebSocket";
+	case DEBUG_WEBSOCKET_PROGRESS: return "WS_Progress";
+	default:                       return "?";
+	}
+}
+
 static void log_with_timestamp(logKind kind, const char *format, va_list args)
 {
 	struct timespec ts;
@@ -96,11 +110,15 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 		case LOG_ERROR:                 color = COLOR_RED; break;
 		default:                        color = ""; break;
 	}
-	/* Color on timestamp only; message is default terminal color */
+	/* Timestamp and kind prefix share the same color; message body is default color */
 	fprintf(stderr, "%s[%02d:%02d:%02d.%03ld]%s ",
 	        color,
 	        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
 	        (long)(ts.tv_nsec / 1000000),
+	        COLOR_RESET);
+	fprintf(stderr, "%s%s:%s ",
+	        color,
+	        log_kind_prefix_label(kind),
 	        COLOR_RESET);
 	vfprintf(stderr, format, args);
 }
