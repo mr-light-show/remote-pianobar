@@ -549,7 +549,7 @@ lldb ./pianobar
 
 ### Debug Logging
 
-Enable debug output for specific subsystems using the `PIANOBAR_DEBUG` environment variable. On startup, if the mask is non-zero, pianobar prints one line to stderr listing enabled categories in the same colors as debug log lines (e.g. `PIANOBAR_DEBUG=4: UI` with **UI** in green).
+Enable debug output for specific subsystems using the `PIANOBAR_DEBUG` environment variable. On startup, if the mask is non-zero, pianobar prints one line to stderr listing enabled categories in the same colors as debug log lines (e.g. `PIANOBAR_DEBUG=4: UI` with **UI** in green). The number shown is the value parsed from the environment; the internal mask may additionally include bit `32` (`DEBUG_CLI`) whenever any debug category is enabled (see below).
 
 #### Debug Flags
 
@@ -560,7 +560,7 @@ Debug flags are bitfield values that can be combined:
 - `4` - `DEBUG_UI` - User interface (green)
 - `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (bold magenta)
 - `16` - `DEBUG_WEBSOCKET_PROGRESS` - Progress updates every second (normal magenta, very noisy)
-- `32` - `DEBUG_CLI` - Kind label for **BarUiMsg** lines mirrored to stderr (bright blue). You do **not** need to set bit `32` in `PIANOBAR_DEBUG` to enable those lines: whenever **any** debug bit is non-zero and `ui_mode` is **web** or **both**, each `BarUiMsg` (except `MSG_TIME`) is also logged as `[time] CLI: …` with the same configured prefixes (`(i)`, `|>`, …).
+- `32` - `DEBUG_CLI` - Kind label for **BarUiMsg** lines on stderr (bright blue). You do **not** need to set bit `32` in `PIANOBAR_DEBUG` to enable those lines: `log_init` ORs `DEBUG_CLI` into the internal mask whenever **any** debug bit is non-zero. When `ui_mode` is **web** or **both** and the internal mask includes `DEBUG_CLI`, each `BarUiMsg` (except `MSG_TIME`) is emitted **only** as `[time] CLI: …` on stderr (same prefixes/postfixes as the normal UI line would use: `(i)`, `|>`, …)—not duplicated to stdout.
 
 #### Usage Examples
 
@@ -599,13 +599,13 @@ When stderr is a terminal and `HAVE_DEBUGLOG` is enabled, each line has the form
 
 - **Red**: `LOG_ERROR` (always logged)
 - **Cyan**: Network (`DEBUG_NETWORK`)
-- **Yellow**: Audio (`DEBUG_AUDIO`)
+- **Yellow**: Audio (`DEBUG_AUDIO`) — RSS lines use a shared helper: **` 185,536 KB (+ 32 KB) RSS: after decode`** (padded absolute KB, parenthetical delta vs process high-water RSS with commas, `RSS:` label). HWM only rises when RSS increases; first line or missing RSS uses **`(n/a)`** in the parentheses.
 - **Green**: UI (`DEBUG_UI`) — state/rwlock and similar
 - **Bold magenta**: WebSocket (`DEBUG_WEBSOCKET`, bit 8)
 - **Normal magenta**: WebSocket progress (`DEBUG_WEBSOCKET_PROGRESS`, bit 16)
-- **Bright blue**: CLI (`DEBUG_CLI`) — mirrored `BarUiMsg` when any `PIANOBAR_DEBUG` bit is set and `ui_mode` is web or both
+- **Bright blue**: CLI (`DEBUG_CLI`) — `BarUiMsg` on stderr only (no plain stdout copy) when the internal mask includes `DEBUG_CLI` and `ui_mode` is web or both
 
-Startup banner: when `PIANOBAR_DEBUG` is non-zero, **CLI** is always listed (mirroring is active whenever any category is enabled).
+Startup banner: when `PIANOBAR_DEBUG` is non-zero, **CLI** is listed whenever the internal mask includes `DEBUG_CLI` (always the case after that OR), and the printed numeric value is still what you set in the environment (not the OR’d sum).
 
 ### Debugging TypeScript/Web UI
 

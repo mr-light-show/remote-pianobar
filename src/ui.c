@@ -101,6 +101,35 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	assert (type < MSG_COUNT);
 	assert (format != NULL);
 
+#ifdef HAVE_DEBUGLOG
+#ifdef WEBSOCKET_ENABLED
+	if (log_is_debug_cli_enabled () &&
+	    (settings->uiMode == BAR_UI_MODE_WEB ||
+	     settings->uiMode == BAR_UI_MODE_BOTH) &&
+	    type != MSG_TIME) {
+		va_start (fmtargs, format);
+		char body[BAR_BUF_LARGE];
+		(void) vsnprintf (body, sizeof (body), format, fmtargs);
+		const char *pre = settings->msgFormat[type].prefix != NULL
+		    ? settings->msgFormat[type].prefix : "";
+		const char *post = settings->msgFormat[type].postfix != NULL
+		    ? settings->msgFormat[type].postfix : "";
+		char line[8192];
+		snprintf (line, sizeof (line), "%s%s%s", pre, body, post);
+		size_t len = strlen (line);
+		if (len == 0 || line[len - 1] != '\n') {
+			if (len + 1 < sizeof (line)) {
+				line[len] = '\n';
+				line[len + 1] = '\0';
+			}
+		}
+		log_write (DEBUG_CLI, "%s", line);
+		va_end (fmtargs);
+		return;
+	}
+#endif
+#endif
+
 	switch (type) {
 		case MSG_INFO:
 		case MSG_PLAYING:
@@ -121,45 +150,13 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	}
 
 	va_start (fmtargs, format);
-	{
-		va_list fmtargs_cli;
-		va_copy (fmtargs_cli, fmtargs);
+	vprintf (format, fmtargs);
 
-		vprintf (format, fmtargs);
-
-		if (settings->msgFormat[type].postfix != NULL) {
-			fputs (settings->msgFormat[type].postfix, stdout);
-		}
-
-		fflush (stdout);
-
-#ifdef HAVE_DEBUGLOG
-#ifdef WEBSOCKET_ENABLED
-		if (log_is_any_debug_enabled () &&
-		    (settings->uiMode == BAR_UI_MODE_WEB ||
-		     settings->uiMode == BAR_UI_MODE_BOTH) &&
-		    type != MSG_TIME) {
-			char body[BAR_BUF_LARGE];
-			(void) vsnprintf (body, sizeof (body), format, fmtargs_cli);
-			const char *pre = settings->msgFormat[type].prefix != NULL
-			    ? settings->msgFormat[type].prefix : "";
-			const char *post = settings->msgFormat[type].postfix != NULL
-			    ? settings->msgFormat[type].postfix : "";
-			char line[8192];
-			snprintf (line, sizeof (line), "%s%s%s", pre, body, post);
-			size_t len = strlen (line);
-			if (len == 0 || line[len - 1] != '\n') {
-				if (len + 1 < sizeof (line)) {
-					line[len] = '\n';
-					line[len + 1] = '\0';
-				}
-			}
-			log_write (DEBUG_CLI, "%s", line);
-		}
-#endif
-#endif
-		va_end (fmtargs_cli);
+	if (settings->msgFormat[type].postfix != NULL) {
+		fputs (settings->msgFormat[type].postfix, stdout);
 	}
+
+	fflush (stdout);
 	va_end (fmtargs);
 }
 

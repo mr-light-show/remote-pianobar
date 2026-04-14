@@ -45,11 +45,16 @@ void log_init(void)
 {
 #ifdef HAVE_DEBUGLOG
 	const char *const s = getenv("PIANOBAR_DEBUG");
+	unsigned int raw = 0;
 	if (s != NULL) {
-		debug_mask = (unsigned int)atoi(s);
+		raw = (unsigned int)atoi(s);
+	}
+	debug_mask = raw;
+	if (debug_mask != 0) {
+		debug_mask |= DEBUG_CLI;   /* Turn on CLI debugging */
 	}
 	if (debug_mask != 0) {
-		fprintf(stderr, "PIANOBAR_DEBUG=%u: ", debug_mask);
+		fprintf(stderr, "PIANOBAR_DEBUG=%u: ", raw);
 		if (debug_mask & DEBUG_NETWORK) {
 			fprintf(stderr, "%sNETWORK%s ", COLOR_CYAN, COLOR_RESET);
 		}
@@ -65,7 +70,9 @@ void log_init(void)
 		if (debug_mask & DEBUG_WEBSOCKET_PROGRESS) {
 			fprintf(stderr, "%sWS_PROGRESS%s ", COLOR_MAGENTA, COLOR_RESET);
 		}
-		fprintf(stderr, "%sCLI%s ", COLOR_BLUE, COLOR_RESET);
+		if (debug_mask & DEBUG_CLI) {
+			fprintf(stderr, "%sCLI%s ", COLOR_BLUE, COLOR_RESET);
+		}
 		fprintf(stderr, "\n");
 	}
 #else
@@ -141,6 +148,15 @@ bool log_is_any_debug_enabled(void)
 #endif
 }
 
+bool log_is_debug_cli_enabled(void)
+{
+#ifdef HAVE_DEBUGLOG
+	return (debug_mask & DEBUG_CLI) != 0;
+#else
+	return false;
+#endif
+}
+
 void log_write(logKind kind, const char *format, ...)
 {
 	va_list args;
@@ -155,13 +171,7 @@ void log_write(logKind kind, const char *format, ...)
 #endif
 	} else {
 #ifdef HAVE_DEBUGLOG
-		bool emit = false;
-		if (kind == DEBUG_CLI) {
-			emit = (debug_mask != 0);
-		} else {
-			emit = (debug_mask & kind) != 0;
-		}
-		if (emit) {
+		if ((debug_mask & kind) != 0) {
 			log_with_timestamp(kind, format, args);
 		}
 #endif

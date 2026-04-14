@@ -43,7 +43,10 @@ void log_init(void);
 /* True after log_init if PIANOBAR_DEBUG was non-zero (HAVE_DEBUGLOG only). */
 bool log_is_any_debug_enabled(void);
 
-/* Log message. LOG_ERROR always emits; DEBUG_CLI emits when any debug bit is set;
+/* True when log_write(DEBUG_CLI, ...) would emit (debug_mask & DEBUG_CLI); HAVE_DEBUGLOG only. */
+bool log_is_debug_cli_enabled(void);
+
+/* Log message. LOG_ERROR always emits; DEBUG_* use debug_mask (DEBUG_CLI OR'd at init when any bit set);
  * other DEBUG_* kinds emit when the corresponding PIANOBAR_DEBUG bit is set. */
 void log_write(logKind kind, const char *format, ...)
 	__attribute__((format(printf, 2, 3)));
