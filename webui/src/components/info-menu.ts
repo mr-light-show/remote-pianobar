@@ -186,7 +186,7 @@ export class InfoMenu extends LitElement {
         </button>
         <button class="action-button" @click=${this.handleStationMode}>
           <span class="material-icons">tune</span>
-          <span>Manage Station Mode</span>
+          <span>${t('web.ui.menu_station_mode')}</span>
         </button>
         <button class="action-button" @click=${this.handleStationSeeds}>
           <span class="material-icons">manage_search</span>
