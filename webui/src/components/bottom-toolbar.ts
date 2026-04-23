@@ -6,6 +6,7 @@ import { t } from '../i18n';
 interface Station {
   id: string;
   name: string;
+  isQuickMix?: boolean;
 }
 
 @customElement('bottom-toolbar')
@@ -105,6 +106,12 @@ export class BottomToolbar extends LitElement {
     this.dispatchEvent(new CustomEvent('station-change', {
       detail: e.detail
     }));
+  }
+
+  /** Opens the same station picker as the fixed bottom bar (for hamburger menu parity). */
+  openStationSelector() {
+    const popup = this.shadowRoot?.querySelector('stations-popup') as { showMenu?: () => void } | null;
+    popup?.showMenu?.();
   }
   
   render() {

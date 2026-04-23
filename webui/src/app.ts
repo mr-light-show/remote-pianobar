@@ -570,6 +570,108 @@ export class PianobarApp extends LitElement {
     return this.stations.length === 0 && !this.playing;
   }
 
+  /** docs/MENU_STATE_MATRIX.md — same scenario chain as HA overflow (session → stations → selection → song title). */
+  private get _menuSessionReady(): boolean {
+    return this.connected && !this.isLoggedOutFromPandora;
+  }
+
+  private get _menuHasStations(): boolean {
+    return this.stations.length > 0;
+  }
+
+  private get _menuStationSelected(): boolean {
+    return !!this.currentStationId?.trim();
+  }
+
+  private get _menuHasSong(): boolean {
+    if (!this._menuStationSelected) return false;
+    const title = (this.songTitle || '').trim();
+    if (!title) return false;
+    return title !== t('web.ui.not_playing');
+  }
+
+  private get _menuCurrentStationNonQuickMix(): boolean {
+    const st = this.stations.find(s => s.id === this.currentStationId);
+    return !!st && !st.isQuickMix;
+  }
+
+  /** Web hamburger: show row when session ready; use **disabled** (not hidden) when matrix gate not met — no “wrong state” toasts. */
+  private get _menuRowExplain(): boolean {
+    return this._menuSessionReady;
+  }
+
+  private get _menuDisabledExplain(): boolean {
+    return !this._menuHasSong;
+  }
+
+  private get _menuRowUpcoming(): boolean {
+    return this._menuSessionReady;
+  }
+
+  private get _menuDisabledUpcoming(): boolean {
+    return !this._menuStationSelected;
+  }
+
+  private get _menuRowStationMode(): boolean {
+    return this._menuSessionReady && this._menuHasStations;
+  }
+
+  private get _menuDisabledStationMode(): boolean {
+    return !this._menuStationSelected || !this._menuCurrentStationNonQuickMix;
+  }
+
+  private get _menuRowStationSeeds(): boolean {
+    return this._menuSessionReady && this._menuHasStations;
+  }
+
+  private get _menuDisabledStationSeeds(): boolean {
+    return this._menuDisabledStationMode;
+  }
+
+  private get _menuRowQuickMix(): boolean {
+    return this._menuSessionReady;
+  }
+
+  private get _menuDisabledQuickMix(): boolean {
+    return !this._menuHasStations;
+  }
+
+  private get _menuRowCreateStation(): boolean {
+    return this._menuSessionReady;
+  }
+
+  private get _menuRowAddMusic(): boolean {
+    return this._menuSessionReady && this._menuHasStations;
+  }
+
+  private get _menuDisabledAddMusic(): boolean {
+    return !this._menuStationSelected;
+  }
+
+  private get _menuRowRename(): boolean {
+    return this._menuSessionReady && this._menuHasStations;
+  }
+
+  private get _menuDisabledRename(): boolean {
+    return !this._menuStationSelected;
+  }
+
+  private get _menuRowDelete(): boolean {
+    return this._menuSessionReady && this._menuHasStations;
+  }
+
+  private get _menuDisabledDelete(): boolean {
+    return !this._menuStationSelected;
+  }
+
+  private get _menuRowSelectStation(): boolean {
+    return this._menuSessionReady;
+  }
+
+  private get _menuDisabledSelectStation(): boolean {
+    return !this._menuHasStations;
+  }
+
   toggleMenu() {
     const menu = this.shadowRoot?.querySelector('info-menu');
     if (menu) {
@@ -585,14 +687,17 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoExplain() {
+    if (this._menuDisabledExplain) return;
     this.socket.emit('action', 'song.explain');
   }
-  
+
   handleInfoUpcoming() {
+    if (this._menuDisabledUpcoming) return;
     this.socket.emit('action', 'query.upcoming');
   }
   
   handleInfoQuickMix() {
+    if (this._menuDisabledQuickMix) return;
     this.quickMixModalOpen = true;
   }
   
@@ -677,9 +782,18 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoDeleteStation() {
+    if (this._menuDisabledDelete) return;
     this.selectStationModalOpen = true;
   }
-  
+
+  handleInfoSelectStation() {
+    if (this._menuDisabledSelectStation) return;
+    const toolbar = this.shadowRoot?.querySelector('bottom-toolbar') as
+      | { openStationSelector?: () => void }
+      | undefined;
+    toolbar?.openStationSelector?.();
+  }
+
   handleStationSelectedForDelete(e: CustomEvent) {
     const station = this.stations.find(s => s.id === e.detail.stationId);
     if (station) {
@@ -705,6 +819,7 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoAddMusic() {
+    if (this._menuDisabledAddMusic) return;
     this.addMusicModalOpen = true;
   }
   
@@ -729,6 +844,7 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoRenameStation() {
+    if (this._menuDisabledRename) return;
     this.renameStationModalOpen = true;
   }
   
@@ -744,14 +860,13 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoStationMode() {
+    if (this._menuDisabledStationMode || !this._menuRowStationMode) return;
     this.syncCurrentStationIdFromStationsList();
-    if (this.currentStationId) {
-      this.stationModeModalOpen = true;
-      // Fetch modes immediately when opening modal
-      this.handleGetStationModes();
-    } else {
-      this.showToast(t('web.ui.toast_no_station_playing'));
-    }
+    if (!this.currentStationId) return;
+    const st = this.stations.find(s => s.id === this.currentStationId);
+    if (!st || st.isQuickMix) return;
+    this.stationModeModalOpen = true;
+    this.handleGetStationModes();
   }
   
   handleGetStationModes() {
@@ -777,14 +892,13 @@ export class PianobarApp extends LitElement {
   }
   
   handleInfoStationSeeds() {
+    if (this._menuDisabledStationSeeds || !this._menuRowStationSeeds) return;
     this.syncCurrentStationIdFromStationsList();
-    if (this.currentStationId) {
-      this.stationSeedsModalOpen = true;
-      // Fetch station info immediately when opening modal
-      this.handleGetStationInfo();
-    } else {
-      this.showToast(t('web.ui.toast_no_station_playing'));
-    }
+    if (!this.currentStationId) return;
+    const st = this.stations.find(s => s.id === this.currentStationId);
+    if (!st || st.isQuickMix) return;
+    this.stationSeedsModalOpen = true;
+    this.handleGetStationInfo();
   }
   
   handleGetStationInfo() {
@@ -893,7 +1007,26 @@ export class PianobarApp extends LitElement {
               <span class="material-icons">menu</span>
             </button>
             <info-menu
-              ?showAccountSwitch=${this.accounts.length > 1}
+              ?showAccountSwitch=${this._menuSessionReady && this.accounts.length > 1}
+              ?showExplain=${this._menuRowExplain}
+              ?disabledExplain=${this._menuDisabledExplain}
+              ?showUpcoming=${this._menuRowUpcoming}
+              ?disabledUpcoming=${this._menuDisabledUpcoming}
+              ?showStationMode=${this._menuRowStationMode}
+              ?disabledStationMode=${this._menuDisabledStationMode}
+              ?showStationSeeds=${this._menuRowStationSeeds}
+              ?disabledStationSeeds=${this._menuDisabledStationSeeds}
+              ?showQuickMix=${this._menuRowQuickMix}
+              ?disabledQuickMix=${this._menuDisabledQuickMix}
+              ?showCreateStation=${this._menuRowCreateStation}
+              ?showAddMusic=${this._menuRowAddMusic}
+              ?disabledAddMusic=${this._menuDisabledAddMusic}
+              ?showRename=${this._menuRowRename}
+              ?disabledRename=${this._menuDisabledRename}
+              ?showDelete=${this._menuRowDelete}
+              ?disabledDelete=${this._menuDisabledDelete}
+              ?showSelectStation=${this._menuRowSelectStation}
+              ?disabledSelectStation=${this._menuDisabledSelectStation}
               @info-explain=${this.handleInfoExplain}
               @info-upcoming=${this.handleInfoUpcoming}
               @info-quickmix=${this.handleInfoQuickMix}
@@ -903,6 +1036,7 @@ export class PianobarApp extends LitElement {
               @info-station-mode=${this.handleInfoStationMode}
               @info-station-seeds=${this.handleInfoStationSeeds}
               @info-delete-station=${this.handleInfoDeleteStation}
+              @info-select-station=${this.handleInfoSelectStation}
               @info-switch-account=${this.handleInfoSwitchAccount}
             ></info-menu>
           </div>
