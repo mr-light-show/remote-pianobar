@@ -493,6 +493,9 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
 		app->playerErrors = 0;
+	} else if (threadRet == (void *) PLAYER_RET_STALE_URLS) {
+		BarStateDrainPlaylist(app);
+		app->playerErrors = 0;
 	} else if (threadRet == (void *) PLAYER_RET_SOFTFAIL) {
 		++app->playerErrors;
 		if (app->playerErrors >= app->settings.maxRetry) {

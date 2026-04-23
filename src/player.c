@@ -54,8 +54,10 @@ THE SOFTWARE.
 #include <libavfilter/avcodec.h>
 #endif
 #include <libavutil/channel_layout.h>
+#include <libavutil/error.h>
 #include <libavutil/opt.h>
 #include <libavutil/frame.h>
+#include <string.h>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -650,6 +652,28 @@ void BarPlayerSetVolume(player_t * const player) {
 	printError(player->settings, msg, ret); \
 	return false;
 
+bool BarIsAvErrStaleCdnUrl(int av_err) {
+	if (av_err >= 0) {
+		return false;
+	}
+#if defined(AVERROR_HTTP_FORBIDDEN)
+	if (av_err == AVERROR_HTTP_FORBIDDEN) {
+		return true;
+	}
+#endif
+	char errbuf[AV_ERROR_MAX_STRING_SIZE];
+	if (av_strerror(av_err, errbuf, sizeof errbuf) != 0) {
+		return false;
+	}
+	if (strstr(errbuf, "403") != NULL) {
+		return true;
+	}
+	if (strstr(errbuf, "Forbidden") != NULL) {
+		return true;
+	}
+	return false;
+}
+
 /* ffmpeg callback for blocking functions */
 static int intCb(void * const data) {
 	player_t * const player = data;
@@ -667,9 +691,13 @@ static int intCb(void * const data) {
 	}
 }
 
-static bool openStream(player_t * const player) {
+/* staleCdn403: set when avformat_open_input fails (optional, may be NULL) */
+static bool openStream(player_t * const player, bool *staleCdn403) {
 	assert(player != NULL);
 	assert(player->fctx == NULL);
+	if (staleCdn403 != NULL) {
+		*staleCdn403 = false;
+	}
 
 	int ret;
 
@@ -687,6 +715,13 @@ static bool openStream(player_t * const player) {
 	assert(player->url != NULL);
 	if ((ret = avformat_open_input(&player->fctx, player->url, NULL, &options)) < 0) {
 		av_dict_free(&options);
+		if (staleCdn403 != NULL) {
+			*staleCdn403 = BarIsAvErrStaleCdnUrl(ret);
+		}
+		if (player->fctx != NULL) {
+			avformat_free_context(player->fctx);
+			player->fctx = NULL;
+		}
 		softfail("Unable to open audio file");
 	}
 	av_dict_free(&options);  /* Free any remaining options not consumed by FFmpeg */
@@ -1076,21 +1111,22 @@ void *BarPlayerThread(void *data) {
 	bool retry;
 	do {
 		retry = false;
-		
+
 		/* Check quit before starting/retrying */
 		if (shouldQuit(player)) {
 			log_write(DEBUG_AUDIO, "Player: Quit detected before stream open\n");
 			break;
 		}
-		
+
 		logRSSAudio("before openStream");
 
-		if (openStream(player)) {
+		bool staleCdn403 = false;
+		if (openStream(player, &staleCdn403)) {
 			logRSSAudio("after openStream");
 
 			if (openFilter(player) && setupSound(player)) {
 				logRSSAudio("after openFilter+setupSound");
-				
+
 				changeMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
 
@@ -1099,68 +1135,72 @@ void *BarPlayerThread(void *data) {
 				logRSSAudio("after decode");
 
 				/* Check quit after decode completes */
-			if (shouldQuit(player)) {
-				log_write(DEBUG_AUDIO, "Player: Quit detected after decode\n");
-				finish(player);
-				break;
-			}
-			
-		/* Wait for playback to complete (end callback will signal) */
-		while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
-			/* Check quit first and stop audio immediately */
-			if (shouldQuit(player)) {
-				log_write(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
-				if (player->soundInitialized) {
-					ma_sound_stop(&player->sound);
-				}
-				break;
-			}
-				
-				/* Update progress from miniaudio's cursor */
-				float cursor;
-				if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
-					pthread_mutex_lock(&player->lock);
-					player->songPlayed = (unsigned int)cursor;
-					pthread_mutex_unlock(&player->lock);
-				}
-				
-				/* Check if song ended */
-				if (ma_sound_at_end(&player->sound)) {
-					log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
-					changeMode(player, PLAYER_FINISHED);
+				if (shouldQuit(player)) {
+					log_write(DEBUG_AUDIO, "Player: Quit detected after decode\n");
+					finish(player);
 					break;
 				}
-				
-			usleep(100000);  /* 100ms update interval */
+
+				/* Wait for playback to complete (end callback will signal) */
+				while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
+					/* Check quit first and stop audio immediately */
+					if (shouldQuit(player)) {
+						log_write(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
+						if (player->soundInitialized) {
+							ma_sound_stop(&player->sound);
+						}
+						break;
+					}
+
+					/* Update progress from miniaudio's cursor */
+					float cursor;
+					if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
+						pthread_mutex_lock(&player->lock);
+						player->songPlayed = (unsigned int)cursor;
+						pthread_mutex_unlock(&player->lock);
+					}
+
+					/* Check if song ended */
+					if (ma_sound_at_end(&player->sound)) {
+						log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
+						changeMode(player, PLAYER_FINISHED);
+						break;
+					}
+
+					usleep(100000);  /* 100ms update interval */
+				}
+
+				/* Check quit after playback before retry logic */
+				if (shouldQuit(player)) {
+					log_write(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+					finish(player);
+					break;
+				}
+
+				retry = (ret == AVERROR_INVALIDDATA ||
+				         ret == -ECONNRESET) &&
+				        !player->interrupted;
+			} else {
+				pret = PLAYER_RET_HARDFAIL;
+			}
+		} else {
+			if (staleCdn403) {
+				pret = PLAYER_RET_STALE_URLS;
+			} else {
+				pret = PLAYER_RET_SOFTFAIL;
+			}
 		}
-			
-		/* Check quit after playback before retry logic */
+		changeMode(player, PLAYER_WAITING);
+		finish(player);
+
+		/* Check quit after cleanup before retry */
 		if (shouldQuit(player)) {
-			log_write(DEBUG_AUDIO, "Player: Quit detected after playback\n");
-			finish(player);
+			log_write(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
 			break;
 		}
-		
-		retry = (ret == AVERROR_INVALIDDATA ||
-					 ret == -ECONNRESET) &&
-					!player->interrupted;
-		} else {
-			pret = PLAYER_RET_HARDFAIL;
-		}
-	} else {
-		pret = PLAYER_RET_SOFTFAIL;
-}
-changeMode(player, PLAYER_WAITING);
-finish(player);
+	} while (retry);
 
-/* Check quit after cleanup before retry */
-if (shouldQuit(player)) {
-	log_write(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
-	break;
-}
-} while (retry);
+	changeMode(player, PLAYER_FINISHED);
 
-changeMode(player, PLAYER_FINISHED);
-
-return (void *)pret;
+	return (void *) pret;
 }

@@ -26,6 +26,8 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <errno.h>
 
+#include <libavutil/error.h>
+
 #include "../../src/player.h"
 #include "../../src/settings.h"
 
@@ -62,6 +64,16 @@ START_TEST(test_player_is_paused) {
 	pthread_mutex_destroy(&player.decoderLock);
 	pthread_cond_destroy(&player.cond);
 	pthread_mutex_destroy(&player.lock);
+}
+END_TEST
+
+/* BarIsAvErrStaleCdnUrl: 403 is stale CDN, success codes and other errors are not */
+START_TEST(test_stale_cdn_403) {
+	ck_assert(BarIsAvErrStaleCdnUrl(0) == false);
+	ck_assert(BarIsAvErrStaleCdnUrl(-(int)ENOMEM) == false);
+#if defined(AVERROR_HTTP_FORBIDDEN)
+	ck_assert(BarIsAvErrStaleCdnUrl(AVERROR_HTTP_FORBIDDEN) == true);
+#endif
 }
 END_TEST
 
@@ -207,6 +219,7 @@ Suite *player_suite(void) {
 	
 	tc_basic = tcase_create("Basic Functions");
 	tcase_add_test(tc_basic, test_player_is_paused);
+	tcase_add_test(tc_basic, test_stale_cdn_403);
 	tcase_add_test(tc_basic, test_player_get_mode);
 	tcase_add_test(tc_basic, test_player_reset_initializes_fields);
 	suite_add_tcase(s, tc_basic);
