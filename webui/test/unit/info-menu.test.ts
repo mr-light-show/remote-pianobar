@@ -28,7 +28,7 @@ describe('InfoMenu', () => {
       `);
 
       const actionButtons = element.shadowRoot!.querySelectorAll('.action-button');
-      expect(actionButtons.length).toBe(9);
+      expect(actionButtons.length).toBe(10);
     });
 
     it('renders Switch Account when showAccountSwitch is true', async () => {
@@ -37,7 +37,7 @@ describe('InfoMenu', () => {
       `);
 
       const actionButtons = element.shadowRoot!.querySelectorAll('.action-button');
-      expect(actionButtons.length).toBe(10);
+      expect(actionButtons.length).toBe(11);
       expect(element.shadowRoot!.textContent).toContain('Switch Account');
     });
 
