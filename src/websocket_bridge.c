@@ -81,6 +81,12 @@ void BarWsBroadcastSongStart(BarApp_t *app) {
 	}
 }
 
+void BarWsBroadcastProcess(BarApp_t *app) {
+	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
+		BarSocketIoEmitProcess(app);
+	}
+}
+
 void BarWsBroadcastSongStop(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI) {
 		BarWebsocketBroadcastSongStop(app);
@@ -160,6 +166,7 @@ void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count) {
 	(void)app; (void)songs; (void)count;
 }
 void BarWsBroadcastSongStart(BarApp_t *app) { (void)app; }
+void BarWsBroadcastProcess(BarApp_t *app) { (void)app; }
 void BarWsBroadcastSongStop(BarApp_t *app) { (void)app; }
 void BarWsBroadcastProgress(BarApp_t *app) { (void)app; }
 void BarWsBroadcastPlayState(BarApp_t *app) { (void)app; }

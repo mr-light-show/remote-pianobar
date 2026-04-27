@@ -367,7 +367,7 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 }
 END_TEST
 
-/* Test: Rating commands emit state update */
+/* Test: In-place rating uses process payload (BarWsBroadcastProcess -> BarSocketIoEmitProcess) */
 START_TEST(test_socketio_rating_emits_state) {
 	BarApp_t app;
 	PianoSong_t song;
@@ -383,7 +383,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	song.album = "Test Album";
 	song.coverArt = "http://example.com/art.jpg";
 	song.trackToken = "test_token";
-	song.rating = PIANO_RATE_NONE;
+	song.rating = PIANO_RATE_LOVE;  /* After successful rate-song, same as ui_act */
 	song.length = 180;
 	
 	station.name = "Test Station";
@@ -393,6 +393,9 @@ START_TEST(test_socketio_rating_emits_state) {
 	app.curStation = &station;
 	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
+	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app.settings.volume = 50;
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
@@ -400,16 +403,15 @@ START_TEST(test_socketio_rating_emits_state) {
 	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
 	clearBroadcastMock();
 	
-	/* Simulate love command - should emit start event */
-	song.rating = PIANO_RATE_LOVE;  /* Simulate what BarUiDispatchById does */
-	BarSocketIoEmitStart(&app);
+	BarSocketIoEmitProcess(&app);
 	
-	/* Verify "start" event was emitted with rating */
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "start") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "process") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "\"song\"") != NULL);
 	ck_assert(strstr(lastBroadcastMessage, "rating") != NULL);
 	ck_assert(strstr(lastBroadcastMessage, "1") != NULL);  /* PIANO_RATE_LOVE = 1 */
 	
+	pthread_mutex_destroy(&app.player.lock);
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
 	#endif

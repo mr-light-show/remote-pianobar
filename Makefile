@@ -30,6 +30,8 @@ ifeq (${CC},cc)
 endif
 
 PIANOBAR_DIR:=src
+# Third-party miniaudio wrapper: omit from cppcheck (vendored, multi-config noise)
+PIANOBAR_LINT_C:=$(filter-out ${PIANOBAR_DIR}/miniaudio_impl.c,$(wildcard ${PIANOBAR_DIR}/*.c))
 LOCALE_YAML:=$(wildcard locale/*.yaml)
 LOCALE_GEN_MARKER:=${PIANOBAR_DIR}/l10n_defaults_gen.c
 # Updated when codegen runs; avoids re-running Python on every `make locale-codegen` (e.g. after
@@ -288,10 +290,17 @@ test: ${TEST_BIN}
 # -i: skip miniaudio_impl.c (third-party miniaudio implementation wrapper)
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
+<<<<<<< feat/process-rating-websocket
+	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
+		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkersReport \
+		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
+		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_LINT_C} ${LIBPIANO_DIR}/*.c
+=======
 	${SILENTCMD}cppcheck -i${PIANOBAR_DIR}/miniaudio_impl.c --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
 		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkLevelNormal --suppress=checkersReport \
 		--suppress=unmatchedSuppression --inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
 		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_DIR}/*.c ${LIBPIANO_DIR}/*.c
+>>>>>>> main
 
 # Run linter on test files
 lint-test:
@@ -356,10 +365,17 @@ test-all:
 
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
+<<<<<<< feat/process-rating-websocket
+	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
+		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkersReport \
+		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
+		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_LINT_C} ${LIBPIANO_DIR}/*.c
+=======
 	${SILENTCMD}cppcheck -i${PIANOBAR_DIR}/miniaudio_impl.c --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
 		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkLevelNormal --suppress=checkersReport \
 		--suppress=unmatchedSuppression --inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
 		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_DIR}/*.c ${LIBPIANO_DIR}/*.c
+>>>>>>> main
 
 lint-test:
 	@echo "Tests are disabled when NOWEBSOCKET=1"

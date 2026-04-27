@@ -193,8 +193,8 @@ BarUiActCallback(BarUiActBanSong) {
 
 	BarUiMsg (&app->settings, MSG_INFO, "Banning song... ");
 	if (BarUiActDefaultPianoCall (PIANO_REQUEST_RATE_SONG, &reqData)) {
-		/* Notify WebSocket clients of rating change */
-		BarWsBroadcastSongStart(app);
+		/* WebSocket: full `process` (not `start`) so clients get song.rating without a new track */
+		BarWsBroadcastProcess(app);
 		if (selSong == BarStateGetPlaylist(app)) {
 			BarUiDoSkipSong (&app->player);
 		}
@@ -529,8 +529,8 @@ BarUiActCallback(BarUiActLoveSong) {
 
 	BarUiMsg (&app->settings, MSG_INFO, "Loving song... ");
 	if (BarUiActDefaultPianoCall (PIANO_REQUEST_RATE_SONG, &reqData)) {
-		/* Notify WebSocket clients of rating change */
-		BarWsBroadcastSongStart(app);
+		/* WebSocket: full `process` (not `start`) so clients get song.rating without a new track */
+		BarWsBroadcastProcess(app);
 	}
 	BarUiActDefaultEventcmd ("songlove");
 }

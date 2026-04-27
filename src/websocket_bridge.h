@@ -38,6 +38,8 @@ void BarWsBroadcastVolume(BarApp_t *app);
 void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation);
 void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count);
 void BarWsBroadcastSongStart(BarApp_t *app);
+/** Full state sync for in-place changes (e.g. song.rating). Emits `process`, not `start`. */
+void BarWsBroadcastProcess(BarApp_t *app);
 void BarWsBroadcastSongStop(BarApp_t *app);
 void BarWsBroadcastProgress(BarApp_t *app);
 void BarWsBroadcastPlayState(BarApp_t *app);
