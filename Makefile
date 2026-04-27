@@ -285,11 +285,12 @@ test: ${TEST_BIN}
 
 # Run static analysis (requires cppcheck)
 # Suppressions: .cppcheck-suppress (miniaudio.h and project-specific false positives)
+# -i: skip miniaudio_impl.c (third-party miniaudio implementation wrapper)
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
-	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
+	${SILENTCMD}cppcheck -i${PIANOBAR_DIR}/miniaudio_impl.c --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
 		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkLevelNormal --suppress=checkersReport \
-		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
+		--suppress=unmatchedSuppression --inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
 		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_DIR}/*.c ${LIBPIANO_DIR}/*.c
 
 # Run linter on test files
@@ -355,9 +356,9 @@ test-all:
 
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
-	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
+	${SILENTCMD}cppcheck -i${PIANOBAR_DIR}/miniaudio_impl.c --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
 		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkLevelNormal --suppress=checkersReport \
-		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
+		--suppress=unmatchedSuppression --inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
 		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_DIR}/*.c ${LIBPIANO_DIR}/*.c
 
 lint-test:

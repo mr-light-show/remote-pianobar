@@ -35,6 +35,7 @@ THE SOFTWARE.
 #define COLOR_GREEN   "\033[0;32m"  /* UI */
 #define COLOR_MAGENTA      "\033[0;35m"  /* WebSocket progress (non-bold) */
 #define COLOR_MAGENTA_BOLD "\033[1;35m"  /* WebSocket events */
+#define COLOR_BLUE    "\033[1;34m"  /* CLI (BarUiMsg mirror) */
 #define COLOR_RED     "\033[0;31m"  /* Error */
 #endif
 
@@ -44,11 +45,16 @@ void log_init(void)
 {
 #ifdef HAVE_DEBUGLOG
 	const char *const s = getenv("PIANOBAR_DEBUG");
+	unsigned int raw = 0;
 	if (s != NULL) {
-		debug_mask = (unsigned int)atoi(s);
+		raw = (unsigned int)atoi(s);
+	}
+	debug_mask = raw;
+	if (debug_mask != 0) {
+		debug_mask |= DEBUG_CLI;   /* Turn on CLI debugging */
 	}
 	if (debug_mask != 0) {
-		fprintf(stderr, "PIANOBAR_DEBUG=%u: ", debug_mask);
+		fprintf(stderr, "PIANOBAR_DEBUG=%u: ", raw);
 		if (debug_mask & DEBUG_NETWORK) {
 			fprintf(stderr, "%sNETWORK%s ", COLOR_CYAN, COLOR_RESET);
 		}
@@ -63,6 +69,9 @@ void log_init(void)
 		}
 		if (debug_mask & DEBUG_WEBSOCKET_PROGRESS) {
 			fprintf(stderr, "%sWS_PROGRESS%s ", COLOR_MAGENTA, COLOR_RESET);
+		}
+		if (debug_mask & DEBUG_CLI) {
+			fprintf(stderr, "%sCLI%s ", COLOR_BLUE, COLOR_RESET);
 		}
 		fprintf(stderr, "\n");
 	}
@@ -80,6 +89,24 @@ static void log_to_stderr(const char *format, va_list args)
 }
 
 #ifdef HAVE_DEBUGLOG
+/* Longest label is "WS_Progress" (11). Pad so ':' and message body start in the same column. */
+#define LOG_KIND_LABEL_FIELD_WIDTH 11
+
+/* Label after [time]; same strings as log_init() banner (NETWORK, AUDIO, …). */
+static const char *log_kind_prefix_label(logKind kind)
+{
+	switch (kind) {
+	case LOG_ERROR:                return "Error";
+	case DEBUG_NETWORK:            return "Network";
+	case DEBUG_AUDIO:             return "Audio";
+	case DEBUG_UI:                 return "UI";
+	case DEBUG_WEBSOCKET:          return "WebSocket";
+	case DEBUG_WEBSOCKET_PROGRESS: return "WS_Progress";
+	case DEBUG_CLI:                return "CLI";
+	default:                       return "?";
+	}
+}
+
 static void log_with_timestamp(logKind kind, const char *format, va_list args)
 {
 	struct timespec ts;
@@ -93,18 +120,42 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 		case DEBUG_UI:                  color = COLOR_GREEN; break;
 		case DEBUG_WEBSOCKET:           color = COLOR_MAGENTA_BOLD; break;
 		case DEBUG_WEBSOCKET_PROGRESS:  color = COLOR_MAGENTA; break;
+		case DEBUG_CLI:                 color = COLOR_BLUE; break;
 		case LOG_ERROR:                 color = COLOR_RED; break;
 		default:                        color = ""; break;
 	}
-	/* Color on timestamp only; message is default terminal color */
+	/* Timestamp and kind prefix share the same color; message body is default color */
 	fprintf(stderr, "%s[%02d:%02d:%02d.%03ld]%s ",
 	        color,
 	        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
 	        (long)(ts.tv_nsec / 1000000),
 	        COLOR_RESET);
+	fprintf(stderr, "%s%-*s:%s ",
+	        color,
+	        LOG_KIND_LABEL_FIELD_WIDTH,
+	        log_kind_prefix_label(kind),
+	        COLOR_RESET);
 	vfprintf(stderr, format, args);
 }
 #endif
+
+bool log_is_any_debug_enabled(void)
+{
+#ifdef HAVE_DEBUGLOG
+	return debug_mask != 0;
+#else
+	return false;
+#endif
+}
+
+bool log_is_debug_cli_enabled(void)
+{
+#ifdef HAVE_DEBUGLOG
+	return (debug_mask & DEBUG_CLI) != 0;
+#else
+	return false;
+#endif
+}
 
 void log_write(logKind kind, const char *format, ...)
 {
@@ -120,7 +171,7 @@ void log_write(logKind kind, const char *format, ...)
 #endif
 	} else {
 #ifdef HAVE_DEBUGLOG
-		if (debug_mask & kind) {
+		if ((debug_mask & kind) != 0) {
 			log_with_timestamp(kind, format, args);
 		}
 #endif

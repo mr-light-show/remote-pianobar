@@ -37,13 +37,13 @@ THE SOFTWARE.
 #include "bar_constants.h"
 #include "miniaudio.h"
 
+#include <stdio.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
 #include <assert.h>
-#include <inttypes.h>
-#include <time.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
@@ -54,11 +54,17 @@ THE SOFTWARE.
 #include <libavfilter/avcodec.h>
 #endif
 #include <libavutil/channel_layout.h>
+#include <libavutil/error.h>
 #include <libavutil/opt.h>
 #include <libavutil/frame.h>
+#include <string.h>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
+#endif
+
+#if defined(__GLIBC__)
+#include <malloc.h>
 #endif
 
 #include "player.h"
@@ -103,6 +109,107 @@ static long getCurrentRSSKB(void) {
 	fclose(f);
 	return rss;  /* Already in KB */
 #endif
+}
+
+/* Right-aligned field for log lines; fits up to 9,999,999 KB ("9,999,999"). */
+#define RSS_KB_FIELD_WIDTH 9
+
+static void formatULongWithCommas(char *out, size_t outlen, unsigned long n)
+{
+	char num[24];
+	snprintf(num, sizeof num, "%lu", n);
+	const int L = (int)strlen(num);
+	char tmp[32];
+	int t = 0;
+	int count = 0;
+	for (int i = L - 1; i >= 0; i--) {
+		if (count > 0 && count % 3 == 0) {
+			tmp[t++] = ',';
+		}
+		tmp[t++] = num[i];
+		count++;
+	}
+	tmp[t] = '\0';
+	char rev[32];
+	for (int i = 0; i < t; i++) {
+		rev[i] = tmp[t - 1 - i];
+	}
+	rev[t] = '\0';
+	snprintf(out, outlen, "%s", rev);
+}
+
+static void formatRSSKBField(char *out, size_t outlen, long kb)
+{
+	if (kb < 0) {
+		snprintf(out, outlen, "%*s", RSS_KB_FIELD_WIDTH, "?");
+		return;
+	}
+	char tmp[32];
+	formatULongWithCommas(tmp, sizeof tmp, (unsigned long)kb);
+	snprintf(out, outlen, "%*s", RSS_KB_FIELD_WIDTH, tmp);
+}
+
+/* Delta vs high-water RSS for parenthetical part; e.g. (+ 32 KB), (- 1,234 KB). */
+static void formatRSSDeltaParen(char *out, size_t outlen, long delta)
+{
+	if (delta == 0) {
+		snprintf(out, outlen, "(0 KB)");
+		return;
+	}
+	unsigned long mag;
+	if (delta < 0) {
+		mag = (unsigned long)(-(unsigned long long)delta);
+	} else {
+		mag = (unsigned long)delta;
+	}
+	char magbuf[32];
+	formatULongWithCommas(magbuf, sizeof magbuf, mag);
+	if (delta > 0) {
+		snprintf(out, outlen, "(+ %s KB)", magbuf);
+	} else {
+		snprintf(out, outlen, "(- %s KB)", magbuf);
+	}
+}
+
+/* Peak RSS (KB) for DEBUG_AUDIO lines from logRSSAudio; process-wide, BarPlayerThread only. */
+static long s_rssAudioHwmKb = -1;
+
+#if defined(__GLIBC__)
+/* RSS (KB) recorded after the last malloc_trim; -1 = never trimmed yet. */
+static long s_rssAfterLastTrimKb = -1;
+#endif
+
+static void logRSSAudio(const char *fmt, ...)
+	__attribute__((format(printf, 1, 2)));
+
+static void logRSSAudio(const char *fmt, ...)
+{
+	char label[512];
+	va_list ap;
+	va_start(ap, fmt);
+	(void)vsnprintf(label, sizeof label, fmt, ap);
+	va_end(ap);
+
+	const long cur = getCurrentRSSKB();
+	char absbuf[RSS_KB_FIELD_WIDTH + 1];
+	formatRSSKBField(absbuf, sizeof absbuf, cur);
+
+	char paren[64];
+	if (cur < 0) {
+		snprintf(paren, sizeof paren, "(n/a)");
+	} else if (s_rssAudioHwmKb < 0) {
+		snprintf(paren, sizeof paren, "(n/a)");
+	} else {
+		formatRSSDeltaParen(paren, sizeof paren, cur - s_rssAudioHwmKb);
+	}
+
+	log_write(DEBUG_AUDIO, "%s KB %s RSS: %s\n", absbuf, paren, label);
+
+	if (cur >= 0) {
+		if (s_rssAudioHwmKb < 0 || cur > s_rssAudioHwmKb) {
+			s_rssAudioHwmKb = cur;
+		}
+	}
 }
 
 /* Forward declarations */
@@ -231,9 +338,9 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		
 		/* Periodic frame stats logging - uncomment to debug memory leaks
 		if (g_framesAllocated % 1000 == 0) {
-			log_write(DEBUG_AUDIO, "Frame stats: alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
-			           g_framesAllocated, g_framesFreed, 
-			           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
+			logRSSAudio("frame stats (alloc=%ld, freed=%ld, delta=%ld)",
+			            g_framesAllocated, g_framesFreed,
+			            g_framesAllocated - g_framesFreed);
 		}
 		*/
 		/* Loop will consume from it on next iteration */
@@ -416,9 +523,13 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	 * CoreAudio creates background threads that don't survive fork properly. */
 	
 	if (p->engineInitialized) {
-		// Already initialized, just reset and return
+		/* Already initialized, just reset and return */
 		BarPlayerReset(p);
 		p->settings = settings;
+		s_rssAudioHwmKb = -1;
+#if defined(__GLIBC__)
+		s_rssAfterLastTrimKb = -1;
+#endif
 		return;
 	}
 	
@@ -436,6 +547,10 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	
 	BarPlayerReset(p);
 	p->settings = settings;
+	s_rssAudioHwmKb = -1;
+#if defined(__GLIBC__)
+	s_rssAfterLastTrimKb = -1;
+#endif
 }
 
 void BarPlayerDestroy(player_t * const p) {
@@ -537,6 +652,28 @@ void BarPlayerSetVolume(player_t * const player) {
 	printError(player->settings, msg, ret); \
 	return false;
 
+bool BarIsAvErrStaleCdnUrl(int av_err) {
+	if (av_err >= 0) {
+		return false;
+	}
+#if defined(AVERROR_HTTP_FORBIDDEN)
+	if (av_err == AVERROR_HTTP_FORBIDDEN) {
+		return true;
+	}
+#endif
+	char errbuf[AV_ERROR_MAX_STRING_SIZE];
+	if (av_strerror(av_err, errbuf, sizeof errbuf) != 0) {
+		return false;
+	}
+	if (strstr(errbuf, "403") != NULL) {
+		return true;
+	}
+	if (strstr(errbuf, "Forbidden") != NULL) {
+		return true;
+	}
+	return false;
+}
+
 /* ffmpeg callback for blocking functions */
 static int intCb(void * const data) {
 	player_t * const player = data;
@@ -554,9 +691,13 @@ static int intCb(void * const data) {
 	}
 }
 
-static bool openStream(player_t * const player) {
+/* staleCdn403: set when avformat_open_input fails (optional, may be NULL) */
+static bool openStream(player_t * const player, bool *staleCdn403) {
 	assert(player != NULL);
 	assert(player->fctx == NULL);
+	if (staleCdn403 != NULL) {
+		*staleCdn403 = false;
+	}
 
 	int ret;
 
@@ -574,6 +715,13 @@ static bool openStream(player_t * const player) {
 	assert(player->url != NULL);
 	if ((ret = avformat_open_input(&player->fctx, player->url, NULL, &options)) < 0) {
 		av_dict_free(&options);
+		if (staleCdn403 != NULL) {
+			*staleCdn403 = BarIsAvErrStaleCdnUrl(ret);
+		}
+		if (player->fctx != NULL) {
+			avformat_free_context(player->fctx);
+			player->fctx = NULL;
+		}
 		softfail("Unable to open audio file");
 	}
 	av_dict_free(&options);  /* Free any remaining options not consumed by FFmpeg */
@@ -883,11 +1031,11 @@ static void cleanupSound(player_t * const player) {
 }
 
 static void finish(player_t * const player) {
-	log_write(DEBUG_AUDIO, "RSS at finish() start: %ld KB\n", getCurrentRSSKB());
-	
+	logRSSAudio("at finish() start");
+
 	/* Clean up miniaudio sound */
 	cleanupSound(player);
-	log_write(DEBUG_AUDIO, "RSS after cleanupSound: %ld KB\n", getCurrentRSSKB());
+	logRSSAudio("after cleanupSound");
 	
 	/* Drain any remaining frames from buffersink before freeing graph.
 	 * Frames can accumulate if playback stops mid-song or if miniaudio
@@ -906,29 +1054,46 @@ static void finish(player_t * const player) {
 			}
 		}
 	}
-	log_write(DEBUG_AUDIO, "RSS after drain: %ld KB\n", getCurrentRSSKB());
-	
+	logRSSAudio("after drain");
+
 	/* Clean up ffmpeg resources */
 	if (player->fgraph != NULL) {
 		avfilter_graph_free(&player->fgraph);
 		player->fgraph = NULL;
 	}
-	log_write(DEBUG_AUDIO, "RSS after avfilter_graph_free: %ld KB\n", getCurrentRSSKB());
-	
+	logRSSAudio("after avfilter_graph_free");
+
 	if (player->cctx != NULL) {
 		avcodec_free_context(&player->cctx);
 		player->cctx = NULL;
 	}
-	log_write(DEBUG_AUDIO, "RSS after avcodec_free_context: %ld KB\n", getCurrentRSSKB());
-	
+	logRSSAudio("after avcodec_free_context");
+
 	if (player->fctx != NULL) {
 		avformat_close_input(&player->fctx);
 	}
-	log_write(DEBUG_AUDIO, "RSS after avformat_close_input: %ld KB\n", getCurrentRSSKB());
-	
-	log_write(DEBUG_AUDIO, "Song cleanup complete: frames alloc=%ld, freed=%ld, delta=%ld, RSS=%ld KB\n",
-	           g_framesAllocated, g_framesFreed, 
-	           g_framesAllocated - g_framesFreed, getCurrentRSSKB());
+	logRSSAudio("after avformat_close_input");
+
+	logRSSAudio("song cleanup complete (frames alloc=%ld, freed=%ld, delta=%ld)",
+	            g_framesAllocated, g_framesFreed,
+	            g_framesAllocated - g_framesFreed);
+
+#if defined(__GLIBC__)
+	{
+		const long rssNow = getCurrentRSSKB();
+		if (rssNow > 0) {
+			const long growth = (s_rssAfterLastTrimKb > 0)
+			                    ? (rssNow - s_rssAfterLastTrimKb)
+			                    : 0;
+			if (s_rssAfterLastTrimKb < 0 || growth >= 512) {
+				malloc_trim(0);
+				s_rssAfterLastTrimKb = getCurrentRSSKB();
+				logRSSAudio("after malloc_trim (reclaimed %ld KB)",
+				            rssNow - s_rssAfterLastTrimKb);
+			}
+		}
+	}
+#endif
 }
 
 /*
@@ -946,91 +1111,96 @@ void *BarPlayerThread(void *data) {
 	bool retry;
 	do {
 		retry = false;
-		
+
 		/* Check quit before starting/retrying */
 		if (shouldQuit(player)) {
 			log_write(DEBUG_AUDIO, "Player: Quit detected before stream open\n");
 			break;
 		}
-		
-		log_write(DEBUG_AUDIO, "RSS before openStream: %ld KB\n", getCurrentRSSKB());
-		
-		if (openStream(player)) {
-			log_write(DEBUG_AUDIO, "RSS after openStream: %ld KB\n", getCurrentRSSKB());
-			
+
+		logRSSAudio("before openStream");
+
+		bool staleCdn403 = false;
+		if (openStream(player, &staleCdn403)) {
+			logRSSAudio("after openStream");
+
 			if (openFilter(player) && setupSound(player)) {
-				log_write(DEBUG_AUDIO, "RSS after openFilter+setupSound: %ld KB\n", getCurrentRSSKB());
-				
+				logRSSAudio("after openFilter+setupSound");
+
 				changeMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
-				
-			/* Run decoder - feeds frames to filter chain which miniaudio reads from */
-			const int ret = decode(player);
-			log_write(DEBUG_AUDIO, "RSS after decode: %ld KB\n", getCurrentRSSKB());
-			
-			/* Check quit after decode completes */
-			if (shouldQuit(player)) {
-				log_write(DEBUG_AUDIO, "Player: Quit detected after decode\n");
-				finish(player);
-				break;
-			}
-			
-		/* Wait for playback to complete (end callback will signal) */
-		while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
-			/* Check quit first and stop audio immediately */
-			if (shouldQuit(player)) {
-				log_write(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
-				if (player->soundInitialized) {
-					ma_sound_stop(&player->sound);
-				}
-				break;
-			}
-				
-				/* Update progress from miniaudio's cursor */
-				float cursor;
-				if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
-					pthread_mutex_lock(&player->lock);
-					player->songPlayed = (unsigned int)cursor;
-					pthread_mutex_unlock(&player->lock);
-				}
-				
-				/* Check if song ended */
-				if (ma_sound_at_end(&player->sound)) {
-					log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
-					changeMode(player, PLAYER_FINISHED);
+
+				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
+				const int ret = decode(player);
+				logRSSAudio("after decode");
+
+				/* Check quit after decode completes */
+				if (shouldQuit(player)) {
+					log_write(DEBUG_AUDIO, "Player: Quit detected after decode\n");
+					finish(player);
 					break;
 				}
-				
-			usleep(100000);  /* 100ms update interval */
+
+				/* Wait for playback to complete (end callback will signal) */
+				while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
+					/* Check quit first and stop audio immediately */
+					if (shouldQuit(player)) {
+						log_write(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
+						if (player->soundInitialized) {
+							ma_sound_stop(&player->sound);
+						}
+						break;
+					}
+
+					/* Update progress from miniaudio's cursor */
+					float cursor;
+					if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
+						pthread_mutex_lock(&player->lock);
+						player->songPlayed = (unsigned int)cursor;
+						pthread_mutex_unlock(&player->lock);
+					}
+
+					/* Check if song ended */
+					if (ma_sound_at_end(&player->sound)) {
+						log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
+						changeMode(player, PLAYER_FINISHED);
+						break;
+					}
+
+					usleep(100000);  /* 100ms update interval */
+				}
+
+				/* Check quit after playback before retry logic */
+				if (shouldQuit(player)) {
+					log_write(DEBUG_AUDIO, "Player: Quit detected after playback\n");
+					finish(player);
+					break;
+				}
+
+				retry = (ret == AVERROR_INVALIDDATA ||
+				         ret == -ECONNRESET) &&
+				        !player->interrupted;
+			} else {
+				pret = PLAYER_RET_HARDFAIL;
+			}
+		} else {
+			if (staleCdn403) {
+				pret = PLAYER_RET_STALE_URLS;
+			} else {
+				pret = PLAYER_RET_SOFTFAIL;
+			}
 		}
-			
-		/* Check quit after playback before retry logic */
+		changeMode(player, PLAYER_WAITING);
+		finish(player);
+
+		/* Check quit after cleanup before retry */
 		if (shouldQuit(player)) {
-			log_write(DEBUG_AUDIO, "Player: Quit detected after playback\n");
-			finish(player);
+			log_write(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
 			break;
 		}
-		
-		retry = (ret == AVERROR_INVALIDDATA ||
-					 ret == -ECONNRESET) &&
-					!player->interrupted;
-		} else {
-			pret = PLAYER_RET_HARDFAIL;
-		}
-	} else {
-		pret = PLAYER_RET_SOFTFAIL;
-}
-changeMode(player, PLAYER_WAITING);
-finish(player);
+	} while (retry);
 
-/* Check quit after cleanup before retry */
-if (shouldQuit(player)) {
-	log_write(DEBUG_AUDIO, "Player: Quit detected after cleanup\n");
-	break;
-}
-} while (retry);
+	changeMode(player, PLAYER_FINISHED);
 
-changeMode(player, PLAYER_FINISHED);
-
-return (void *)pret;
+	return (void *) pret;
 }

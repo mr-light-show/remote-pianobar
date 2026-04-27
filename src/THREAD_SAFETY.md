@@ -526,8 +526,11 @@ Pianobar uses a single logging API for diagnostics and errors.
 - **Diagnostics and errors:** Use `log_write(kind, format, ...)` from [log.h](log.h):
   - **LOG_ERROR** (0): Always logs. Use for errors, warnings, and important startup/info messages. Writes to stderr (and to the configured log file when the daemon redirects stderr).
   - **DEBUG_*** (DEBUG_NETWORK, DEBUG_AUDIO, DEBUG_UI, DEBUG_WEBSOCKET, DEBUG_WEBSOCKET_PROGRESS): Log only when the corresponding bit is set in the `PIANOBAR_DEBUG` environment variable (e.g. `PIANOBAR_DEBUG=8` for WebSocket). Call `log_init()` once at startup (main.c does this); the debug mask is read from the environment and kept inside the log module.
+  - **DEBUG_CLI**: Kind label for [`BarUiMsg`](ui.c) lines on stderr. `log_init` ORs `DEBUG_CLI` into the internal mask whenever any `PIANOBAR_DEBUG` bit is non-zero, so `log_write(DEBUG_CLI, …)` follows the same `(debug_mask & kind)` rule as other DEBUG kinds; only in **web** / **both** UI modes. When that path is taken, `BarUiMsg` does **not** also print the same text to stdout (avoids duplicate lines when merging streams). Do not call `log_write(DEBUG_CLI, …)` by hand except from `BarUiMsg` unless you intentionally match that format.
 
 Do not use raw `fprintf(stderr, ...)` for diagnostics or errors; use `log_write(LOG_ERROR, ...)` or the appropriate DEBUG_* kind so that output is consistent (timestamps, optional color) and can be directed to the log file when configured.
+
+When `HAVE_DEBUGLOG` is enabled, each line is prefixed with a colored timestamp and a **kind label** matching the `logKind` (same color as the timestamp); do not repeat that label in the format string (e.g. omit a leading `WebSocket:` when using `DEBUG_WEBSOCKET`). Subsystem tags such as `Socket.IO:` or `PlaybackMgr:` remain in the message body.
 
 ---
 

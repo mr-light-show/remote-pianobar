@@ -28,6 +28,7 @@ THE SOFTWARE.
 /* required for freebsd */
 #include <sys/types.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <signal.h>
 
@@ -113,7 +114,12 @@ struct player {
 	const BarSettings_t *settings;
 };
 
-enum {PLAYER_RET_OK = 0, PLAYER_RET_HARDFAIL = 1, PLAYER_RET_SOFTFAIL = 2};
+enum {PLAYER_RET_OK = 0, PLAYER_RET_HARDFAIL = 1, PLAYER_RET_SOFTFAIL = 2,
+	/* Stream open failed with HTTP 403 (expired CDN URL); clear playlist and refetch */
+	PLAYER_RET_STALE_URLS = 3};
+
+/* True if FFmpeg av_err from avformat_open_input is HTTP 403 (stale track URL). */
+bool BarIsAvErrStaleCdnUrl(int av_err);
 
 void *BarPlayerThread (void *data);
 void BarPlayerSetVolume (player_t * const player);

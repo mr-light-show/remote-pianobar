@@ -493,6 +493,9 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
 		app->playerErrors = 0;
+	} else if (threadRet == (void *) PLAYER_RET_STALE_URLS) {
+		BarStateDrainPlaylist(app);
+		app->playerErrors = 0;
 	} else if (threadRet == (void *) PLAYER_RET_SOFTFAIL) {
 		++app->playerErrors;
 		if (app->playerErrors >= app->settings.maxRetry) {
@@ -866,7 +869,7 @@ int main (int argc, char **argv) {
 			}
 			
 			if (app.lockFd < 0) {
-				log_write(LOG_ERROR, "Error: Could not acquire lock. Another instance may still be running.\n");
+				log_write(LOG_ERROR, "Could not acquire lock. Another instance may still be running.\n");
 				BarL10nDestroy (&app.l10n);
 				BarSettingsDestroy (&app.settings);
 				return 1;
@@ -976,7 +979,7 @@ int main (int argc, char **argv) {
 			BarPrintStartupInfo(&app, getpid(), true, stderr);
 		} else {
 			/* Should have been relaunched earlier - this shouldn't happen */
-			log_write(LOG_ERROR, "Error: ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
+			log_write(LOG_ERROR, "ui_mode=web on macOS requires relaunch, but relaunch was skipped\n");
 			BarL10nDestroy (&app.l10n);
 			BarSettingsDestroy (&app.settings);
 			return 1;
