@@ -323,6 +323,9 @@ static bool BarMainGetStations (BarApp_t *app) {
 	/* Update display names after stations are fetched */
 	if (ret) {
 		BarUpdateStationDisplayNames(app);
+		/* Broadcast to WebSocket clients: early connections may have received
+		 * an empty unicast from query before getStationList completed. */
+		BarWsBroadcastStations(app);
 	}
 	
 	BarUiStartEventCmd (&app->settings, "usergetstations", NULL, NULL, &app->player,
