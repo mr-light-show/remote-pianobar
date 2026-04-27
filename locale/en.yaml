@@ -185,6 +185,8 @@ web:
     menu_add_music: "Add music to station"
     menu_rename_station: "Rename station"
     menu_delete_station: "Delete station"
+    menu_select_station: "Select station"
+    menu_item_unavailable: "Not available in the current state"
     delete_station_modal_title: "Delete Station"
     error_generic: "An error occurred"
     toast_error: "❌ {message}"
