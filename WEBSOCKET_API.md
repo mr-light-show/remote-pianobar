@@ -191,11 +191,13 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 > **Note:** `current_account` and `accounts` are only present when the server is configured with multiple Pandora accounts. Single-account setups omit these fields.
 
+> **Note (rating):** After a successful `song.love` or `song.ban`, the server broadcasts a **`process`** event (not `start`) with the current track’s updated `song.rating`, `elapsed`, and other state—same `process` shape as after `query` or on connect. This avoids treating an in-place rating change like a new track. Clients that only handle `start` for now-playing should also handle `process` for that refresh. If `song.ban` skips to another track, a normal **`start`** for the *next* song may follow.
+
 ---
 
 ### `start` - Song Started Playing
 
-Broadcast when a new song begins playing.
+Broadcast when a **new** song begins playing (e.g. station change, skip, or auto-advance). In-place metadata updates (such as `song.rating` after love/ban on the *same* track) are delivered via **`process`**, not `start` (see the `process` section above).
 
 **Payload:**
 
@@ -1425,14 +1427,14 @@ ws.onmessage = (event) => {
 ```javascript
 function loveSong() {
   ws.send('2["action","song.love"]');
-  // Optimistically update UI
+  // Optimistic UI; server confirms with a `process` event (updated song.rating)
   state.song.rating = 1;
   updateLoveButton();
 }
 
 function banSong() {
   ws.send('2["action","song.ban"]');
-  // Song will be skipped, wait for 'start' event
+  // `process` updates rating; if skipped, `start` follows for the next track
 }
 
 function tiredOfSong() {

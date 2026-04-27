@@ -1714,17 +1714,10 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		BarSocketIoSetUnicastTarget(NULL);
 	}
 	
-	/* Emit updated state for commands that change song state */
-	if (actionId == BAR_KS_LOVE || actionId == BAR_KS_BAN) {
-		/* Love or ban - emit updated song info with new rating */
-		if (BarStateGetPlaylist(app)) {
-			BarSocketIoEmitStart(app);
-		}
-	}
-	
-	/* Note: Play/pause/toggle actions already broadcast state via BarWsBroadcastPlayState()
-	 * in their respective action callbacks (BarUiActPlay/Pause/TogglePause in ui_act.c).
-	 * No need to duplicate the broadcast here - it would cause redundant lock acquisition. */
+	/* Note: Play/pause/toggle broadcast state via BarWsBroadcastPlayState() in ui_act.c.
+	 * song.love / song.ban emit a full `process` (not `start`) via BarWsBroadcastProcess
+	 * in BarUiActLoveSong/BarUiActBanSong after a successful PIANO_REQUEST_RATE_SONG —
+	 * do not add BarSocketIoEmitStart here (duplicate). */
 }
 
 /* Handle 'changeStation' event from client */
