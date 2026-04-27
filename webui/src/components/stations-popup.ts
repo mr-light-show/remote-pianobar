@@ -131,6 +131,13 @@ export class StationsPopup extends LitElement {
       this.menuOpen = !this.menuOpen;
     }, 0);
   }
+
+  /** Open the station list (e.g. from hamburger “Select station”); same UI as the bottom toolbar. */
+  showMenu() {
+    setTimeout(() => {
+      this.menuOpen = true;
+    }, 0);
+  }
   
   closeMenu() {
     this.menuOpen = false;

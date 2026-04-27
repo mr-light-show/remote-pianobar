@@ -142,6 +142,9 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
 		app->playerErrors = 0;
+	} else if (threadRet == (void *) PLAYER_RET_STALE_URLS) {
+		BarStateDrainPlaylist(app);
+		app->playerErrors = 0;
 	} else if (threadRet == (void *) PLAYER_RET_SOFTFAIL) {
 		++app->playerErrors;
 		if (app->playerErrors >= app->settings.maxRetry) {
@@ -289,7 +292,7 @@ bool BarPlaybackManagerStart(BarApp_t *app) {
 	
 	g_running = true;
 	if (pthread_create(&g_playbackThread, NULL, BarPlaybackManagerThread, app) != 0) {
-		log_write(LOG_ERROR, "Error: Failed to create playback manager thread\n");
+		log_write(LOG_ERROR, "Failed to create playback manager thread\n");
 		g_running = false;
 		return false;
 	}

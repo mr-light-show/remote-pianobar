@@ -392,7 +392,7 @@ describe('PianobarApp', () => {
     );
   });
 
-  it('handleInfoStationMode shows toast when no station id', async () => {
+  it('handleInfoStationMode does nothing (no toast) when no station id', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('process', {
       playing: false,
@@ -400,9 +400,10 @@ describe('PianobarApp', () => {
       stationId: '',
     });
     await el.updateComplete;
+    document.querySelectorAll('toast-notification').forEach((n) => n.remove());
     el.handleInfoStationMode();
     await el.updateComplete;
-    expect(document.querySelector('toast-notification')).toBeTruthy();
+    expect(document.querySelector('toast-notification')).toBeFalsy();
   });
 
   it('handleInfoStationSeeds opens modal and handleGetStationInfo emits when station id set', async () => {

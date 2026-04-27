@@ -307,7 +307,7 @@ Broadcast when playback is paused or resumed.
 
 ### `stations` - Station List
 
-Broadcast when station list is requested or changes (station created/deleted/renamed).
+Broadcast when the station list is updated: after `query` / `query.stations` (per client), on reconnect, after the initial `getStationList` completes, or when stations change (created/deleted/renamed).
 
 **Payload:** Array of station objects
 
@@ -658,6 +658,8 @@ These events are sent from the client to the server.
 ### `query` / `query.state` - Request Full State
 
 Request the current application state. Server responds with `process` and `stations` events (unicast to requesting client only).
+
+> **Note:** If the client connected before the Pandora station list was loaded, that first `stations` unicast can be an empty array. The server may then broadcast a full `stations` event to **all** clients as soon as the list is available (e.g. right after startup’s `getStationList`); clients should replace their list on every `stations` they receive.
 
 **Payload:** `null`
 

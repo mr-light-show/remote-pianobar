@@ -28,7 +28,7 @@ export class StationModeModal extends ModalBase {
   
   constructor() {
     super();
-    this.title = 'Manage Station Mode';
+    this.title = t('web.ui.manage_station_mode_title');
   }
   
   updated(changedProperties: Map<string, any>) {
