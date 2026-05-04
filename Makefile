@@ -19,13 +19,13 @@ override CFLAGS+=-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DA
 ifeq (${CC},cc)
 	OS := $(shell uname)
 	ifeq (${OS},Darwin)
-		CC:=gcc -std=c99
+		CC:=gcc -std=c17
 	else ifeq (${OS},FreeBSD)
-		CC:=cc -std=c99
+		CC:=cc -std=c17
 	else ifeq (${OS},OpenBSD)
-		CC:=cc -std=c99
+		CC:=cc -std=c17
 	else
-		CC:=c99
+		CC:=cc -std=c17
 	endif
 endif
 
