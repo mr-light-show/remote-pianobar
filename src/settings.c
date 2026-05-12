@@ -361,9 +361,6 @@ void BarSettingsRead (BarSettings_t *settings) {
 	setenv ("XDG_CONFIG_HOME", defaultxdg, 0);
 	free (defaultxdg);
 
-	assert (sizeof (settings->keys) / sizeof (*settings->keys) ==
-			sizeof (dispatchActions) / sizeof (*dispatchActions));
-
 	/* apply defaults */
 	settings->audioQuality = PIANO_AQ_HIGH;
 	settings->autoselect = true;

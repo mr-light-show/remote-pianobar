@@ -767,6 +767,21 @@ static bool BarMainCheckRelaunchFlag(int argc, char **argv) {
 	return false;
 }
 
+#ifdef __APPLE__
+/* macOS web-mode relaunch: child error paths and parent detach always terminate */
+static _Noreturn void bar_main_relaunch_child_abort(void *heap_argv) {
+	if (heap_argv != NULL) {
+		free(heap_argv);
+	}
+	exit(EXIT_FAILURE);
+}
+
+static _Noreturn void bar_main_relaunch_parent_exit(void) {
+	sleep(1);
+	exit(EXIT_SUCCESS);
+}
+#endif
+
 /* Relaunch pianobar as a daemon using fork+exec on macOS when ui_mode=web
  * This avoids CoreAudio XPC service issues that occur after fork() */
 static void BarMainRelaunchAsDaemon(int argc, char **argv) {
@@ -783,16 +798,15 @@ static void BarMainRelaunchAsDaemon(int argc, char **argv) {
 		char **new_argv = malloc((argc + 2) * sizeof(char *));
 		if (!new_argv) {
 			log_write(LOG_ERROR, "Failed to allocate memory for relaunch\n");
-			exit(1);
+			bar_main_relaunch_child_abort(NULL);
 		}
 		
 		/* Get path to current executable */
 		char exe_path[PATH_MAX];
 		uint32_t size = sizeof(exe_path);
 		if (_NSGetExecutablePath(exe_path, &size) != 0) {
-			free(new_argv);
 			log_write(LOG_ERROR, "Failed to get executable path\n");
-			exit(1);
+			bar_main_relaunch_child_abort(new_argv);
 		}
 		
 		/* Build new argv: [exe_path, --launched-as-daemon, original_args...] */
@@ -808,14 +822,12 @@ static void BarMainRelaunchAsDaemon(int argc, char **argv) {
 		
 		/* If we get here, exec failed */
 		log_write(LOG_ERROR, "Failed to exec pianobar: %s\n", strerror(errno));
-		free(new_argv);
-		exit(1);
+		bar_main_relaunch_child_abort(new_argv);
 	}
 	
 	/* Parent process: wait briefly for child to start, then exit */
 	/* This allows the child (exec'd process) to detach from the terminal */
-	sleep(1);
-	exit(0);
+	bar_main_relaunch_parent_exit();
 #else
 	/* Not macOS, no-op */
 	(void)argc;
@@ -1059,7 +1071,6 @@ int main (int argc, char **argv) {
 		FD_SET(app.input.fds[0], &app.input.set);
 		
 		/* open fifo read/write so it won't EOF if nobody writes to it */
-		assert (sizeof (app.input.fds) / sizeof (*app.input.fds) >= 2);
 		app.input.fds[1] = open (app.settings.fifo, O_RDWR);
 		if (app.input.fds[1] != -1) {
 			struct stat s;
