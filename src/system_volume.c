@@ -131,6 +131,34 @@ static int macosCoreaudioGetVolume(void) {
 	return (int)(volume * 100.0f + 0.5f);
 }
 
+/* Clear output mute if the device exposes kAudioDevicePropertyMute. When the user
+ * mutes via the system UI (e.g. volume slider to 0), macOS can leave mute asserted;
+ * setting VirtualMainVolume alone does not move the system slider or restore audio. */
+static void macosCoreaudioClearOutputMuteIfSupported(void) {
+	if (defaultOutputDevice == kAudioObjectUnknown) {
+		return;
+	}
+
+	AudioObjectPropertyAddress muteAddr = {
+		kAudioDevicePropertyMute,
+		kAudioDevicePropertyScopeOutput,
+		kAudioObjectPropertyElementMain
+	};
+
+	if (!AudioObjectHasProperty(defaultOutputDevice, &muteAddr)) {
+		return;
+	}
+
+	UInt32 muted = 0;
+	OSStatus st = AudioObjectSetPropertyData(
+		defaultOutputDevice, &muteAddr, 0, NULL, sizeof(muted), &muted);
+	if (st != noErr) {
+		log_write(DEBUG_AUDIO,
+		           "System volume: Clear output mute failed (status %d)\n",
+		           (int)st);
+	}
+}
+
 /* CoreAudio: Set volume (0-100 -> 0.0-1.0) */
 static bool macosCoreaudioSetVolume(int percent) {
 	/* Check if default device changed */
@@ -138,6 +166,10 @@ static bool macosCoreaudioSetVolume(int percent) {
 	
 	if (defaultOutputDevice == kAudioObjectUnknown) {
 		return false;
+	}
+
+	if (percent > 0) {
+		macosCoreaudioClearOutputMuteIfSupported();
 	}
 	
 	AudioObjectPropertyAddress addr = {
@@ -155,6 +187,9 @@ static bool macosCoreaudioSetVolume(int percent) {
 	if (status != noErr) {
 		if (macosCheckAndRefreshDevice() && defaultOutputDevice != kAudioObjectUnknown) {
 			log_write(DEBUG_AUDIO, "System volume: Retrying set volume after device change\n");
+			if (percent > 0) {
+				macosCoreaudioClearOutputMuteIfSupported();
+			}
 			status = AudioObjectSetPropertyData(
 				defaultOutputDevice, &addr, 0, NULL, sizeof(volume), &volume);
 		}
@@ -181,6 +216,10 @@ static int macosOsascriptGetVolume(void) {
 
 /* osascript fallback: Set volume */
 static bool macosOsascriptSetVolume(int percent) {
+	/* Match CoreAudio behavior: raising volume must clear system output mute. */
+	if (percent > 0) {
+		(void)system("osascript -e 'set volume without output muted'");
+	}
 	char cmd[128];
 	snprintf(cmd, sizeof(cmd), "osascript -e 'set volume output volume %d'", percent);
 	return system(cmd) == 0;
