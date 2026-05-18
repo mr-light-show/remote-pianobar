@@ -35,6 +35,7 @@ typedef enum {
 	DEBUG_WEBSOCKET = 8,
 	DEBUG_WEBSOCKET_PROGRESS = 16,  /* Progress updates (noisy) */
 	DEBUG_CLI = 32,                 /* BarUiMsg mirror; emits when any PIANOBAR_DEBUG bit is set */
+	DEBUG_STATE = 64,               /* stateRwlock / BarState* tracing (noisy) */
 } logKind;
 
 /* Initialize log module (reads PIANOBAR_DEBUG for debug mask). Call once at startup. */

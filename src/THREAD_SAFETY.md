@@ -423,7 +423,7 @@ void outerFunction(BarApp_t *app) {
 2. **Use existing abstractions**: Can you use `BarStateGet*()` or `BarStateSet*()` functions?
 3. **Minimize critical sections**: Keep lock-held time as short as possible
 4. **Test with BOTH mode**: Always test with `ui_mode = both` in config
-5. **Enable debug logging**: Use `PIANOBAR_DEBUG=8` to see lock acquisition traces
+5. **Enable debug logging**: Use `PIANOBAR_DEBUG=64` (or `72` with WebSocket) to see `stateRwlock` traces
 
 ### Checklist for New Code
 
@@ -525,7 +525,7 @@ Pianobar uses a single logging API for diagnostics and errors.
 - **User-facing messages:** Use `BarUiMsg(settings, level, format, ...)` for messages shown to the user in the UI (CLI or Web).
 - **Diagnostics and errors:** Use `log_write(kind, format, ...)` from [log.h](log.h):
   - **LOG_ERROR** (0): Always logs. Use for errors, warnings, and important startup/info messages. Writes to stderr (and to the configured log file when the daemon redirects stderr).
-  - **DEBUG_*** (DEBUG_NETWORK, DEBUG_AUDIO, DEBUG_UI, DEBUG_WEBSOCKET, DEBUG_WEBSOCKET_PROGRESS): Log only when the corresponding bit is set in the `PIANOBAR_DEBUG` environment variable (e.g. `PIANOBAR_DEBUG=8` for WebSocket). Call `log_init()` once at startup (main.c does this); the debug mask is read from the environment and kept inside the log module.
+  - **DEBUG_*** (DEBUG_NETWORK, DEBUG_AUDIO, DEBUG_UI, DEBUG_STATE, DEBUG_WEBSOCKET, DEBUG_WEBSOCKET_PROGRESS): Log only when the corresponding bit is set in the `PIANOBAR_DEBUG` environment variable (e.g. `PIANOBAR_DEBUG=8` for WebSocket, `64` for state rwlock). Call `log_init()` once at startup (main.c does this); the debug mask is read from the environment and kept inside the log module.
   - **DEBUG_CLI**: Kind label for [`BarUiMsg`](ui.c) lines on stderr. `log_init` ORs `DEBUG_CLI` into the internal mask whenever any `PIANOBAR_DEBUG` bit is non-zero, so `log_write(DEBUG_CLI, …)` follows the same `(debug_mask & kind)` rule as other DEBUG kinds; only in **web** / **both** UI modes. When that path is taken, `BarUiMsg` does **not** also print the same text to stdout (avoids duplicate lines when merging streams). Do not call `log_write(DEBUG_CLI, …)` by hand except from `BarUiMsg` unless you intentionally match that format.
 
 Do not use raw `fprintf(stderr, ...)` for diagnostics or errors; use `log_write(LOG_ERROR, ...)` or the appropriate DEBUG_* kind so that output is consistent (timestamps, optional color) and can be directed to the log file when configured.
@@ -538,14 +538,14 @@ When `HAVE_DEBUGLOG` is enabled, each line is prefixed with a colored timestamp 
 
 ### 1. Debug Logging
 
-Set `PIANOBAR_DEBUG=8` to see lock acquisition traces:
+Set `PIANOBAR_DEBUG=64` to see lock acquisition traces (`DEBUG_STATE`):
 
 ```bash
-$ PIANOBAR_DEBUG=8 ./pianobar
+$ PIANOBAR_DEBUG=64 ./pianobar
 ...
-State: Lock acquired (GetCurrentStation)
-State: GetCurrentStation -> Radio Paradise
-State: Lock released (GetCurrentStation)
+Lock acquired (GetCurrentStation) (read)
+GetCurrentStation -> Radio Paradise
+Lock released
 ```
 
 This helps identify:
@@ -555,13 +555,15 @@ This helps identify:
 
 ### 2. Lock Visualization
 
-With `DEBUG_UI` enabled, you can trace the call stack:
+With `DEBUG_STATE` enabled, you can trace station/playlist accessors:
 
 ```
-State: Lock acquired (SwitchStation)
-State: SwitchStation <- Radio Paradise
-State: Lock released (SwitchStation)
+Lock acquired (SwitchStation) (write)
+SwitchStation <- Radio Paradise
+Lock released
 ```
+
+Use `DEBUG_UI` (bit 4) for playback-manager lifecycle (`PlaybackMgr:`) without per-getter lock spam.
 
 ### 3. ThreadSanitizer (Advanced)
 

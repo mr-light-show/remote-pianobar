@@ -43,7 +43,7 @@ static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operat
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_rdlock((pthread_rwlock_t *)&app->stateRwlock);
-		log_write(DEBUG_UI, "State: Lock acquired (%s) (read)\n", operation);
+		log_write(DEBUG_STATE, "Lock acquired (%s) (read)\n", operation);
 	}
 	#else
 	(void)app;
@@ -55,7 +55,7 @@ static void state_rwlock_wrlock_internal(const BarApp_t *app, const char *operat
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_wrlock((pthread_rwlock_t *)&app->stateRwlock);
-		log_write(DEBUG_UI, "State: Lock acquired (%s) (write)\n", operation);
+		log_write(DEBUG_STATE, "Lock acquired (%s) (write)\n", operation);
 	}
 	#else
 	(void)app;
@@ -74,9 +74,9 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 			char buffer[BAR_BUF_SMALL];
 			vsnprintf(buffer, sizeof(buffer), format, args);
 			va_end(args);
-			log_write(DEBUG_UI, "%s", buffer);
+			log_write(DEBUG_STATE, "%s", buffer);
 		}
-		log_write(DEBUG_UI, "State: Lock released\n");
+		log_write(DEBUG_STATE, "Lock released\n");
 		pthread_rwlock_unlock((pthread_rwlock_t *)&app->stateRwlock);
 	}
 	#else
@@ -92,7 +92,7 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
  */
 #define WITH_STATE_LOCK(app, op_name, fmt, ...) \
 	for (int _lock_held = (state_rwlock_wrlock_internal(app, op_name), \
-	                        (fmt ? log_write(DEBUG_UI, fmt, ##__VA_ARGS__) : (void)0), 0); \
+	                        (fmt ? log_write(DEBUG_STATE, fmt, ##__VA_ARGS__) : (void)0), 0); \
 	     !_lock_held; \
 	     state_rwlock_unlock_internal(app, op_name, NULL), _lock_held = 1)
 
@@ -120,7 +120,7 @@ void BarStateInit(BarApp_t *app) {
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_init(&app->stateRwlock, NULL);
-		log_write(DEBUG_UI, "State: Rwlock initialized\n");
+		log_write(DEBUG_STATE, "Rwlock initialized\n");
 	}
 	#endif
 }
@@ -133,7 +133,7 @@ void BarStateDestroy(BarApp_t *app) {
 	#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		pthread_rwlock_destroy(&app->stateRwlock);
-		log_write(DEBUG_UI, "State: Rwlock destroyed\n");
+		log_write(DEBUG_STATE, "Rwlock destroyed\n");
 	}
 	#endif
 }
@@ -145,7 +145,7 @@ PianoStation_t *BarStateGetNextStation(const BarApp_t *app) {
 	
 	PianoStation_t *station;
 	WITH_STATE_LOCK_RETURN(app, "GetNextStation", station,
-	                       "State: GetNextStation -> %s\n", station ? station->name : "null") {
+	                       "GetNextStation -> %s\n", station ? station->name : "null") {
 		station = app->nextStation;
 	}
 	return station;
@@ -156,7 +156,7 @@ PianoStation_t *BarStateGetNextStation(const BarApp_t *app) {
 void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SetNextStation", "State: SetNextStation <- %s\n", station ? station->name : "null") {
+	WITH_STATE_LOCK(app, "SetNextStation", "SetNextStation <- %s\n", station ? station->name : "null") {
 		app->nextStation = station;
 	}
 }
@@ -168,7 +168,7 @@ PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app) {
 	
 	PianoStation_t *station;
 	WITH_STATE_LOCK_RETURN(app, "GetCurrentStation", station,
-	                       "State: GetCurrentStation -> %s\n", station ? station->name : "null") {
+	                       "GetCurrentStation -> %s\n", station ? station->name : "null") {
 		station = app->curStation;
 	}
 	return station;
@@ -179,7 +179,7 @@ PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app) {
 void BarStateSetCurrentStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SetCurrentStation", "State: SetCurrentStation <- %s\n", station ? station->name : "null") {
+	WITH_STATE_LOCK(app, "SetCurrentStation", "SetCurrentStation <- %s\n", station ? station->name : "null") {
 		app->curStation = station;
 	}
 }
@@ -191,7 +191,7 @@ PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id) {
 	
 	PianoStation_t *station;
 	WITH_STATE_LOCK_RETURN(app, "FindStationById", station,
-	                       "State: FindStationById id=%s -> %s\n", id ? id : "null", station ? station->name : "null") {
+	                       "FindStationById id=%s -> %s\n", id ? id : "null", station ? station->name : "null") {
 		/* After app.stop, stations may be NULL - handle gracefully */
 		if (app->ph.stations == NULL) {
 			station = NULL;
@@ -221,7 +221,7 @@ PianoSong_t *BarStateGetPlaylist(const BarApp_t *app) {
 	
 	PianoSong_t *playlist;
 	WITH_STATE_LOCK_RETURN(app, "GetPlaylist", playlist,
-	                       "State: GetPlaylist -> %s\n", playlist ? playlist->title : "null") {
+	                       "GetPlaylist -> %s\n", playlist ? playlist->title : "null") {
 		playlist = app->playlist;
 	}
 	return playlist;
@@ -232,7 +232,7 @@ PianoSong_t *BarStateGetPlaylist(const BarApp_t *app) {
 void BarStateSetPlaylist(BarApp_t *app, PianoSong_t *playlist) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SetPlaylist", "State: SetPlaylist <- %s\n", playlist ? playlist->title : "null") {
+	WITH_STATE_LOCK(app, "SetPlaylist", "SetPlaylist <- %s\n", playlist ? playlist->title : "null") {
 		app->playlist = playlist;
 	}
 }
@@ -255,7 +255,7 @@ void BarStateDrainPlaylist(BarApp_t *app) {
 void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
-	WITH_STATE_LOCK(app, "SwitchStation", "State: SwitchStation <- %s\n", station ? station->name : "null") {
+	WITH_STATE_LOCK(app, "SwitchStation", "SwitchStation <- %s\n", station ? station->name : "null") {
 		/* Drain current playlist */
 		if (app->playlist != NULL) {
 			PianoDestroyPlaylist(app->playlist);

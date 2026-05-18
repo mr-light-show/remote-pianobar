@@ -36,6 +36,7 @@ THE SOFTWARE.
 #define COLOR_MAGENTA      "\033[0;35m"  /* WebSocket progress (non-bold) */
 #define COLOR_MAGENTA_BOLD "\033[1;35m"  /* WebSocket events */
 #define COLOR_BLUE    "\033[1;34m"  /* CLI (BarUiMsg mirror) */
+#define COLOR_WHITE_BOLD "\033[1;37m"  /* State rwlock */
 #define COLOR_RED     "\033[0;31m"  /* Error */
 #endif
 
@@ -63,6 +64,9 @@ void log_init(void)
 		}
 		if (debug_mask & DEBUG_UI) {
 			fprintf(stderr, "%sUI%s ", COLOR_GREEN, COLOR_RESET);
+		}
+		if (debug_mask & DEBUG_STATE) {
+			fprintf(stderr, "%sSTATE%s ", COLOR_WHITE_BOLD, COLOR_RESET);
 		}
 		if (debug_mask & DEBUG_WEBSOCKET) {
 			fprintf(stderr, "%sWEBSOCKET%s ", COLOR_MAGENTA_BOLD, COLOR_RESET);
@@ -100,6 +104,7 @@ static const char *log_kind_prefix_label(logKind kind)
 	case DEBUG_NETWORK:            return "Network";
 	case DEBUG_AUDIO:             return "Audio";
 	case DEBUG_UI:                 return "UI";
+	case DEBUG_STATE:              return "State";
 	case DEBUG_WEBSOCKET:          return "WebSocket";
 	case DEBUG_WEBSOCKET_PROGRESS: return "WS_Progress";
 	case DEBUG_CLI:                return "CLI";
@@ -118,6 +123,7 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 		case DEBUG_NETWORK:             color = COLOR_CYAN; break;
 		case DEBUG_AUDIO:               color = COLOR_YELLOW; break;
 		case DEBUG_UI:                  color = COLOR_GREEN; break;
+		case DEBUG_STATE:               color = COLOR_WHITE_BOLD; break;
 		case DEBUG_WEBSOCKET:           color = COLOR_MAGENTA_BOLD; break;
 		case DEBUG_WEBSOCKET_PROGRESS:  color = COLOR_MAGENTA; break;
 		case DEBUG_CLI:                 color = COLOR_BLUE; break;
