@@ -112,6 +112,12 @@ static const BarUiDispatchAction_t dispatchActions[BAR_KS_COUNT] = {
 				"act_pandorareconnect"},
 		};
 
+_Static_assert(sizeof dispatchActions / sizeof dispatchActions[0] == BAR_KS_COUNT,
+		"dispatchActions[] must have exactly BAR_KS_COUNT entries");
+_Static_assert(sizeof ((BarSettings_t *) 0)->keys / sizeof (char)
+				== sizeof dispatchActions / sizeof dispatchActions[0],
+		"BarSettings_t.keys[] must match dispatchActions[] length");
+
 #include <piano.h>
 #include <stdbool.h>
 #include <stdio.h>

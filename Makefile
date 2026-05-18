@@ -19,14 +19,19 @@ override CFLAGS+=-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DA
 ifeq (${CC},cc)
 	OS := $(shell uname)
 	ifeq (${OS},Darwin)
-		CC:=gcc -std=c99
+		CC:=gcc
 	else ifeq (${OS},FreeBSD)
-		CC:=cc -std=c99
+		CC:=cc
 	else ifeq (${OS},OpenBSD)
-		CC:=cc -std=c99
+		CC:=cc
 	else
-		CC:=c99
+		CC:=cc
 	endif
+endif
+
+# Default ISO C17 unless the caller already set a dialect in CFLAGS (e.g. -std=gnu11).
+ifeq ($(findstring -std=,$(CFLAGS)),)
+override CFLAGS+=-std=c17
 endif
 
 PIANOBAR_DIR:=src

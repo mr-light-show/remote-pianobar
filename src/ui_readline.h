@@ -40,6 +40,9 @@ typedef struct {
 	int fds[2];
 } BarReadlineFds_t;
 
+_Static_assert(sizeof ((BarReadlineFds_t *) 0)->fds / sizeof (int) == 2,
+		"BarReadlineFds_t.fds must remain a pair for select/readline");
+
 size_t BarReadline (char *, const size_t, const char *,
 		BarReadlineFds_t *, const BarReadlineFlags_t, int);
 size_t BarReadlineStr (char *, const size_t,

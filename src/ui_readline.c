@@ -92,7 +92,6 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 			break;
 		}
 
-		assert (sizeof (input->fds) / sizeof (*input->fds) == 2);
 		if (FD_ISSET(input->fds[0], &set)) {
 			curFd = input->fds[0];
 		} else if (input->fds[1] != -1 && FD_ISSET(input->fds[1], &set)) {

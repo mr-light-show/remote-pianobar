@@ -140,6 +140,10 @@ pkg-config --version
 
 ## Building Pianobar
 
+### C language mode (ISO C17)
+
+The Makefile defaults to **ISO C17** (`-std=c17`) by appending it to **`CFLAGS`** when you have not already set a dialect there. To use a different standard (for example **GNU11**), pass it explicitly, e.g. `make CFLAGS="-std=gnu11 -O2"` — your **`-std=`** wins and the Makefile will not add `-std=c17`.
+
 ### Basic Build (CLI only)
 
 ```bash

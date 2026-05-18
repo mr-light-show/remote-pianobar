@@ -35,8 +35,6 @@ BarKeyShortcutId_t BarUiDispatch (BarApp_t *app, const char key, PianoStation_t 
 		PianoSong_t *selSong, const bool verbose,
 		BarUiDispatchContext_t context) {
 	assert (app != NULL);
-	assert (sizeof (app->settings.keys) / sizeof (*app->settings.keys) ==
-			sizeof (dispatchActions) / sizeof (*dispatchActions));
 
 	if (selStation != NULL) {
 		context |= BAR_DC_STATION;
