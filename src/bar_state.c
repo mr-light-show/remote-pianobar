@@ -30,7 +30,7 @@ THE SOFTWARE.
 #include <string.h>
 #include <stdarg.h>
 
-/*	State rwlock: read for getters, write for setters (BAR_UI_MODE_BOTH only).
+/*	State rwlock: read for getters, write for setters (web and both; not cli).
  *	LOCK HIERARCHY: This is Lock #1 in the hierarchy
  *	Must be acquired BEFORE player.lock if both are needed
  *	PROTECTS: Pointer fields playlist, curStation, nextStation, ph list heads
@@ -41,7 +41,7 @@ THE SOFTWARE.
  */
 static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operation) {
 	#ifdef WEBSOCKET_ENABLED
-	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+	if (BarStateUsesRwlock(app)) {
 		pthread_rwlock_rdlock((pthread_rwlock_t *)&app->stateRwlock);
 		log_write(DEBUG_STATE, "Lock acquired (%s) (read)\n", operation);
 	}
@@ -53,7 +53,7 @@ static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operat
 
 static void state_rwlock_wrlock_internal(const BarApp_t *app, const char *operation) {
 	#ifdef WEBSOCKET_ENABLED
-	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+	if (BarStateUsesRwlock(app)) {
 		pthread_rwlock_wrlock((pthread_rwlock_t *)&app->stateRwlock);
 		log_write(DEBUG_STATE, "Lock acquired (%s) (write)\n", operation);
 	}
@@ -67,7 +67,7 @@ __attribute__((format(printf, 3, 4)))
 static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operation,
                                          const char *format, ...) {
 	#ifdef WEBSOCKET_ENABLED
-	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+	if (BarStateUsesRwlock(app)) {
 		if (format) {
 			va_list args;
 			va_start(args, format);
@@ -112,26 +112,26 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 	     state_rwlock_unlock_internal(app, op_name, fmt, ##__VA_ARGS__), \
 	     _lock_held = 1)
 
-/*	Initialize state rwlock (only in BOTH mode)
+/*	Initialize state rwlock (web and both; not cli)
  */
 void BarStateInit(BarApp_t *app) {
 	assert(app != NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+	if (BarStateUsesRwlock(app)) {
 		pthread_rwlock_init(&app->stateRwlock, NULL);
 		log_write(DEBUG_STATE, "Rwlock initialized\n");
 	}
 	#endif
 }
 
-/*	Destroy state rwlock (only in BOTH mode)
+/*	Destroy state rwlock (web and both; not cli)
  */
 void BarStateDestroy(BarApp_t *app) {
 	assert(app != NULL);
 	
 	#ifdef WEBSOCKET_ENABLED
-	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+	if (BarStateUsesRwlock(app)) {
 		pthread_rwlock_destroy(&app->stateRwlock);
 		log_write(DEBUG_STATE, "Rwlock destroyed\n");
 	}

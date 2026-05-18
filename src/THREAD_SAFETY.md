@@ -16,37 +16,39 @@ This document describes the threading model, lock hierarchy, and safe coding pat
 
 ## Architecture Overview
 
-Pianobar supports two UI modes:
+Pianobar supports three `ui_mode` values (WebSocket builds):
 
-- **CLI-only mode** (`BAR_UI_MODE_CLI`): Single-threaded, no locking needed
-- **Both mode** (`BAR_UI_MODE_BOTH`): Multi-threaded with CLI + WebSocket threads
+- **CLI-only** (`BAR_UI_MODE_CLI`): Terminal input only; WebSocket server and playback manager **do not** start. No `stateRwlock` (single-threaded access to playlist/station pointers from main).
+- **Web** (`BAR_UI_MODE_WEB`): Daemon; main thread sleeps; **WebSocket thread** + **playback manager thread** share state via `stateRwlock`.
+- **Both** (`BAR_UI_MODE_BOTH`): Foreground CLI + WebSocket + playback manager (three threads touching shared playlist/station pointers).
 
-### Threading Model (BOTH Mode)
+Multiple WebSocket clients are serialized on the **one** WebSocket service thread; extra connections do not add threads.
+
+### Threading Model (Web and Both)
+
+**Web mode** — main sleeps; WebSocket + playback manager:
 
 ```
-┌─────────────────────┐      ┌──────────────────────┐      ┌─────────────────────┐
-│   Main/CLI Thread   │      │   Player Thread      │      │   WebSocket Thread  │
-├─────────────────────┤      ├──────────────────────┤      ├─────────────────────┤
-│ - User input (CLI)  │      │ - Audio decoding     │      │ - libwebsockets     │
-│ - Station selection │      │ - Playback timing    │      │ - Client connections│
-│ - Volume control    │      │ - Buffer management  │      │ - WebUI commands    │
-│ - Pandora API calls │      │ - Song transitions   │      │ - State broadcasts  │
-└─────────────────────┘      └──────────────────────┘      └─────────────────────┘
+┌──────────────────────┐      ┌──────────────────────┐      ┌─────────────────────┐
+│ Playback Mgr Thread  │      │   Player Thread      │      │   WebSocket Thread  │
+├──────────────────────┤      ├──────────────────────┤      ├─────────────────────┤
+│ - Auto-advance queue │      │ - Audio decoding     │      │ - libwebsockets     │
+│ - Fetch playlist     │      │ - Playback timing    │      │ - Client connections│
+│ - Start playback     │      │ - Buffer management  │      │ - WebUI commands    │
+└──────────────────────┘      └──────────────────────┘      └─────────────────────┘
          │                            │                              │
          └────────────────────────────┴──────────────────────────────┘
                                       │
                          ┌────────────▼───────────┐
                          │   Shared State (app)   │
                          ├────────────────────────┤
-                         │ - stations (Pandora)   │
-                         │ - playlist             │
-                         │ - curStation           │
-                         │ - nextStation          │
-                         │ - player.doPause       │
-                         │ - player.songPlayed    │
-                         │ - player.songDuration  │
+                         │ - playlist (stateRwlock)│
+                         │ - curStation / nextStation│
+                         │ - player.* (player.lock) │
                          └────────────────────────┘
 ```
+
+**Both mode** adds a **main/CLI thread** (user input, fifo) alongside the WebSocket and playback manager threads shown above.
 
 ### Locks (state, player, HTTP)
 
@@ -55,7 +57,7 @@ Pianobar uses **several synchronization primitives**:
 | Lock | Purpose | Scope | File |
 |------|---------|-------|------|
 | `app->pianoHttpMutex` | **Recursive** mutex: serializes all of [`BarUiPianoCall`](ui.c) (shared `CURL *`, `PianoRequest`/`PianoResponse` on `app->ph`) so only one thread performs Pandora HTTP at a time | Always (after init in `main`) | [`main.h`](main.h), [`ui.c`](ui.c) |
-| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters (playlist/station pointers, not Piano HTTP) | Only in `BAR_UI_MODE_BOTH` | [`bar_state.c`](bar_state.c) |
+| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters (playlist/station pointers, not Piano HTTP) | `BAR_UI_MODE_WEB` and `BAR_UI_MODE_BOTH` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
@@ -64,7 +66,7 @@ Pianobar uses **several synchronization primitives**:
 
 **Session teardown (`PianoDestroy` / `PianoInit`):** [`BarUiDoPandoraDisconnect`](ui_act.c) and [`BarUiActPandoraReconnect`](ui_act.c) reset `app->ph` under the same **`pianoHttpMutex`**, so no thread can run [`BarUiPianoCall`](ui.c) concurrently while the handle is destroyed or re-initialized.
 
-**Key design:** `stateRwlock` and `pianoHttpMutex` address different concerns: quick pointer consistency (BOTH mode) vs **libcurl thread-safety** and serial application of API responses to `app->ph`.
+**Key design:** `stateRwlock` and `pianoHttpMutex` address different concerns: quick pointer consistency (web/both) vs **libcurl thread-safety** and serial application of API responses to `app->ph`.
 
 ### Player Lock Architecture
 
@@ -126,7 +128,7 @@ pthread_mutex_unlock(&player->decoderLock);
 When **`stateRwlock`** and **`player.lock`** must both be acquired, **always follow this order**:
 
 ```
-1. app->stateRwlock    (BOTH mode: rdlock/wrlock for BarState* pointer fields)
+1. app->stateRwlock    (web/both: rdlock/wrlock for BarState* pointer fields)
    ↓
 2. app->player.lock    (Player state)
 ```
@@ -145,19 +147,17 @@ When **`stateRwlock`** and **`player.lock`** must both be acquired, **always fol
 
 ### Conditional Locking
 
-`app->stateRwlock` is **conditionally active**:
+`app->stateRwlock` is **conditionally active** when [`BarStateUsesRwlock`](bar_state.h) is true (`ui_mode` is web or both):
 
 ```c
-#ifdef WEBSOCKET_ENABLED
-if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+if (BarStateUsesRwlock(app)) {
     pthread_rwlock_rdlock(&app->stateRwlock);   /* or wrlock for writers */
     // ... critical section ...
     pthread_rwlock_unlock(&app->stateRwlock);
 }
-#endif
 ```
 
-In CLI-only mode, the lock operations are no-ops (optimized away). This is implemented via the `WITH_STATE_LOCK`, `WITH_STATE_LOCK_RETURN`, and `WITH_STATE_LOCK_WRITE_RETURN` macros in [`bar_state.c`](bar_state.c).
+In CLI mode (`ui_mode=cli`), lock operations are no-ops. Implemented via `WITH_STATE_LOCK`, `WITH_STATE_LOCK_RETURN`, and `WITH_STATE_LOCK_WRITE_RETURN` in [`bar_state.c`](bar_state.c).
 
 ---
 
@@ -238,7 +238,7 @@ bool success = BarUiPianoCall(app, PIANO_REQUEST_GET_PLAYLIST,
                                &reqData, &pRet, &wRet);
 ```
 
-**Why:** One shared [`app->http`](main.h) easy handle and overlapping `PianoResponse` updates to `app->ph` must not run concurrently. The **recursive** `pianoHttpMutex` enforces that. In `BAR_UI_MODE_BOTH`, use [`BarStateGet*`](bar_state.c) / [`BarStateSet*`](bar_state.c) for playlist/station **pointers**; those use `stateRwlock` for short critical sections only, not for HTTP.
+**Why:** One shared [`app->http`](main.h) easy handle and overlapping `PianoResponse` updates to `app->ph` must not run concurrently. The **recursive** `pianoHttpMutex` enforces that. In web/both, use [`BarStateGet*`](bar_state.c) / [`BarStateSet*`](bar_state.c) for playlist/station **pointers**; those use `stateRwlock` for short critical sections only, not for HTTP.
 
 ### Pattern 5: Switching Stations
 
@@ -422,7 +422,7 @@ void outerFunction(BarApp_t *app) {
 1. **Identify shared data**: What state will be accessed by multiple threads?
 2. **Use existing abstractions**: Can you use `BarStateGet*()` or `BarStateSet*()` functions?
 3. **Minimize critical sections**: Keep lock-held time as short as possible
-4. **Test with BOTH mode**: Always test with `ui_mode = both` in config
+4. **Test with web and both**: Exercise `ui_mode = web` and `ui_mode = both` when touching shared state
 5. **Enable debug logging**: Use `PIANOBAR_DEBUG=64` (or `72` with WebSocket) to see `stateRwlock` traces
 
 ### Checklist for New Code
@@ -645,12 +645,12 @@ static void doNetworkCall(BarApp_t *app) {
 
 ### The Golden Rules
 
-1. **Use state abstractions**: Always use `BarState*()` functions for shared pointers (BOTH mode)
+1. **Use state abstractions**: Always use `BarState*()` functions for shared pointers (web/both)
 2. **Lock ordering**: `stateRwlock` before `player.lock` (if both needed); never mix `stateRwlock` with `pianoHttpMutex` in nested fashion
 3. **Minimize lock duration**: Hold `stateRwlock` / `player.lock` for microseconds, not milliseconds
 4. **Pandora HTTP**: Only via `BarUiPianoCall` — it holds `pianoHttpMutex` for the full transfer (recursive)
 5. **Broadcast after unlock**: Call `BarWsBroadcast*()` functions after releasing `stateRwlock` / `player.lock`
-6. **Test with BOTH mode**: Always test multi-threaded execution
+6. **Test with web and both**: Always test multi-threaded execution paths
 
 ### Quick Reference
 

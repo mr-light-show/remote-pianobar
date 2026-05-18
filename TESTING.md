@@ -73,8 +73,8 @@ CK_VERBOSITY=verbose ./pianobar_test
 
 ### Test Files
 
-**`test/unit/test_bar_state.c`** - Bar state and lock behavior (12 tests when `WEBSOCKET_ENABLED`)
-- Init/destroy stateRwlock in BOTH mode
+**`test/unit/test_bar_state.c`** - Bar state and lock behavior (13+ tests when `WEBSOCKET_ENABLED`)
+- Init/destroy stateRwlock in BOTH and WEB modes
 - Station getters/setters under stateRwlock (NextStation, CurrentStation)
 - Station lookup: `BarStateFindStationById` (NULL list, one station), `BarStateGetStationList`
 - Playlist get/set, drain, switch station
