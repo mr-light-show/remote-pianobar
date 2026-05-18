@@ -97,6 +97,10 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 
 	BarStateGetPlaylist(&app);
 	BarStateSetPlaylist(&app, &pl);
+	BarStateGetPlaylist(&app);
+	/* Clear pointer without PianoDestroyPlaylist — pl is stack memory */
+	BarStateSetPlaylist(&app, NULL);
+	/* Drain with playlist already NULL: still exercises write lock + unlock */
 	BarStateDrainPlaylist(&app);
 
 	bar_state_test_teardown(&app);
