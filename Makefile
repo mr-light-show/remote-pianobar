@@ -276,7 +276,8 @@ TEST_SRC:=\
 		${TEST_DIR}/unit/test_l10n.c \
 		${TEST_DIR}/unit/test_settings.c \
 		${TEST_DIR}/unit/test_player.c \
-		${TEST_DIR}/unit/test_bar_state.c
+		${TEST_DIR}/unit/test_bar_state.c \
+		${TEST_DIR}/unit/test_log.c
 TEST_OBJ:=${TEST_SRC:.c=.o}
 TEST_BIN:=pianobar_test
 

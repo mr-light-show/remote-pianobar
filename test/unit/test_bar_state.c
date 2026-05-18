@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include "../../src/main.h"
 #include "../../src/bar_state.h"
 #include "../../src/settings.h"
+#include "../../src/log.h"
 
 #ifdef WEBSOCKET_ENABLED
 
@@ -54,6 +55,57 @@ START_TEST(test_bar_state_init_destroy_both) {
 	bar_state_test_teardown(&app);
 }
 END_TEST
+
+/* BarStateUsesRwlock: false for NULL app and cli mode */
+START_TEST(test_bar_state_uses_rwlock_cli_and_null) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+
+	ck_assert(!BarStateUsesRwlock(NULL));
+	ck_assert(!BarStateUsesRwlock(&app));
+
+	BarStateInit(&app);
+	BarStateSetNextStation(&app, NULL);
+	ck_assert_ptr_null(BarStateGetNextStation(&app));
+	BarStateDestroy(&app);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+/* Exercise DEBUG_STATE log paths in lock helpers (stderr suppressed). */
+START_TEST(test_bar_state_debug_state_lock_logging) {
+	BarApp_t app;
+	PianoSong_t pl;
+	int stderr_dup;
+	FILE *null_out;
+
+	memset(&pl, 0, sizeof(pl));
+	pl.head.next = NULL;
+	pl.title = (char *)"title";
+
+	stderr_dup = dup(STDERR_FILENO);
+	ck_assert(stderr_dup >= 0);
+	null_out = fopen("/dev/null", "w");
+	ck_assert(null_out != NULL);
+	ck_assert(dup2(fileno(null_out), STDERR_FILENO) >= 0);
+	fclose(null_out);
+
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init();
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateGetPlaylist(&app);
+	BarStateSetPlaylist(&app, &pl);
+	BarStateDrainPlaylist(&app);
+
+	bar_state_test_teardown(&app);
+	dup2(stderr_dup, STDERR_FILENO);
+	close(stderr_dup);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+#endif
 
 /* Init/destroy: stateRwlock is created and destroyed in WEB mode */
 START_TEST(test_bar_state_init_destroy_web) {
@@ -265,6 +317,10 @@ Suite *bar_state_suite(void) {
 	TCase *tc_core = tcase_create("Init and stations");
 	tcase_add_test(tc_core, test_bar_state_init_destroy_both);
 	tcase_add_test(tc_core, test_bar_state_init_destroy_web);
+	tcase_add_test(tc_core, test_bar_state_uses_rwlock_cli_and_null);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging);
+#endif
 	tcase_add_test(tc_core, test_bar_state_next_station_get_set);
 	tcase_add_test(tc_core, test_bar_state_current_station_get_set);
 	tcase_add_test(tc_core, test_bar_state_find_station_by_id_null_list);

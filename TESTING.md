@@ -73,7 +73,10 @@ CK_VERBOSITY=verbose ./pianobar_test
 
 ### Test Files
 
-**`test/unit/test_bar_state.c`** - Bar state and lock behavior (13+ tests when `WEBSOCKET_ENABLED`)
+**`test/unit/test_log.c`** - `DEBUG_STATE` (`PIANOBAR_DEBUG=64`): `log_init` banner and `log_write` paths
+
+**`test/unit/test_bar_state.c`** - Bar state and lock behavior (15+ tests when `WEBSOCKET_ENABLED`)
+- `BarStateUsesRwlock` false for CLI and NULL app; `DEBUG_STATE` lock logging (with stderr suppressed)
 - Init/destroy stateRwlock in BOTH and WEB modes
 - Station getters/setters under stateRwlock (NextStation, CurrentStation)
 - Station lookup: `BarStateFindStationById` (NULL list, one station), `BarStateGetStationList`
