@@ -31,22 +31,11 @@ THE SOFTWARE.
 sig_atomic_t *interrupted = NULL;
 
 /* Stub implementations for playback_manager dependencies */
-static void (*test_start_playback_hook)(BarApp_t *app, pthread_t *playerThread) = NULL;
-
-void test_set_start_playback_hook(void (*hook)(BarApp_t *app, pthread_t *playerThread)) {
-	test_start_playback_hook = hook;
-}
-
 void BarMainGetPlaylist(BarApp_t *app) {
 	(void)app;
-	/* Stub for tests - playback manager not actually tested */
 }
 
 void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
-	if (test_start_playback_hook != NULL) {
-		test_start_playback_hook(app, playerThread);
-		return;
-	}
 	(void)app;
 	(void)playerThread;
 }

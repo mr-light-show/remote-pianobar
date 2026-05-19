@@ -24,7 +24,15 @@ THE SOFTWARE.
 #pragma once
 
 #include "main.h"
+#include "player.h"
 #include <stdbool.h>
+
+/* After song cleanup, sync the playback-manager loop cache with player.mode. */
+static inline BarPlayerMode BarPlaybackManagerRefreshCachedModeAfterCleanup(
+	const BarApp_t *app, BarPlayerMode cached_mode) {
+	(void)cached_mode;
+	return BarPlayerGetMode((player_t *)&app->player);
+}
 
 /* Start playback manager thread (WebSocket modes only)
  * Returns false on failure to create thread

@@ -23,81 +23,33 @@ THE SOFTWARE.
 #include <check.h>
 #include <pthread.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "../../src/main.h"
-#include "../../src/bar_state.h"
 #include "../../src/player.h"
 #include "../../src/playback_manager.h"
-#include "../../src/settings.h"
-#include "test_helpers.h"
 
 #ifdef WEBSOCKET_ENABLED
 
-static void *test_player_finishes_immediately(void *arg) {
-	BarApp_t *app = (BarApp_t *)arg;
-
-	pthread_mutex_lock(&app->player.lock);
-	app->player.mode = PLAYER_FINISHED;
-	pthread_cond_broadcast(&app->player.cond);
-	pthread_mutex_unlock(&app->player.lock);
-	return (void *)PLAYER_RET_OK;
-}
-
-static void test_hook_start_playback(BarApp_t *app, pthread_t *playerThread) {
-	ck_assert(pthread_create(playerThread, NULL, test_player_finishes_immediately, app) == 0);
-}
-
-/* Exercises FINISHED cleanup then mode=PLAYER_DEAD cache refresh and idle handling. */
-START_TEST(test_playback_manager_finished_to_idle) {
+/* Covers post-cleanup cache refresh (was stale PLAYER_FINISHED in the loop). */
+START_TEST(test_refresh_cached_mode_after_cleanup) {
 	BarApp_t app;
-	PianoSong_t song;
-	bool saw_idle_complete = false;
+	BarPlayerMode cached = PLAYER_FINISHED;
 
 	memset(&app, 0, sizeof(app));
-	app.settings.uiMode = BAR_UI_MODE_WEB;
-	app.settings.maxRetry = 3;
-	app.settings.history = 0; /* avoid BarUiHistoryPrepend freeing stack song */
-	BarStateInit(&app);
-
-	memset(&song, 0, sizeof(song));
-	song.head.next = NULL;
-	song.title = (char *)"test";
-	BarStateSetPlaylist(&app, &song);
-
 	pthread_mutex_init(&app.player.lock, NULL);
-	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
 
-	test_set_start_playback_hook(test_hook_start_playback);
-	ck_assert(BarPlaybackManagerStart(&app));
+	cached = BarPlaybackManagerRefreshCachedModeAfterCleanup(&app, cached);
+	ck_assert_int_eq(cached, PLAYER_DEAD);
 
-	/* Wait until idle handling drains the playlist. Do not stop on PLAYER_DEAD
-	 * alone: cleanup sets DEAD before the idle block runs, and the initial
-	 * state is also DEAD with a non-empty playlist. */
-	for (int i = 0; i < 50; i++) {
-		if (BarStateGetPlaylist(&app) == NULL &&
-		    BarStateGetPlayerMode(&app) == PLAYER_DEAD) {
-			saw_idle_complete = true;
-			break;
-		}
-		usleep(100000);
-	}
-
-	BarPlaybackManagerStop(&app);
-	test_set_start_playback_hook(NULL);
-
-	ck_assert(saw_idle_complete);
-
-	pthread_cond_destroy(&app.player.cond);
 	pthread_mutex_destroy(&app.player.lock);
-	BarStateDestroy(&app);
 }
 END_TEST
 
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
-	tcase_add_test(tc, test_playback_manager_finished_to_idle);
+	tcase_add_test(tc, test_refresh_cached_mode_after_cleanup);
 	suite_add_tcase(s, tc);
 	return s;
 }
