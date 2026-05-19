@@ -227,6 +227,8 @@ static void *BarPlaybackManagerThread(void *data) {
 			
 			PlaybackManagerPlayerCleanup(app, &playerThread);
 			playerStarted = false;
+			/* Cleanup sets PLAYER_DEAD; refresh cache so idle runs this iteration */
+			mode = PLAYER_DEAD;
 		}
 		
 		/* Player idle - check for next song */
