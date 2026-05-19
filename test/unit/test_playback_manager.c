@@ -52,7 +52,7 @@ static void test_hook_start_playback(BarApp_t *app, pthread_t *playerThread) {
 START_TEST(test_playback_manager_finished_to_idle) {
 	BarApp_t app;
 	PianoSong_t song;
-	bool saw_dead = false;
+	bool saw_idle_complete = false;
 
 	memset(&app, 0, sizeof(app));
 	app.settings.uiMode = BAR_UI_MODE_WEB;
@@ -71,9 +71,13 @@ START_TEST(test_playback_manager_finished_to_idle) {
 	test_set_start_playback_hook(test_hook_start_playback);
 	ck_assert(BarPlaybackManagerStart(&app));
 
-	for (int i = 0; i < 30; i++) {
-		if (BarStateGetPlayerMode(&app) == PLAYER_DEAD) {
-			saw_dead = true;
+	/* Wait until idle handling drains the playlist. Do not stop on PLAYER_DEAD
+	 * alone: cleanup sets DEAD before the idle block runs, and the initial
+	 * state is also DEAD with a non-empty playlist. */
+	for (int i = 0; i < 50; i++) {
+		if (BarStateGetPlaylist(&app) == NULL &&
+		    BarStateGetPlayerMode(&app) == PLAYER_DEAD) {
+			saw_idle_complete = true;
 			break;
 		}
 		usleep(100000);
@@ -82,8 +86,7 @@ START_TEST(test_playback_manager_finished_to_idle) {
 	BarPlaybackManagerStop(&app);
 	test_set_start_playback_hook(NULL);
 
-	ck_assert(saw_dead);
-	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+	ck_assert(saw_idle_complete);
 
 	pthread_cond_destroy(&app.player.cond);
 	pthread_mutex_destroy(&app.player.lock);
