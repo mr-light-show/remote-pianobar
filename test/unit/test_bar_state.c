@@ -24,6 +24,7 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #include "../../src/main.h"
 #include "../../src/bar_state.h"
@@ -98,6 +99,7 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 	BarStateGetPlaylist(&app);
 	BarStateSetPlaylist(&app, &pl);
 	BarStateGetPlaylist(&app);
+	(void)BarStateGetStationList(&app);
 	/* Clear pointer without PianoDestroyPlaylist — pl is stack memory */
 	BarStateSetPlaylist(&app, NULL);
 	/* Drain with playlist already NULL: still exercises write lock + unlock */

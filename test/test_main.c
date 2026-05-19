@@ -31,15 +31,24 @@ THE SOFTWARE.
 sig_atomic_t *interrupted = NULL;
 
 /* Stub implementations for playback_manager dependencies */
+static void (*test_start_playback_hook)(BarApp_t *app, pthread_t *playerThread) = NULL;
+
+void test_set_start_playback_hook(void (*hook)(BarApp_t *app, pthread_t *playerThread)) {
+	test_start_playback_hook = hook;
+}
+
 void BarMainGetPlaylist(BarApp_t *app) {
 	(void)app;
 	/* Stub for tests - playback manager not actually tested */
 }
 
 void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
+	if (test_start_playback_hook != NULL) {
+		test_start_playback_hook(app, playerThread);
+		return;
+	}
 	(void)app;
 	(void)playerThread;
-	/* Stub for tests - playback manager not actually tested */
 }
 
 /* Test suite declarations */
@@ -50,6 +59,7 @@ Suite *socketio_suite(void);
 Suite *settings_suite(void);
 Suite *player_suite(void);
 Suite *bar_state_suite(void);
+Suite *playback_manager_suite(void);
 Suite *log_suite(void);
 Suite *l10n_suite(void);
 Suite *error_messages_suite(void);
@@ -67,6 +77,7 @@ int main(void) {
 	srunner_add_suite(sr, settings_suite());
 	srunner_add_suite(sr, player_suite());
 	srunner_add_suite(sr, bar_state_suite());
+	srunner_add_suite(sr, playback_manager_suite());
 	srunner_add_suite(sr, log_suite());
 	srunner_add_suite(sr, l10n_suite());
 	srunner_add_suite(sr, error_messages_suite());
