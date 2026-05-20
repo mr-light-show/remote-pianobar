@@ -24,11 +24,17 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <string.h>
 
+#include "../../src/bar_state.h"
 #include "../../src/main.h"
 #include "../../src/player.h"
 #include "../../src/playback_manager.h"
 
 #ifdef WEBSOCKET_ENABLED
+
+static void *test_player_thread_ok(void *arg) {
+	(void)arg;
+	return (void *)PLAYER_RET_OK;
+}
 
 /* Covers post-cleanup cache refresh (was stale PLAYER_FINISHED in the loop). */
 START_TEST(test_refresh_cached_mode_after_cleanup) {
@@ -46,10 +52,36 @@ START_TEST(test_refresh_cached_mode_after_cleanup) {
 }
 END_TEST
 
+/* Exercises FINISHED cleanup + mode refresh without starting the manager thread. */
+START_TEST(test_complete_song_cleanup_refreshes_mode) {
+	BarApp_t app;
+	pthread_t playerThread = 0;
+	bool playerStarted = true;
+	BarPlayerMode mode = PLAYER_FINISHED;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.maxRetry = 3;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+
+	ck_assert(pthread_create(&playerThread, NULL, test_player_thread_ok, NULL) == 0);
+
+	mode = BarPlaybackManagerCompleteSongCleanup(&app, &playerThread,
+	                                             &playerStarted, mode);
+	ck_assert_int_eq(mode, PLAYER_DEAD);
+	ck_assert(!playerStarted);
+
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
 	tcase_add_test(tc, test_refresh_cached_mode_after_cleanup);
+	tcase_add_test(tc, test_complete_song_cleanup_refreshes_mode);
 	suite_add_tcase(s, tc);
 	return s;
 }

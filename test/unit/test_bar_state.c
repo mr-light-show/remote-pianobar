@@ -100,9 +100,46 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 	BarStateSetPlaylist(&app, &pl);
 	BarStateGetPlaylist(&app);
 	(void)BarStateGetStationList(&app);
+	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, NULL);
 	/* Clear pointer without PianoDestroyPlaylist — pl is stack memory */
 	BarStateSetPlaylist(&app, NULL);
 	/* Drain with playlist already NULL: still exercises write lock + unlock */
+	BarStateDrainPlaylist(&app);
+
+	bar_state_test_teardown(&app);
+	dup2(stderr_dup, STDERR_FILENO);
+	close(stderr_dup);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+
+START_TEST(test_bar_state_debug_state_lock_logging_web) {
+	BarApp_t app;
+	PianoSong_t pl;
+	int stderr_dup;
+	FILE *null_out;
+
+	memset(&pl, 0, sizeof(pl));
+	pl.head.next = NULL;
+	pl.title = (char *)"title";
+
+	stderr_dup = dup(STDERR_FILENO);
+	ck_assert(stderr_dup >= 0);
+	null_out = fopen("/dev/null", "w");
+	ck_assert(null_out != NULL);
+	ck_assert(dup2(fileno(null_out), STDERR_FILENO) >= 0);
+	fclose(null_out);
+
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init();
+	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
+
+	BarStateGetPlaylist(&app);
+	BarStateSetPlaylist(&app, &pl);
+	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, NULL);
+	BarStateSetPlaylist(&app, NULL);
 	BarStateDrainPlaylist(&app);
 
 	bar_state_test_teardown(&app);
@@ -326,6 +363,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_core, test_bar_state_uses_rwlock_cli_and_null);
 #ifdef HAVE_DEBUGLOG
 	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging);
+	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging_web);
 #endif
 	tcase_add_test(tc_core, test_bar_state_next_station_get_set);
 	tcase_add_test(tc_core, test_bar_state_current_station_get_set);

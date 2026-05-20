@@ -59,6 +59,16 @@ START_TEST(test_log_init_debug_state_banner) {
 }
 END_TEST
 
+START_TEST(test_log_init_debug_ui_without_state) {
+	suppress_stderr();
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "8", 1), 0);
+	log_init();
+	ck_assert(log_is_any_debug_enabled());
+	restore_stderr();
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+
 START_TEST(test_log_write_debug_state) {
 	suppress_stderr();
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
@@ -94,6 +104,7 @@ Suite *log_suite(void) {
 	TCase *tc = tcase_create("DEBUG_STATE");
 #ifdef HAVE_DEBUGLOG
 	tcase_add_test(tc, test_log_init_debug_state_banner);
+	tcase_add_test(tc, test_log_init_debug_ui_without_state);
 	tcase_add_test(tc, test_log_write_debug_state);
 	tcase_add_test(tc, test_log_write_unknown_kind);
 #else
