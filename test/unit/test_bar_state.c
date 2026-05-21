@@ -78,12 +78,15 @@ END_TEST
 START_TEST(test_bar_state_debug_state_lock_logging) {
 	BarApp_t app;
 	PianoSong_t pl;
+	PianoStation_t st;
 	int stderr_dup;
 	FILE *null_out;
 
 	memset(&pl, 0, sizeof(pl));
 	pl.head.next = NULL;
 	pl.title = (char *)"title";
+	memset(&st, 0, sizeof(st));
+	st.name = (char *)"station";
 
 	stderr_dup = dup(STDERR_FILENO);
 	ck_assert(stderr_dup >= 0);
@@ -101,6 +104,9 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 	BarStateGetPlaylist(&app);
 	(void)BarStateGetStationList(&app);
 	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, &st);
+	BarStateSetCurrentStation(&app, &st);
+	BarStateSwitchStation(&app, &st);
 	BarStateSetNextStation(&app, NULL);
 	/* Clear pointer without PianoDestroyPlaylist — pl is stack memory */
 	BarStateSetPlaylist(&app, NULL);
@@ -117,12 +123,15 @@ END_TEST
 START_TEST(test_bar_state_debug_state_lock_logging_web) {
 	BarApp_t app;
 	PianoSong_t pl;
+	PianoStation_t st;
 	int stderr_dup;
 	FILE *null_out;
 
 	memset(&pl, 0, sizeof(pl));
 	pl.head.next = NULL;
 	pl.title = (char *)"title";
+	memset(&st, 0, sizeof(st));
+	st.name = (char *)"web-station";
 
 	stderr_dup = dup(STDERR_FILENO);
 	ck_assert(stderr_dup >= 0);
@@ -138,6 +147,8 @@ START_TEST(test_bar_state_debug_state_lock_logging_web) {
 	BarStateGetPlaylist(&app);
 	BarStateSetPlaylist(&app, &pl);
 	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, &st);
+	BarStateSetCurrentStation(&app, &st);
 	BarStateSetNextStation(&app, NULL);
 	BarStateSetPlaylist(&app, NULL);
 	BarStateDrainPlaylist(&app);

@@ -187,6 +187,15 @@ BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
 	return BarPlaybackManagerRefreshCachedModeAfterCleanup(app, mode);
 }
 
+BarPlayerMode BarPlaybackManagerHandleFinishedMode(
+	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode) {
+	if (mode == PLAYER_FINISHED) {
+		return BarPlaybackManagerCompleteSongCleanup(app, playerThread,
+		                                             playerStarted, mode);
+	}
+	return mode;
+}
+
 /*	Playback manager thread - runs the playback state machine
  */
 static void *BarPlaybackManagerThread(void *data) {
@@ -236,10 +245,8 @@ static void *BarPlaybackManagerThread(void *data) {
 		}
 		
 		/* Song finished playing - cleanup */
-		if (mode == PLAYER_FINISHED) {
-			mode = BarPlaybackManagerCompleteSongCleanup(app, &playerThread,
-			                                            &playerStarted, mode);
-		}
+		mode = BarPlaybackManagerHandleFinishedMode(app, &playerThread,
+		                                            &playerStarted, mode);
 		
 		/* Player idle - check for next song */
 		if (mode == PLAYER_DEAD) {

@@ -36,6 +36,10 @@ BarPlayerMode BarPlaybackManagerRefreshCachedModeAfterCleanup(
 BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
 	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode);
 
+/* Manager loop: run FINISHED cleanup when mode is PLAYER_FINISHED. */
+BarPlayerMode BarPlaybackManagerHandleFinishedMode(
+	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode);
+
 /* Start playback manager thread (WebSocket modes only)
  * Returns false on failure to create thread
  */

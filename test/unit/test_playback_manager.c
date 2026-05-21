@@ -77,11 +77,80 @@ START_TEST(test_complete_song_cleanup_refreshes_mode) {
 }
 END_TEST
 
+START_TEST(test_handle_finished_mode_passthrough) {
+	BarApp_t app;
+	pthread_t playerThread = 0;
+	bool playerStarted = false;
+
+	memset(&app, 0, sizeof(app));
+	pthread_mutex_init(&app.player.lock, NULL);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert_int_eq(
+		BarPlaybackManagerHandleFinishedMode(&app, &playerThread,
+		                                     &playerStarted, PLAYER_DEAD),
+		PLAYER_DEAD);
+	ck_assert(!playerStarted);
+
+	pthread_mutex_destroy(&app.player.lock);
+}
+END_TEST
+
+START_TEST(test_handle_finished_mode_runs_cleanup) {
+	BarApp_t app;
+	pthread_t playerThread = 0;
+	bool playerStarted = true;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.maxRetry = 3;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	ck_assert(pthread_create(&playerThread, NULL, test_player_thread_ok, NULL) == 0);
+
+	ck_assert_int_eq(
+		BarPlaybackManagerHandleFinishedMode(&app, &playerThread,
+		                                     &playerStarted, PLAYER_FINISHED),
+		PLAYER_DEAD);
+	ck_assert(!playerStarted);
+
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+START_TEST(test_complete_song_cleanup_interrupt_on_quit) {
+	BarApp_t app;
+	pthread_t playerThread = 0;
+	bool playerStarted = true;
+	BarPlayerMode mode = PLAYER_FINISHED;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.maxRetry = 3;
+	app.doQuit = true;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	app.player.interrupted = 1;
+	ck_assert(pthread_create(&playerThread, NULL, test_player_thread_ok, NULL) == 0);
+
+	mode = BarPlaybackManagerCompleteSongCleanup(&app, &playerThread,
+	                                             &playerStarted, mode);
+	ck_assert_int_eq(mode, PLAYER_DEAD);
+
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
 	tcase_add_test(tc, test_refresh_cached_mode_after_cleanup);
 	tcase_add_test(tc, test_complete_song_cleanup_refreshes_mode);
+	tcase_add_test(tc, test_handle_finished_mode_passthrough);
+	tcase_add_test(tc, test_handle_finished_mode_runs_cleanup);
+	tcase_add_test(tc, test_complete_song_cleanup_interrupt_on_quit);
 	suite_add_tcase(s, tc);
 	return s;
 }
