@@ -28,6 +28,16 @@ THE SOFTWARE.
 
 #include "../../src/log.h"
 
+#ifndef HAVE_DEBUGLOG
+
+START_TEST(test_log_stub_no_debuglog) {
+	ck_assert(!log_is_any_debug_enabled());
+	log_write(DEBUG_STATE, "ignored\n");
+}
+END_TEST
+
+#endif /* !HAVE_DEBUGLOG */
+
 #ifdef HAVE_DEBUGLOG
 
 static int stderr_dup = -1;
@@ -89,15 +99,7 @@ START_TEST(test_log_write_unknown_kind) {
 }
 END_TEST
 
-#else
-
-START_TEST(test_log_stub_no_debuglog) {
-	ck_assert(!log_is_any_debug_enabled());
-	log_write(DEBUG_STATE, "ignored\n");
-}
-END_TEST
-
-#endif
+#endif /* HAVE_DEBUGLOG */
 
 Suite *log_suite(void) {
 	Suite *s = suite_create("Log");
@@ -107,7 +109,8 @@ Suite *log_suite(void) {
 	tcase_add_test(tc, test_log_init_debug_ui_without_state);
 	tcase_add_test(tc, test_log_write_debug_state);
 	tcase_add_test(tc, test_log_write_unknown_kind);
-#else
+#endif
+#ifndef HAVE_DEBUGLOG
 	tcase_add_test(tc, test_log_stub_no_debuglog);
 #endif
 	suite_add_tcase(s, tc);

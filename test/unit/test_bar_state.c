@@ -116,6 +116,7 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 	pl.head.next = NULL;
 	pl.title = (char *)"title";
 	memset(&st, 0, sizeof(st));
+	st.id = (char *)"station-id";
 	st.name = (char *)"station";
 
 	stderr_dup = dup(STDERR_FILENO);
@@ -136,6 +137,10 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 	(void)BarStateGetNextStation(&app);
 	BarStateSetNextStation(&app, &st);
 	BarStateSetCurrentStation(&app, &st);
+	(void)BarStateGetCurrentStation(&app);
+	app.ph.stations = &st;
+	(void)BarStateFindStationById(&app, st.id);
+	app.ph.stations = NULL;
 	/* Clear pointer before SwitchStation — it PianoDestroyPlaylist's; pl is stack */
 	BarStateSetPlaylist(&app, NULL);
 	BarStateSwitchStation(&app, &st);
@@ -161,6 +166,7 @@ START_TEST(test_bar_state_debug_state_lock_logging_web) {
 	pl.head.next = NULL;
 	pl.title = (char *)"title";
 	memset(&st, 0, sizeof(st));
+	st.id = (char *)"web-station-id";
 	st.name = (char *)"web-station";
 
 	stderr_dup = dup(STDERR_FILENO);
@@ -176,11 +182,14 @@ START_TEST(test_bar_state_debug_state_lock_logging_web) {
 
 	BarStateGetPlaylist(&app);
 	BarStateSetPlaylist(&app, &pl);
+	(void)BarStateGetPlaylist(&app);
 	(void)BarStateGetNextStation(&app);
 	BarStateSetNextStation(&app, &st);
 	BarStateSetCurrentStation(&app, &st);
-	BarStateSetNextStation(&app, NULL);
+	(void)BarStateGetCurrentStation(&app);
 	BarStateSetPlaylist(&app, NULL);
+	BarStateSwitchStation(&app, &st);
+	BarStateSetNextStation(&app, NULL);
 	BarStateDrainPlaylist(&app);
 
 	bar_state_test_teardown(&app);
