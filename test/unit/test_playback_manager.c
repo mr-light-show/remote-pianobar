@@ -23,6 +23,7 @@ THE SOFTWARE.
 #include <check.h>
 #include <pthread.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../src/bar_state.h"
 #include "../../src/main.h"
@@ -143,6 +144,55 @@ START_TEST(test_complete_song_cleanup_interrupt_on_quit) {
 }
 END_TEST
 
+START_TEST(test_complete_song_cleanup_no_interrupt_log_when_not_quitting) {
+	BarApp_t app;
+	pthread_t playerThread = 0;
+	bool playerStarted = true;
+	BarPlayerMode mode = PLAYER_FINISHED;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.maxRetry = 3;
+	app.doQuit = false;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	app.player.interrupted = 1;
+	ck_assert(pthread_create(&playerThread, NULL, test_player_thread_ok, NULL) == 0);
+
+	mode = BarPlaybackManagerCompleteSongCleanup(&app, &playerThread,
+	                                             &playerStarted, mode);
+	ck_assert_int_eq(mode, PLAYER_DEAD);
+
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+/* Covers manager-thread call to HandleFinishedMode (one loop, no playback). */
+START_TEST(test_manager_thread_one_loop_iteration) {
+	BarApp_t app;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert(BarPlaybackManagerStart(&app));
+	pthread_mutex_lock(&app.player.lock);
+	pthread_cond_broadcast(&app.player.cond);
+	pthread_mutex_unlock(&app.player.lock);
+	usleep(100000);
+
+	BarPlaybackManagerStop(&app);
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
@@ -151,6 +201,8 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_handle_finished_mode_passthrough);
 	tcase_add_test(tc, test_handle_finished_mode_runs_cleanup);
 	tcase_add_test(tc, test_complete_song_cleanup_interrupt_on_quit);
+	tcase_add_test(tc, test_complete_song_cleanup_no_interrupt_log_when_not_quitting);
+	tcase_add_test(tc, test_manager_thread_one_loop_iteration);
 	suite_add_tcase(s, tc);
 	return s;
 }

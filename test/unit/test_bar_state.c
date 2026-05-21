@@ -57,6 +57,36 @@ START_TEST(test_bar_state_init_destroy_both) {
 }
 END_TEST
 
+#ifdef HAVE_DEBUGLOG
+/* CLI: BarStateUsesRwlock false while DEBUG_STATE is enabled (no lock logging). */
+START_TEST(test_bar_state_debug_state_no_rwlock_cli) {
+	BarApp_t app;
+	int stderr_dup;
+	FILE *null_out;
+
+	stderr_dup = dup(STDERR_FILENO);
+	ck_assert(stderr_dup >= 0);
+	null_out = fopen("/dev/null", "w");
+	ck_assert(null_out != NULL);
+	ck_assert(dup2(fileno(null_out), STDERR_FILENO) >= 0);
+	fclose(null_out);
+
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init();
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, NULL);
+	BarStateDestroy(&app);
+
+	dup2(stderr_dup, STDERR_FILENO);
+	close(stderr_dup);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+#endif
+
 /* BarStateUsesRwlock: false for NULL app and cli mode */
 START_TEST(test_bar_state_uses_rwlock_cli_and_null) {
 	BarApp_t app;
@@ -373,6 +403,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_core, test_bar_state_init_destroy_web);
 	tcase_add_test(tc_core, test_bar_state_uses_rwlock_cli_and_null);
 #ifdef HAVE_DEBUGLOG
+	tcase_add_test(tc_core, test_bar_state_debug_state_no_rwlock_cli);
 	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging);
 	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging_web);
 #endif
