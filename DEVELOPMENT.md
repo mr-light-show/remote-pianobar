@@ -561,10 +561,11 @@ Debug flags are bitfield values that can be combined:
 
 - `1` - `DEBUG_NETWORK` - Network/API calls (cyan)
 - `2` - `DEBUG_AUDIO` - Audio playback (yellow)
-- `4` - `DEBUG_UI` - User interface (green)
+- `4` - `DEBUG_UI` - User interface and playback manager (green)
 - `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (bold magenta)
 - `16` - `DEBUG_WEBSOCKET_PROGRESS` - Progress updates every second (normal magenta, very noisy)
 - `32` - `DEBUG_CLI` - Kind label for **BarUiMsg** lines on stderr (bright blue). You do **not** need to set bit `32` in `PIANOBAR_DEBUG` to enable those lines: `log_init` ORs `DEBUG_CLI` into the internal mask whenever **any** debug bit is non-zero. When `ui_mode` is **web** or **both** and the internal mask includes `DEBUG_CLI`, each `BarUiMsg` (except `MSG_TIME`) is emitted **only** as `[time] CLI: …` on stderr (same prefixes/postfixes as the normal UI line would use: `(i)`, `|>`, …)—not duplicated to stdout.
+- `64` - `DEBUG_STATE` - `stateRwlock` / `BarState*` lock tracing (bright white, very noisy)
 
 #### Usage Examples
 
@@ -573,8 +574,12 @@ Debug flags are bitfield values that can be combined:
 export PIANOBAR_DEBUG=31  # 1+2+4+8+16
 ./pianobar
 
-# WebSocket debugging WITHOUT progress spam (recommended)
-export PIANOBAR_DEBUG=15  # 1+2+4+8 (everything except progress)
+# WebSocket debugging WITHOUT progress or state-lock spam (recommended)
+export PIANOBAR_DEBUG=15  # 1+2+4+8 (network, audio, UI, websocket)
+./pianobar
+
+# WebSocket + state rwlock traces (noisy)
+export PIANOBAR_DEBUG=72  # 8+64
 ./pianobar
 
 # Only WebSocket events (no progress)
@@ -604,7 +609,8 @@ When stderr is a terminal and `HAVE_DEBUGLOG` is enabled, each line has the form
 - **Red**: `LOG_ERROR` (always logged)
 - **Cyan**: Network (`DEBUG_NETWORK`)
 - **Yellow**: Audio (`DEBUG_AUDIO`) — RSS lines use a shared helper: **` 185,536 KB (+ 32 KB) RSS: after decode`** (padded absolute KB, parenthetical delta vs process high-water RSS with commas, `RSS:` label). HWM only rises when RSS increases; first line or missing RSS uses **`(n/a)`** in the parentheses.
-- **Green**: UI (`DEBUG_UI`) — state/rwlock and similar
+- **Green**: UI (`DEBUG_UI`) — playback manager, signals
+- **Bright white**: State (`DEBUG_STATE`) — `stateRwlock` acquire/release and getter/setter traces
 - **Bold magenta**: WebSocket (`DEBUG_WEBSOCKET`, bit 8)
 - **Normal magenta**: WebSocket progress (`DEBUG_WEBSOCKET_PROGRESS`, bit 16)
 - **Bright blue**: CLI (`DEBUG_CLI`) — `BarUiMsg` on stderr only (no plain stdout copy) when the internal mask includes `DEBUG_CLI` and `ui_mode` is web or both

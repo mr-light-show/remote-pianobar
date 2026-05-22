@@ -24,10 +24,12 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 
 #include "../../src/main.h"
 #include "../../src/bar_state.h"
 #include "../../src/settings.h"
+#include "../../src/log.h"
 
 #ifdef WEBSOCKET_ENABLED
 
@@ -35,22 +37,192 @@ THE SOFTWARE.
 static PianoStation_t station_a;
 static const char *station_a_id = "station-a";
 
-static void bar_state_test_setup_both(BarApp_t *app) {
+static void bar_state_test_setup(BarApp_t *app, BarUiMode_t mode) {
 	memset(app, 0, sizeof(*app));
-	app->settings.uiMode = BAR_UI_MODE_BOTH;
+	app->settings.uiMode = mode;
 	BarStateInit(app);
 }
 
-static void bar_state_test_teardown_both(BarApp_t *app) {
+static void bar_state_test_teardown(BarApp_t *app) {
 	BarStateDestroy(app);
 }
 
 /* Init/destroy: stateRwlock is created and destroyed in BOTH mode */
 START_TEST(test_bar_state_init_destroy_both) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	ck_assert(app.settings.uiMode == BAR_UI_MODE_BOTH);
-	bar_state_test_teardown_both(&app);
+	ck_assert(BarStateUsesRwlock(&app));
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+/* CLI: BarStateUsesRwlock false while DEBUG_STATE is enabled (no lock logging). */
+START_TEST(test_bar_state_debug_state_no_rwlock_cli) {
+	BarApp_t app;
+	int stderr_dup;
+	FILE *null_out;
+
+	stderr_dup = dup(STDERR_FILENO);
+	ck_assert(stderr_dup >= 0);
+	null_out = fopen("/dev/null", "w");
+	ck_assert(null_out != NULL);
+	ck_assert(dup2(fileno(null_out), STDERR_FILENO) >= 0);
+	fclose(null_out);
+
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init();
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, NULL);
+	BarStateDestroy(&app);
+
+	dup2(stderr_dup, STDERR_FILENO);
+	close(stderr_dup);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+#endif
+
+/* BarStateUsesRwlock: false for NULL app and cli mode */
+START_TEST(test_bar_state_uses_rwlock_cli_and_null) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+
+	ck_assert(!BarStateUsesRwlock(NULL));
+	ck_assert(!BarStateUsesRwlock(&app));
+
+	BarStateInit(&app);
+	BarStateSetNextStation(&app, NULL);
+	ck_assert_ptr_null(BarStateGetNextStation(&app));
+	BarStateDestroy(&app);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+/* Exercise DEBUG_STATE log paths in lock helpers (stderr suppressed). */
+START_TEST(test_bar_state_debug_state_lock_logging) {
+	BarApp_t app;
+	PianoSong_t pl;
+	PianoStation_t st;
+	int stderr_dup;
+	FILE *null_out;
+
+	memset(&pl, 0, sizeof(pl));
+	pl.head.next = NULL;
+	pl.title = (char *)"title";
+	memset(&st, 0, sizeof(st));
+	st.id = (char *)"station-id";
+	st.name = (char *)"station";
+
+	stderr_dup = dup(STDERR_FILENO);
+	ck_assert(stderr_dup >= 0);
+	null_out = fopen("/dev/null", "w");
+	ck_assert(null_out != NULL);
+	ck_assert(dup2(fileno(null_out), STDERR_FILENO) >= 0);
+	fclose(null_out);
+
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init();
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateGetPlaylist(&app);
+	BarStateSetPlaylist(&app, &pl);
+	BarStateGetPlaylist(&app);
+	(void)BarStateGetStationList(&app);
+	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, &st);
+	BarStateSetCurrentStation(&app, &st);
+	(void)BarStateGetCurrentStation(&app);
+	app.ph.stations = &st;
+	(void)BarStateFindStationById(&app, st.id);
+	app.ph.stations = NULL;
+	/* Clear pointer before SwitchStation — it PianoDestroyPlaylist's; pl is stack */
+	BarStateSetPlaylist(&app, NULL);
+	BarStateSwitchStation(&app, &st);
+	BarStateSetNextStation(&app, NULL);
+	/* Drain with playlist already NULL: still exercises write lock + unlock */
+	BarStateDrainPlaylist(&app);
+
+	bar_state_test_teardown(&app);
+	dup2(stderr_dup, STDERR_FILENO);
+	close(stderr_dup);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+
+START_TEST(test_bar_state_debug_state_lock_logging_web) {
+	BarApp_t app;
+	PianoSong_t pl;
+	PianoStation_t st;
+	int stderr_dup;
+	FILE *null_out;
+
+	memset(&pl, 0, sizeof(pl));
+	pl.head.next = NULL;
+	pl.title = (char *)"title";
+	memset(&st, 0, sizeof(st));
+	st.id = (char *)"web-station-id";
+	st.name = (char *)"web-station";
+
+	stderr_dup = dup(STDERR_FILENO);
+	ck_assert(stderr_dup >= 0);
+	null_out = fopen("/dev/null", "w");
+	ck_assert(null_out != NULL);
+	ck_assert(dup2(fileno(null_out), STDERR_FILENO) >= 0);
+	fclose(null_out);
+
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init();
+	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
+
+	BarStateGetPlaylist(&app);
+	BarStateSetPlaylist(&app, &pl);
+	(void)BarStateGetPlaylist(&app);
+	(void)BarStateGetNextStation(&app);
+	BarStateSetNextStation(&app, &st);
+	BarStateSetCurrentStation(&app, &st);
+	(void)BarStateGetCurrentStation(&app);
+	BarStateSetPlaylist(&app, NULL);
+	BarStateSwitchStation(&app, &st);
+	BarStateSetNextStation(&app, NULL);
+	BarStateDrainPlaylist(&app);
+
+	bar_state_test_teardown(&app);
+	dup2(stderr_dup, STDERR_FILENO);
+	close(stderr_dup);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+#endif
+
+/* Init/destroy: stateRwlock is created and destroyed in WEB mode */
+START_TEST(test_bar_state_init_destroy_web) {
+	BarApp_t app;
+	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
+	ck_assert(app.settings.uiMode == BAR_UI_MODE_WEB);
+	ck_assert(BarStateUsesRwlock(&app));
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+/* Playlist get/set under stateRwlock in WEB mode */
+START_TEST(test_bar_state_playlist_get_set_web) {
+	BarApp_t app;
+	PianoSong_t pl;
+	memset(&pl, 0, sizeof(pl));
+	pl.head.next = NULL;
+	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
+
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+	BarStateSetPlaylist(&app, &pl);
+	ck_assert_ptr_eq(BarStateGetPlaylist(&app), &pl);
+
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -60,7 +232,7 @@ START_TEST(test_bar_state_next_station_get_set) {
 	PianoStation_t st;
 	memset(&st, 0, sizeof(st));
 	st.id = (char *)"next";
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 
 	BarStateSetNextStation(&app, &st);
 	ck_assert_ptr_eq(BarStateGetNextStation(&app), &st);
@@ -68,7 +240,7 @@ START_TEST(test_bar_state_next_station_get_set) {
 	BarStateSetNextStation(&app, NULL);
 	ck_assert_ptr_null(BarStateGetNextStation(&app));
 
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -77,7 +249,7 @@ START_TEST(test_bar_state_current_station_get_set) {
 	PianoStation_t st;
 	memset(&st, 0, sizeof(st));
 	st.id = (char *)"cur";
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 
 	BarStateSetCurrentStation(&app, &st);
 	ck_assert_ptr_eq(BarStateGetCurrentStation(&app), &st);
@@ -85,18 +257,18 @@ START_TEST(test_bar_state_current_station_get_set) {
 	BarStateSetCurrentStation(&app, NULL);
 	ck_assert_ptr_null(BarStateGetCurrentStation(&app));
 
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
 /* FindStationById returns NULL when ph.stations == NULL */
 START_TEST(test_bar_state_find_station_by_id_null_list) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	ck_assert(app.ph.stations == NULL);
 	ck_assert_ptr_null(BarStateFindStationById(&app, "any"));
 	ck_assert_ptr_null(BarStateFindStationById(&app, NULL));
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -107,7 +279,7 @@ START_TEST(test_bar_state_find_station_by_id_one_station) {
 	station_a.head.next = NULL;
 	station_a.id = (char *)station_a_id;
 
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	app.ph.stations = &station_a;
 
 	ck_assert_ptr_eq(BarStateFindStationById(&app, station_a_id), &station_a);
@@ -115,19 +287,19 @@ START_TEST(test_bar_state_find_station_by_id_one_station) {
 	ck_assert_ptr_null(BarStateFindStationById(&app, NULL));
 
 	app.ph.stations = NULL;
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
 /* GetStationList returns ph.stations */
 START_TEST(test_bar_state_get_station_list) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	ck_assert_ptr_null(BarStateGetStationList(&app));
 	app.ph.stations = &station_a;
 	ck_assert_ptr_eq(BarStateGetStationList(&app), &station_a);
 	app.ph.stations = NULL;
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -137,7 +309,7 @@ START_TEST(test_bar_state_playlist_get_set) {
 	PianoSong_t pl;
 	memset(&pl, 0, sizeof(pl));
 	pl.head.next = NULL;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 
 	ck_assert_ptr_null(BarStateGetPlaylist(&app));
 	BarStateSetPlaylist(&app, &pl);
@@ -145,17 +317,17 @@ START_TEST(test_bar_state_playlist_get_set) {
 	BarStateSetPlaylist(&app, NULL);
 	ck_assert_ptr_null(BarStateGetPlaylist(&app));
 
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
 START_TEST(test_bar_state_drain_playlist) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	app.playlist = NULL;
 	BarStateDrainPlaylist(&app);
 	ck_assert_ptr_null(BarStateGetPlaylist(&app));
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -165,21 +337,21 @@ START_TEST(test_bar_state_switch_station) {
 	PianoStation_t st;
 	memset(&st, 0, sizeof(st));
 	st.id = (char *)"switched";
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	app.playlist = NULL;
 
 	BarStateSwitchStation(&app, &st);
 	ck_assert_ptr_null(BarStateGetPlaylist(&app));
 	ck_assert_ptr_eq(BarStateGetNextStation(&app), &st);
 
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
 /* Player state getters use player.lock, not stateRwlock */
 START_TEST(test_bar_state_player_mode_time_paused) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	pthread_mutex_init(&app.player.lock, NULL);
 	app.player.mode = PLAYER_DEAD;
 	app.player.songPlayed = 10;
@@ -200,7 +372,7 @@ START_TEST(test_bar_state_player_mode_time_paused) {
 	ck_assert(BarStateGetPlayerPaused(&app) == true);
 
 	pthread_mutex_destroy(&app.player.lock);
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -208,7 +380,7 @@ END_TEST
  * This test documents the allowed order by acquiring in that order and releasing in reverse. */
 START_TEST(test_bar_state_lock_order_state_before_player) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	pthread_mutex_init(&app.player.lock, NULL);
 
 	pthread_rwlock_rdlock((pthread_rwlock_t *)&app.stateRwlock);
@@ -217,19 +389,19 @@ START_TEST(test_bar_state_lock_order_state_before_player) {
 	pthread_rwlock_unlock((pthread_rwlock_t *)&app.stateRwlock);
 
 	pthread_mutex_destroy(&app.player.lock);
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
 /* IsPandoraConnected: simple read of ph.user.listenerId (no lock) */
 START_TEST(test_bar_state_is_pandora_connected) {
 	BarApp_t app;
-	bar_state_test_setup_both(&app);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 	ck_assert(BarStateIsPandoraConnected(&app) == false);
 	app.ph.user.listenerId = (char *)"lid";
 	ck_assert(BarStateIsPandoraConnected(&app) == true);
 	app.ph.user.listenerId = NULL;
-	bar_state_test_teardown_both(&app);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -237,6 +409,13 @@ Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
 	tcase_add_test(tc_core, test_bar_state_init_destroy_both);
+	tcase_add_test(tc_core, test_bar_state_init_destroy_web);
+	tcase_add_test(tc_core, test_bar_state_uses_rwlock_cli_and_null);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test(tc_core, test_bar_state_debug_state_no_rwlock_cli);
+	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging);
+	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging_web);
+#endif
 	tcase_add_test(tc_core, test_bar_state_next_station_get_set);
 	tcase_add_test(tc_core, test_bar_state_current_station_get_set);
 	tcase_add_test(tc_core, test_bar_state_find_station_by_id_null_list);
@@ -246,6 +425,7 @@ Suite *bar_state_suite(void) {
 
 	TCase *tc_playlist = tcase_create("Playlist");
 	tcase_add_test(tc_playlist, test_bar_state_playlist_get_set);
+	tcase_add_test(tc_playlist, test_bar_state_playlist_get_set_web);
 	tcase_add_test(tc_playlist, test_bar_state_drain_playlist);
 	tcase_add_test(tc_playlist, test_bar_state_switch_station);
 	suite_add_tcase(s, tc_playlist);

@@ -24,7 +24,21 @@ THE SOFTWARE.
 #pragma once
 
 #include "main.h"
+#include "player.h"
+#include <pthread.h>
 #include <stdbool.h>
+
+/* After song cleanup, sync the playback-manager loop cache with player.mode. */
+BarPlayerMode BarPlaybackManagerRefreshCachedModeAfterCleanup(
+	const BarApp_t *app, BarPlayerMode cached_mode);
+
+/* FINISHED path: cleanup player thread and return refreshed mode for idle handling. */
+BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
+	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode);
+
+/* Manager loop: run FINISHED cleanup when mode is PLAYER_FINISHED. */
+BarPlayerMode BarPlaybackManagerHandleFinishedMode(
+	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode);
 
 /* Start playback manager thread (WebSocket modes only)
  * Returns false on failure to create thread

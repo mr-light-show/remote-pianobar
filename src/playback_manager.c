@@ -163,6 +163,39 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 	pthread_mutex_unlock(&app->player.lock);
 }
 
+BarPlayerMode BarPlaybackManagerRefreshCachedModeAfterCleanup(
+	const BarApp_t *app, BarPlayerMode cached_mode) {
+	(void)cached_mode;
+	return BarPlayerGetMode((player_t *)&app->player);
+}
+
+BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
+	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode) {
+	log_write(DEBUG_UI, "PlaybackMgr: Song finished\n");
+
+	/* Only quit if app->doQuit was already set (explicit quit command or SIGINT).
+	 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
+	 * This prevents disconnect (power button) from terminating the process. */
+	pthread_mutex_lock(&app->player.lock);
+	if (app->player.interrupted != 0 && app->doQuit) {
+		log_write(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
+	}
+	pthread_mutex_unlock(&app->player.lock);
+
+	PlaybackManagerPlayerCleanup(app, playerThread);
+	*playerStarted = false;
+	return BarPlaybackManagerRefreshCachedModeAfterCleanup(app, mode);
+}
+
+BarPlayerMode BarPlaybackManagerHandleFinishedMode(
+	BarApp_t *app, pthread_t *playerThread, bool *playerStarted, BarPlayerMode mode) {
+	if (mode == PLAYER_FINISHED) {
+		return BarPlaybackManagerCompleteSongCleanup(app, playerThread,
+		                                             playerStarted, mode);
+	}
+	return mode;
+}
+
 /*	Playback manager thread - runs the playback state machine
  */
 static void *BarPlaybackManagerThread(void *data) {
@@ -212,22 +245,8 @@ static void *BarPlaybackManagerThread(void *data) {
 		}
 		
 		/* Song finished playing - cleanup */
-		if (mode == PLAYER_FINISHED) {
-			log_write(DEBUG_UI, "PlaybackMgr: Song finished\n");
-			
-			/* Only quit if app->doQuit was already set (explicit quit command or SIGINT).
-			 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
-			 * This prevents disconnect (power button) from terminating the process. */
-			pthread_mutex_lock(&app->player.lock);
-			if (app->player.interrupted != 0 && app->doQuit) {
-				/* User pressed Ctrl+C during playback - already quitting */
-				log_write(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
-			}
-			pthread_mutex_unlock(&app->player.lock);
-			
-			PlaybackManagerPlayerCleanup(app, &playerThread);
-			playerStarted = false;
-		}
+		mode = BarPlaybackManagerHandleFinishedMode(app, &playerThread,
+		                                            &playerStarted, mode);
 		
 		/* Player idle - check for next song */
 		if (mode == PLAYER_DEAD) {

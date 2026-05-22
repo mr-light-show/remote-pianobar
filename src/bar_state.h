@@ -25,6 +25,17 @@ THE SOFTWARE.
 
 #include "main.h"
 #include <piano.h>
+#include <stdbool.h>
+
+/* True when playlist/station pointers are shared across threads (web and both; not cli). */
+static inline bool BarStateUsesRwlock(const BarApp_t *app) {
+#ifdef WEBSOCKET_ENABLED
+	return app != NULL && app->settings.uiMode != BAR_UI_MODE_CLI;
+#else
+	(void)app;
+	return false;
+#endif
+}
 
 /* Debug assertions for lock state (enabled with -DDEBUG) */
 #ifdef DEBUG
@@ -32,11 +43,11 @@ THE SOFTWARE.
 #include <errno.h>
 
 /* Assert that stateRwlock is held by some thread (cannot distinguish calling thread with rwlock).
- * Only works in BOTH mode. Uses trywrlock: EBUSY => someone holds it; 0 => was free, unlock and fail. */
+ * Only when BarStateUsesRwlock. Uses trywrlock: EBUSY => someone holds it; 0 => was free, unlock and fail. */
 #ifdef WEBSOCKET_ENABLED
 #define ASSERT_STATE_LOCK_HELD(app) \
 	do { \
-		if ((app)->settings.uiMode == BAR_UI_MODE_BOTH) { \
+		if (BarStateUsesRwlock(app)) { \
 			int _trylock_result = pthread_rwlock_trywrlock((pthread_rwlock_t *)&(app)->stateRwlock); \
 			if (_trylock_result == 0) { \
 				pthread_rwlock_unlock((pthread_rwlock_t *)&(app)->stateRwlock); \
@@ -50,7 +61,7 @@ THE SOFTWARE.
 /* Assert that stateRwlock is NOT currently held (trywrlock succeeds => was free; then unlock). */
 #define ASSERT_STATE_LOCK_NOT_HELD(app) \
 	do { \
-		if ((app)->settings.uiMode == BAR_UI_MODE_BOTH) { \
+		if (BarStateUsesRwlock(app)) { \
 			int _trylock_result = pthread_rwlock_trywrlock((pthread_rwlock_t *)&(app)->stateRwlock); \
 			assert(_trylock_result == 0 && "stateRwlock is held (expected to be free)"); \
 			if (_trylock_result == 0) { \

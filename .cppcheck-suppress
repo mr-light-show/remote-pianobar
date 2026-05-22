@@ -8,6 +8,7 @@ constVariablePointer:src/main.c
 unusedVariable:src/main.c
 # Style / optional const and scope (triage; fix in follow-up if desired)
 constVariablePointer:src/playback_manager.c
+staticFunction:src/playback_manager.c
 constVariablePointer:src/player.c
 truncLongCastAssignment:src/player.c
 staticFunction:src/player.c
