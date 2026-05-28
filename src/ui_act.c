@@ -1047,6 +1047,66 @@ BarUiActCallback(BarUiActSettings) {
 	}
 }
 
+/*	Build the manage-station action prompt into buf (size bufLen).
+ *	Returns the number of characters that would have been written (like snprintf).
+ */
+int BarUiActBuildManageStationQuestion (char *buf, size_t bufLen,
+		bool hasArtistSeeds, bool hasSongSeeds, bool hasStationSeeds,
+		bool hasFeedback, bool isQuickMix) {
+	char *pos = buf;
+	size_t remaining = bufLen;
+	int total = 0;
+	bool hasSeed = hasArtistSeeds || hasSongSeeds || hasStationSeeds ||
+			hasFeedback;
+
+#define APPEND(str) \
+	do { \
+		int _n = snprintf (pos, remaining, "%s", (str)); \
+		if (_n > 0) { \
+			size_t _advance = (size_t)_n < remaining ? (size_t)_n : remaining - 1; \
+			pos += _advance; \
+			remaining -= _advance; \
+		} \
+		total += _n; \
+	} while (0)
+
+	bool needsSep = false;
+	if (hasSeed) {
+		APPEND ("Delete ");
+	}
+	if (hasArtistSeeds) {
+		APPEND ("[a]rtist");
+		needsSep = true;
+	}
+	if (hasSongSeeds) {
+		if (needsSep) { APPEND ("/"); }
+		APPEND ("[s]ong");
+		needsSep = true;
+	}
+	if (hasStationSeeds) {
+		if (needsSep) { APPEND ("/"); }
+		APPEND ("s[t]ation");
+		needsSep = true;
+	}
+	if (hasArtistSeeds || hasSongSeeds || hasStationSeeds) {
+		APPEND (" seeds");
+	}
+	if (hasFeedback) {
+		if (needsSep) { APPEND (" or "); }
+		APPEND ("[f]eedback");
+	}
+	if (hasSeed) {
+		APPEND ("? ");
+	}
+	if (!isQuickMix) {
+		APPEND ("Manage [m]ode? ");
+	}
+
+#undef APPEND
+
+	return total;
+}
+
 /*	manage station (remove seeds or feedback)
  */
 BarUiActCallback(BarUiActManageStation) {
@@ -1054,7 +1114,7 @@ BarUiActCallback(BarUiActManageStation) {
 	CURLcode wRet;
 	PianoRequestDataGetStationInfo_t reqData;
 	char selectBuf[2], allowedActions[6], *allowedPos = allowedActions;
-	char question[128];
+	char question[512];
 
 	memset (&reqData, 0, sizeof (reqData));
 	reqData.station = selStation;
@@ -1067,58 +1127,26 @@ BarUiActCallback(BarUiActManageStation) {
 		return;
 	}
 
-	/* enable submenus depending on data availability */
-	if (reqData.info.artistSeeds != NULL ||
-			reqData.info.songSeeds != NULL ||
-			reqData.info.stationSeeds != NULL ||
-			reqData.info.feedback != NULL) {
-		strcpy (question, "Delete ");
-	}
-	if (reqData.info.artistSeeds != NULL) {
-		strcat (question, "[a]rtist");
-		*allowedPos++ = 'a';
-	}
-	if (reqData.info.songSeeds != NULL) {
-		if (allowedPos != allowedActions) {
-			strcat (question, "/");
-		}
-		strcat (question, "[s]ong");
-		*allowedPos++ = 's';
-	}
-	if (reqData.info.stationSeeds != NULL) {
-		if (allowedPos != allowedActions) {
-			strcat (question, "/");
-		}
-		strcat (question, "s[t]ation");
-		*allowedPos++ = 't';
-	}
-	if (allowedPos != allowedActions) {
-		strcat (question, " seeds");
-	}
-	if (reqData.info.feedback != NULL) {
-		if (allowedPos != allowedActions) {
-			strcat (question, " or ");
-		}
-		strcat (question, "[f]eedback");
-		*allowedPos++ = 'f';
-	}
-	if (allowedPos != allowedActions) {
-		strcat (question, "? ");
-	}
-	/* station mode is not available for QuickMix. */
-	if (!selStation->isQuickMix) {
-		strcat (question, "Manage [m]ode? ");
-		*allowedPos++ = 'm';
-	}
+	/* Build the menu prompt using a bounded helper — no strcat overflow risk */
+	BarUiActBuildManageStationQuestion (question, sizeof (question),
+			reqData.info.artistSeeds != NULL,
+			reqData.info.songSeeds != NULL,
+			reqData.info.stationSeeds != NULL,
+			reqData.info.feedback != NULL,
+			selStation->isQuickMix);
 
+	/* Populate the allowed-actions string to match the prompt */
+	if (reqData.info.artistSeeds != NULL) { *allowedPos++ = 'a'; }
+	if (reqData.info.songSeeds != NULL)   { *allowedPos++ = 's'; }
+	if (reqData.info.stationSeeds != NULL) { *allowedPos++ = 't'; }
+	if (reqData.info.feedback != NULL)    { *allowedPos++ = 'f'; }
+	if (!selStation->isQuickMix)          { *allowedPos++ = 'm'; }
 	*allowedPos = '\0';
 
 	if (allowedPos == allowedActions) {
 		BarUiMsg (&app->settings, MSG_INFO, "No actions available.\n");
 		return;
 	}
-
-	assert (strlen (question) < sizeof (question) / sizeof (*question));
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "%s", question);
 	if (BarReadline (selectBuf, sizeof (selectBuf), allowedActions, &app->input,

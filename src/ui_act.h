@@ -23,6 +23,8 @@ THE SOFTWARE.
 
 #pragma once
 
+#include <stdbool.h>
+#include <stddef.h>
 #include <piano.h>
 
 #include "main.h"
@@ -74,6 +76,16 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 
 /* Transform station if shared (for WebSocket use) */
 int BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
+
+/*
+ * Build the manage-station action prompt into buf (size bufLen).
+ * Parameters indicate which seed types and feedback are available and whether
+ * the station is a QuickMix (QuickMix suppresses the mode option).
+ * Returns the number of characters that would have been written (like snprintf).
+ */
+int BarUiActBuildManageStationQuestion (char *buf, size_t bufLen,
+		bool hasArtistSeeds, bool hasSongSeeds, bool hasStationSeeds,
+		bool hasFeedback, bool isQuickMix);
 
 /* Logged version of BarTransformIfShared for WebSocket thread */
 int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
