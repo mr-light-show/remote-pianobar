@@ -74,8 +74,8 @@ void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station);
 void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 
-/* Transform station if shared (for WebSocket use) */
-int BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
+/* Transform station if shared — false on error, true on success */
+bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
 /*
  * Build the manage-station action prompt into buf (size bufLen).
@@ -87,6 +87,6 @@ int BarUiActBuildManageStationQuestion (char *buf, size_t bufLen,
 		bool hasArtistSeeds, bool hasSongSeeds, bool hasStationSeeds,
 		bool hasFeedback, bool isQuickMix);
 
-/* Logged version of BarTransformIfShared for WebSocket thread */
-int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
+/* Logged version of BarTransformIfShared for WebSocket thread — false on error, true on success */
+bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 

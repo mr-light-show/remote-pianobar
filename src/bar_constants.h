@@ -24,6 +24,18 @@
 #define BAR_BUF_LARGE                2048 /* Large buffers (URLs) */
 #define BAR_INPUT_MAX                100  /* Credential / short input line size (name, password, lineBuf) */
 
+/* --- Player stop / busy-wait replacement --- */
+#define BAR_PLAYER_STOP_POLL_MS      100   /* ms between mode polls */
+#define BAR_PLAYER_STOP_TIMEOUT_MS 10000   /* ms before giving up */
+
+/* --- Daemon lock-file retry --- */
+#define BAR_DAEMON_LOCK_RETRY_MS     500   /* ms between lock-file retries */
+#define BAR_DAEMON_LOCK_RETRY_COUNT   10   /* retries before giving up */
+
+/* --- Idle/relaunch timing --- */
+#define BAR_WEBONLY_IDLE_LOOP_S        1   /* seconds for web-mode idle wait */
+#define BAR_RELAUNCH_PARENT_WAIT_S     1   /* seconds parent waits after exec */
+
 /* --- System / platform --- */
 #define BAR_PA_READY_TRIES           50   /* Max PulseAudio connection wait iterations */
 #define BAR_PA_OP_MAX_ITERATIONS     100  /* Max PulseAudio operation wait iterations (~1s) */

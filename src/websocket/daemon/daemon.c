@@ -29,10 +29,14 @@ THE SOFTWARE.
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <string.h>
 #include <time.h>
 #include <errno.h>
@@ -406,4 +410,39 @@ bool BarDaemonKillExistingInstance(void) {
 	
 	log_write(LOG_ERROR, "Warning: Failed to kill existing instance (PID: %d)\n", (int)oldPid);
 	return false;
+}
+
+/* Get the machine's first non-loopback IPv4 address.
+ * Falls back to "127.0.0.1" when no suitable interface is found. */
+void BarDaemonGetIPv4Address (char *buffer, size_t buffer_size)
+{
+	struct ifaddrs *ifaddrs_ptr = NULL;
+	struct ifaddrs *ifa = NULL;
+
+	buffer[0] = '\0';
+
+	if (getifaddrs (&ifaddrs_ptr) != 0) {
+		strncpy (buffer, "127.0.0.1", buffer_size - 1);
+		buffer[buffer_size - 1] = '\0';
+		return;
+	}
+
+	for (ifa = ifaddrs_ptr; ifa != NULL; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == NULL) { continue; }
+		if (ifa->ifa_addr->sa_family == AF_INET) {
+			struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+			const char *ip = inet_ntoa (sin->sin_addr);
+			if (strcmp (ip, "127.0.0.1") != 0 && strcmp (ip, "127.0.0.0") != 0) {
+				strncpy (buffer, ip, buffer_size - 1);
+				buffer[buffer_size - 1] = '\0';
+				break;
+			}
+		}
+	}
+	freeifaddrs (ifaddrs_ptr);
+
+	if (buffer[0] == '\0') {
+		strncpy (buffer, "127.0.0.1", buffer_size - 1);
+		buffer[buffer_size - 1] = '\0';
+	}
 }

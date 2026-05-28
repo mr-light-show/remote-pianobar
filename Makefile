@@ -44,6 +44,8 @@ LOCALE_GEN_MARKER:=${PIANOBAR_DIR}/l10n_defaults_gen.c
 LOCALE_CODEGEN_STAMP:=.locale-codegen.stamp
 PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/main.c \
+		${PIANOBAR_DIR}/interrupt.c \
+		${PIANOBAR_DIR}/playback_lifecycle.c \
 		${PIANOBAR_DIR}/log.c \
 		${PIANOBAR_DIR}/miniaudio_impl.c \
 		${PIANOBAR_DIR}/parse_utils.c \
@@ -126,9 +128,11 @@ endif
 ifneq ($(NOWEBSOCKET),1)
 	LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
 	LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
-	CHECK_CFLAGS:=$(shell $(PKG_CONFIG) --cflags check)
-	CHECK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs check)
 endif
+
+# Check unit-test framework (always, so NOWEBSOCKET=1 tests can run)
+CHECK_CFLAGS:=$(shell $(PKG_CONFIG) --cflags check 2>/dev/null)
+CHECK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs check 2>/dev/null)
 
 # First real rule was locale-codegen; without this, bare `make` only runs codegen and
 # never builds pianobar. Default goal must be the binary (locale-codegen is a dep of pianobar).
@@ -141,6 +145,10 @@ $(LOCALE_CODEGEN_STAMP): $(LOCALE_YAML) scripts/locale_codegen.py
 
 .PHONY: locale-codegen
 locale-codegen: $(LOCALE_CODEGEN_STAMP)
+
+.PHONY: locale-check-sync
+locale-check-sync:
+	python3 scripts/check_locale_sync.py
 
 # combine all flags
 ALL_CFLAGS:=${CFLAGS} -I ${LIBPIANO_INCLUDE} \
@@ -192,7 +200,6 @@ libpiano.so.0: ${LIBPIANO_RELOBJ} ${LIBPIANO_OBJ}
 -include $(LIBPIANO_SRC:.c=.d)
 
 # Test-specific compilation rules (must come before general %.o: %.c rule)
-ifneq ($(NOWEBSOCKET),1)
 test/%.o: test/%.c
 	${SILENTECHO} "    CC  $< (test)"
 	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $*.d -MP $<
@@ -200,7 +207,6 @@ test/%.o: test/%.c
 test/unit/%.o: test/unit/%.c
 	${SILENTECHO} "    CC  $< (test)"
 	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $*.d -MP $<
-endif
 
 # Special rule for miniaudio_impl.c - suppress deprecation warnings from third-party library
 src/miniaudio_impl.o: src/miniaudio_impl.c
@@ -225,7 +231,16 @@ clean:
 	${SILENTCMD}${RM} ${PIANOBAR_OBJ} ${LIBPIANO_OBJ} \
 			${LIBPIANO_RELOBJ} pianobar libpiano.so* \
 			libpiano.a $(PIANOBAR_SRC:.c=.d) $(LIBPIANO_SRC:.c=.d) \
-			$(LOCALE_CODEGEN_STAMP)
+			$(LOCALE_CODEGEN_STAMP) \
+			$(BASE_TEST_SRC:.c=.o) $(WS_TEST_SRC:.c=.o) \
+			$(BASE_TEST_SRC:.c=.d) $(WS_TEST_SRC:.c=.d) \
+			${TEST_BIN}
+
+distclean: clean
+	${SILENTECHO} " DISTCLEAN"
+	${SILENTCMD}find . -name '*.gcda' -delete
+	${SILENTCMD}find . -name '*.gcno' -delete
+	${SILENTCMD}find . -name '*.gcov' -delete
 
 all: pianobar
 	@echo "Build complete. Running tests..."
@@ -263,31 +278,54 @@ uninstall:
 	${DESTDIR}/${LIBDIR}/libpiano.a \
 	${DESTDIR}/${INCDIR}/piano.h
 
-# Test suite (available by default, disabled when NOWEBSOCKET=1)
-ifneq ($(NOWEBSOCKET),1)
+# Test suite: split into base (no WebSocket deps) and WS-only parts
 TEST_DIR:=test
-TEST_SRC:=\
+TEST_BIN:=pianobar_test
+
+# Tests that build and run in both full and NOWEBSOCKET=1 configurations
+BASE_TEST_SRC:=\
 		${TEST_DIR}/test_main.c \
+		${TEST_DIR}/unit/test_l10n.c \
+		${TEST_DIR}/unit/test_settings.c \
+		${TEST_DIR}/unit/test_player.c \
+		${TEST_DIR}/unit/test_bar_state.c \
+		${TEST_DIR}/unit/test_log.c \
+		${TEST_DIR}/unit/test_playback_manager.c \
+		${TEST_DIR}/unit/test_playback_lifecycle.c \
+		${TEST_DIR}/unit/test_libpiano_response.c
+
+# Tests that require WebSocket objects
+WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_websocket.c \
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
 		${TEST_DIR}/unit/test_error_messages.c \
 		${TEST_DIR}/unit/test_ui_act_reconnect.c \
-		${TEST_DIR}/unit/test_ui_act_station.c \
-		${TEST_DIR}/unit/test_l10n.c \
-		${TEST_DIR}/unit/test_settings.c \
-		${TEST_DIR}/unit/test_player.c \
-		${TEST_DIR}/unit/test_bar_state.c \
-		${TEST_DIR}/unit/test_playback_manager.c \
-		${TEST_DIR}/unit/test_log.c
-TEST_OBJ:=${TEST_SRC:.c=.o}
-TEST_BIN:=pianobar_test
+		${TEST_DIR}/unit/test_ui_act_station.c
 
-# Build test suite (only link the modules being tested)
-${TEST_BIN}: locale-codegen ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
+ifeq ($(NOWEBSOCKET),1)
+TEST_SRC:=${BASE_TEST_SRC}
+else
+TEST_SRC:=${BASE_TEST_SRC} ${WS_TEST_SRC}
+endif
+
+TEST_OBJ:=${TEST_SRC:.c=.o}
+
+# Objects common to both test variants (no WebSocket objects)
+BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}
+
+ifeq ($(NOWEBSOCKET),1)
+# NOWEBSOCKET=1: link only base objects (no websocket/socketio/daemon/queue/http)
+${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ}
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+else
+# Full WebSocket build: link all objects including WebSocket modules
+${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
+	${SILENTECHO} "  LINK  $@"
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+endif
 
 # Run tests
 test: ${TEST_BIN}
@@ -354,35 +392,5 @@ clean-test-asan:
 test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
-else
-test:
-	@echo "Tests are disabled when NOWEBSOCKET=1"
-	@echo "Run: make test (without NOWEBSOCKET=1)"
-	@exit 1
-
-test-all:
-	@echo "Tests are disabled when NOWEBSOCKET=1"
-	@echo "Run: make test-all (without NOWEBSOCKET=1)"
-	@exit 1
-
-lint:
-	${SILENTECHO} "   LINT  Running static analysis..."
-	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
-		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkersReport \
-		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
-		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_LINT_C} ${LIBPIANO_DIR}/*.c
-
-lint-test:
-	@echo "Tests are disabled when NOWEBSOCKET=1"
-	@exit 1
-
-test-clean:
-	@true
-
-test-asan clean-test-asan test-valgrind:
-	@echo "Tests are disabled when NOWEBSOCKET=1"
-	@echo "Run: make test-asan or make test-valgrind (without NOWEBSOCKET=1)"
-	@exit 1
-endif
 
 .PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen

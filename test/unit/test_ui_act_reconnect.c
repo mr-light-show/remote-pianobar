@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "../../src/bar_constants.h"
 #include "../../src/l10n.h"
@@ -214,6 +215,32 @@ START_TEST (test_ui_act_quit)
 }
 END_TEST
 
+START_TEST (test_disconnect_player_wait_returns_fast_when_already_dead)
+{
+	/* Verify that BarPlayerWaitForMode (the condvar-based replacement for the
+	 * old busy-wait loop) returns immediately when the player is already in
+	 * the requested mode.  This ensures the stop path does not busy-spin for
+	 * up to 10 s (100 * usleep(100ms)). */
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+
+	struct timespec t0, t1;
+	clock_gettime (CLOCK_MONOTONIC, &t0);
+	bool ok = BarPlayerWaitForMode (&app.player, PLAYER_DEAD,
+	                                 BAR_PLAYER_STOP_TIMEOUT_MS);
+	clock_gettime (CLOCK_MONOTONIC, &t1);
+	long ms = (t1.tv_sec - t0.tv_sec) * 1000L
+	          + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+	ck_assert (ok);
+	/* Old busy-wait: up to 10 s; condvar returns immediately */
+	ck_assert_int_lt (ms, 100);
+
+	player_primitives_destroy (&app);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -226,6 +253,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_debug_prints_fields);
 	tcase_add_test (tc, test_ui_act_skip_song_sets_do_quit);
 	tcase_add_test (tc, test_ui_act_quit);
+	tcase_add_test (tc, test_disconnect_player_wait_returns_fast_when_already_dead);
 	suite_add_tcase (s, tc);
 	return s;
 }

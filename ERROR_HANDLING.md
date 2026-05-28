@@ -53,3 +53,16 @@ If a function opens files, allocates memory, or acquires locks, prefer this shap
 5. Return the final status code.
 
 This keeps teardown predictable and makes error paths easier to audit.
+
+## Return-type conventions by module
+
+| Module | Convention | Notes |
+|--------|-----------|-------|
+| `src/player.c` — `openStream`, `openFilter` | `bool` (`true` = success) via `goto cleanup` | Resources freed in explicit `cleanup:` label; no hidden-return macros |
+| `src/ui_act.c` — `BarTransformIfShared`, `BarWsTransformIfShared` | `bool` (`false` = error) | Changed from `int` 0/1 in refactor; all callers use `!` operator |
+| `src/ui.c` — `BarUiPianoCall`, `BarUiPianoCallLogged` | `bool` | Wraps Piano API; returns `false` on any network or API error |
+| `src/settings.c` — `BarSettingsRead` | `void` | Errors logged to `log_write(LOG_ERROR, ...)`; settings retain defaults |
+| `src/libpiano/` | `PianoReturn_t` enum | `PIANO_RET_OK` = success; all other values are errors |
+| `src/websocket/` | `bool` or `int` per function | WebSocket layer bridges to the above conventions; see `websocket_bridge.h` |
+
+Avoid `int` 0/1 for boolean predicates in new code; use `bool` from `<stdbool.h>` and return `true`/`false`.

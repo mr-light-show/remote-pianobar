@@ -211,6 +211,42 @@ START_TEST(test_player_lock_and_decoder_lock_never_held_together) {
 }
 END_TEST
 
+START_TEST (test_player_wait_for_mode_returns_true_when_already_in_mode)
+{
+	player_t player;
+	BarSettings_t settings;
+	memset (&player, 0, sizeof (player));
+	BarSettingsInit (&settings);
+	BarPlayerInit (&player, &settings);
+	/* Default mode after init is PLAYER_DEAD — wait for PLAYER_DEAD */
+	ck_assert (BarPlayerWaitForMode (&player, PLAYER_DEAD, 10));
+	BarPlayerDestroy (&player);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_player_wait_for_mode_times_out_when_mode_differs)
+{
+	player_t player;
+	BarSettings_t settings;
+	memset (&player, 0, sizeof (player));
+	BarSettingsInit (&settings);
+	BarPlayerInit (&player, &settings);
+	player.mode = PLAYER_PLAYING;
+	/* 1 ms timeout — must return false quickly */
+	ck_assert (!BarPlayerWaitForMode (&player, PLAYER_DEAD, 1));
+	player.mode = PLAYER_DEAD;
+	BarPlayerDestroy (&player);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_player_wait_for_mode_null_returns_false)
+{
+	ck_assert (!BarPlayerWaitForMode (NULL, PLAYER_DEAD, 100));
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -228,6 +264,12 @@ Suite *player_suite(void) {
 	tcase_add_test(tc_decoder, test_decoder_lock_mutual_exclusion);
 	tcase_add_test(tc_decoder, test_player_lock_and_decoder_lock_never_held_together);
 	suite_add_tcase(s, tc_decoder);
+
+	TCase *tc_wait = tcase_create ("BarPlayerWaitForMode");
+	tcase_add_test (tc_wait, test_player_wait_for_mode_returns_true_when_already_in_mode);
+	tcase_add_test (tc_wait, test_player_wait_for_mode_times_out_when_mode_differs);
+	tcase_add_test (tc_wait, test_player_wait_for_mode_null_returns_false);
+	suite_add_tcase (s, tc_wait);
 	
 	return s;
 }

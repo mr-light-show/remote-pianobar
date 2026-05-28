@@ -52,26 +52,31 @@ static bool state_needs_lock (const BarApp_t *app) {
 }
 
 static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operation) {
+#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_rdlock((pthread_rwlock_t *)&app->stateRwlock);
 		log_write(DEBUG_UI, "State: Lock acquired (%s) (read)\n", operation);
-	} else {
-		(void) operation;
+		return;
 	}
+#endif
+	(void) app; (void) operation;
 }
 
 static void state_rwlock_wrlock_internal(const BarApp_t *app, const char *operation) {
+#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_wrlock((pthread_rwlock_t *)&app->stateRwlock);
 		log_write(DEBUG_UI, "State: Lock acquired (%s) (write)\n", operation);
-	} else {
-		(void) operation;
+		return;
 	}
+#endif
+	(void) app; (void) operation;
 }
 
 __attribute__((format(printf, 3, 4)))
 static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operation,
                                          const char *format, ...) {
+#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		if (format) {
 			va_list args;
@@ -83,10 +88,10 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 		}
 		log_write(DEBUG_UI, "State: Lock released\n");
 		pthread_rwlock_unlock((pthread_rwlock_t *)&app->stateRwlock);
-	} else {
-		(void) operation;
-		(void) format;
+		return;
 	}
+#endif
+	(void) app; (void) operation; (void) format;
 }
 
 /*	Macro for executing code with state write lock (void operations with optional debug)
@@ -119,20 +124,28 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
  */
 void BarStateInit(BarApp_t *app) {
 	assert(app != NULL);
+#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_init(&app->stateRwlock, NULL);
 		log_write(DEBUG_UI, "State: Rwlock initialized\n");
 	}
+#else
+	(void) app;
+#endif
 }
 
 /*	Destroy state rwlock (any mode with concurrent WebSocket threads)
  */
 void BarStateDestroy(BarApp_t *app) {
 	assert(app != NULL);
+#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_destroy(&app->stateRwlock);
 		log_write(DEBUG_UI, "State: Rwlock destroyed\n");
 	}
+#else
+	(void) app;
+#endif
 }
 
 /*	Get next station (thread-safe)
@@ -307,5 +320,103 @@ bool BarStateIsPandoraConnected(const BarApp_t *app) {
 	
 	/* User is connected if we have a listenerId from login */
 	return app->ph.user.listenerId != NULL;
+}
+
+/*	Snapshot all station fields under read lock.
+ *	Returns false only on allocation failure; an empty list is a valid success.
+ */
+bool BarStateSnapshotStations (const BarApp_t *app,
+                                BarStationSnapshotList_t *out) {
+	if (app == NULL || out == NULL) { return false; }
+	out->items = NULL;
+	out->count = 0;
+
+	state_rwlock_rdlock_internal (app, "SnapshotStations");
+
+	/* Count entries in the intrusive list */
+	size_t count = 0;
+	const PianoStation_t *s = app->ph.stations;
+	PianoListForeachP (s) { count++; }
+
+	if (count > 0) {
+		out->items = calloc (count, sizeof (*out->items));
+		if (out->items == NULL) {
+			state_rwlock_unlock_internal (app, "SnapshotStations", NULL);
+			return false;
+		}
+	}
+	out->count = count;
+
+	size_t i = 0;
+	s = app->ph.stations;
+	PianoListForeachP (s) {
+		out->items[i].id          = s->id          ? strdup (s->id)          : NULL;
+		out->items[i].name        = s->name        ? strdup (s->name)        : NULL;
+		out->items[i].displayName = s->displayName ? strdup (s->displayName) : NULL;
+		out->items[i].isQuickMix  = s->isQuickMix  != 0;
+		out->items[i].isQuickMixed = s->useQuickMix != 0;
+		i++;
+	}
+
+	state_rwlock_unlock_internal (app, "SnapshotStations", NULL);
+	return true;
+}
+
+void BarStateFreeStationSnapshot (BarStationSnapshotList_t *snap) {
+	if (snap == NULL) { return; }
+	for (size_t i = 0; i < snap->count; i++) {
+		free (snap->items[i].id);
+		free (snap->items[i].name);
+		free (snap->items[i].displayName);
+	}
+	free (snap->items);
+	snap->items = NULL;
+	snap->count = 0;
+}
+
+/*	Snapshot current playback state (station + song) under read lock.
+ *	Always succeeds; hasSong/hasStation indicate which fields are valid.
+ */
+void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out) {
+	assert (app != NULL && out != NULL);
+	memset (out, 0, sizeof (*out));
+
+	state_rwlock_rdlock_internal (app, "SnapshotPlayback");
+
+	const PianoStation_t *station = app->curStation;
+	if (station != NULL) {
+		out->hasStation  = true;
+		out->stationId   = station->id   ? strdup (station->id)   : NULL;
+		const char *name = station->displayName ? station->displayName : station->name;
+		out->stationName = name          ? strdup (name)           : NULL;
+	}
+
+	const PianoSong_t *song = app->playlist;
+	if (song != NULL) {
+		out->hasSong    = true;
+		out->songTitle  = song->title    ? strdup (song->title)    : NULL;
+		out->songArtist = song->artist   ? strdup (song->artist)   : NULL;
+		out->songAlbum  = song->album    ? strdup (song->album)    : NULL;
+		out->songCoverArt = song->coverArt ? strdup (song->coverArt) : NULL;
+		out->trackToken     = song->trackToken ? strdup (song->trackToken) : NULL;
+		out->songStationId  = song->stationId  ? strdup (song->stationId)  : NULL;
+		out->duration   = song->length;
+		out->rating     = song->rating;
+	}
+
+	state_rwlock_unlock_internal (app, "SnapshotPlayback", NULL);
+}
+
+void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap) {
+	if (snap == NULL) { return; }
+	free (snap->stationId);
+	free (snap->stationName);
+	free (snap->songTitle);
+	free (snap->songArtist);
+	free (snap->songAlbum);
+	free (snap->songCoverArt);
+	free (snap->trackToken);
+	free (snap->songStationId);
+	memset (snap, 0, sizeof (*snap));
 }
 

@@ -20,34 +20,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#ifndef _WEBSOCKET_QUEUE_H
-#define _WEBSOCKET_QUEUE_H
-
+#include "interrupt.h"
 #include <stddef.h>
 
-/* Message types for bucket communication */
-typedef enum {
-	/* Broadcast messages (Main → WebSocket thread) */
-	MSG_TYPE_BROADCAST_SOCKETIO,   /* data is a heap-owned Socket.IO text frame */
+static sig_atomic_t *g_interrupted = NULL;
 
-	/* Command messages (WebSocket → Main thread) */
-	MSG_TYPE_COMMAND_ACTION,       /* User action */
-	MSG_TYPE_COMMAND_CHANGE_STATION, /* Change station */
-	MSG_TYPE_COMMAND_QUERY,        /* Query state */
-	
-	/* Control messages */
-	MSG_TYPE_SHUTDOWN              /* Shutdown signal */
-} BarWsMsgType_t;
+void BarInterruptSetTarget (sig_atomic_t *target) {
+	g_interrupted = target;
+}
 
-/* Message structure for buckets */
-typedef struct BarWsMessage {
-	BarWsMsgType_t type;           /* Message type */
-	void *data;                    /* Message payload (owned by message) */
-	size_t dataLen;                /* Payload length */
-	struct BarWsMessage *next;     /* Next message in linked list */
-} BarWsMessage_t;
+sig_atomic_t *BarInterruptGetTarget (void) {
+	return g_interrupted;
+}
 
-/* Free message (frees data and message itself) */
-void BarWsMessageFree(BarWsMessage_t *msg);
-
-#endif /* _WEBSOCKET_QUEUE_H */
+void BarInterruptIncrement (void) {
+	if (g_interrupted != NULL) {
+		*g_interrupted += 1;
+	}
+}

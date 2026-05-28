@@ -107,20 +107,10 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
 /* Map message type to bucket */
 static BarWsBucketType_t BarWsGetBucket(BarWsMsgType_t type) {
-	switch (type) {
-		case MSG_TYPE_BROADCAST_START:
-		case MSG_TYPE_BROADCAST_STOP:
-			return BUCKET_STATE;
-		case MSG_TYPE_BROADCAST_PROGRESS:
-			return BUCKET_PROGRESS;
-		case MSG_TYPE_BROADCAST_VOLUME:
-			return BUCKET_VOLUME;
-		case MSG_TYPE_BROADCAST_STATIONS:
-			return BUCKET_STATIONS;
-		default:
-			log_write(DEBUG_WEBSOCKET, "Unknown message type: %d\n", type);
-			return BUCKET_STATE; // Fallback
-	}
+	(void)type;
+	/* Only MSG_TYPE_BROADCAST_SOCKETIO uses buckets; bucket is specified
+	 * explicitly by BarWebsocketBroadcastSocketIoMessage. */
+	return BUCKET_STATE; /* Fallback — should not be reached */
 }
 
 /* Initialize buckets */
@@ -385,67 +375,12 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 	 * broadcast messages to be self-contained or use a different approach */
 	
 	switch (msg->type) {
-		case MSG_TYPE_BROADCAST_START:
-			/* Song started - state tracked via player->mode */
-			/* TODO: Extract song data from msg->data and emit */
-			break;
-
-		case MSG_TYPE_BROADCAST_STOP:
-			/* Song stopped - state tracked via player->mode */
-			/* stop is emitted synchronously from BarWebsocketBroadcastSongStop via BarSocketIoEmitStop */
-			break;
-
-		case MSG_TYPE_BROADCAST_PROGRESS: {
-		/* Progress update - data contains elapsed time (unsigned int) */
-		if (msg->data && msg->dataLen >= sizeof(unsigned int) * 2) {
-		/* ARM64 FIX: Use memcpy to avoid unaligned access */
-		unsigned int times[2];
-		memcpy(times, msg->data, sizeof(times));
-		unsigned int elapsed = times[0];
-		unsigned int duration = times[1];
-		
-		log_write(DEBUG_WEBSOCKET_PROGRESS, "Progress broadcast - elapsed=%u, duration=%u\n", 
-		           elapsed, duration);
-			
-			/* We can't access BarApp_t here, but we can call SocketIO directly
-			 * since it uses the global broadcast callback */
-			json_object *data = json_object_new_object();
-			json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
-			json_object_object_add(data, "duration", json_object_new_int(duration));
-			
-			float percentage = 0.0;
-			if (duration > 0) {
-				percentage = (elapsed * 100.0) / duration;
+		case MSG_TYPE_BROADCAST_SOCKETIO:
+			if (msg->data != NULL && msg->dataLen > 0) {
+				BarWebsocketBroadcast ((const char *) msg->data, msg->dataLen);
 			}
-			json_object_object_add(data, "percentage", json_object_new_double(percentage));
-			
-			BarSocketIoEmit("progress", data);
-			json_object_put(data);
-		}
-		break;
-	}
-			
-	case MSG_TYPE_BROADCAST_VOLUME: {
-		/* Volume changed - data contains volume (int) */
-		if (msg->data && msg->dataLen >= sizeof(int)) {
-			/* ARM64 FIX: Use memcpy to avoid unaligned access */
-			int volume;
-			memcpy(&volume, msg->data, sizeof(volume));
-			log_write(DEBUG_WEBSOCKET, "Volume broadcast - volume=%d\n", volume);
-			
-			/* Emit volume event via Socket.IO */
-			json_object *data = json_object_new_int(volume);
-			BarSocketIoEmit("volume", data);
-			json_object_put(data);
-		}
-		break;
-	}
-			
-		case MSG_TYPE_BROADCAST_STATIONS:
-			/* Station list changed */
-			/* TODO: Emit stations event */
 			break;
-			
+
 		default:
 			break;
 	}
@@ -779,86 +714,48 @@ unsigned int BarWebsocketGetElapsed(BarApp_t *app) {
 	return elapsed;
 }
 
-/* Broadcast song start event */
-void BarWebsocketBroadcastSongStart(BarApp_t *app) {
-	if (!app || !app->wsContext) {
+/* Enqueue a pre-formatted Socket.IO message; takes ownership of message */
+void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
+                                            BarWsBucketType_t bucket,
+                                            char *message) {
+	if (!app || !app->wsContext || !message) {
+		free (message);
 		return;
 	}
-	
-	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	/* Reset progress tracking (single-threaded access, no lock needed) */
-	ctx->progress.lastBroadcast = 0;
-	
-	/* Queue start event to bucket for WebSocket thread */
-	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_START, NULL, 0);
-	
-	/* TEMPORARY: Also call Socket.IO directly until thread processing is complete */
-	BarSocketIoEmitStart(app);
-}
 
-/* Broadcast song stop event */
-void BarWebsocketBroadcastSongStop(BarApp_t *app) {
-	if (!app || !app->wsContext) {
-		return;
-	}
-	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	/* Queue stop event to bucket for WebSocket thread */
-	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_STOP, NULL, 0);
-	
-	/* TEMPORARY: Also call Socket.IO directly until thread processing is complete */
-	BarSocketIoEmitStop(app);
-}
 
-/* Broadcast volume change */
-void BarWebsocketBroadcastVolume(BarApp_t *app, int volume) {
-	if (!app || !app->wsContext) {
-		return;
+	/* STATE bucket: clear stale PROGRESS to avoid wrong progress after song change */
+	if (bucket == BUCKET_STATE) {
+		ctx->progress.lastBroadcast = 0;
+		pthread_mutex_lock (&ctx->buckets[BUCKET_PROGRESS].mutex);
+		if (ctx->buckets[BUCKET_PROGRESS].message) {
+			BarWsMessageFree (ctx->buckets[BUCKET_PROGRESS].message);
+			ctx->buckets[BUCKET_PROGRESS].message = NULL;
+		}
+		pthread_mutex_unlock (&ctx->buckets[BUCKET_PROGRESS].mutex);
 	}
-	
-	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	/* Queue volume event to bucket for WebSocket thread */
-	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_VOLUME, &volume, sizeof(volume));
-	
-	/* TEMPORARY: Also call Socket.IO directly until thread processing is complete */
-	BarSocketIoEmitVolume(app, volume);
-}
 
-/* Broadcast progress update */
-void BarWebsocketBroadcastProgress(BarApp_t *app) {
-	if (!app || !app->wsContext) {
+	BarWsMessage_t *msg = calloc (1, sizeof (BarWsMessage_t));
+	if (!msg) {
+		free (message);
 		return;
 	}
-	
-	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	player_t *player = &app->player;
-	
-	/* Single lock - player->lock is the source of truth
-	 * This eliminates the deadlock caused by nested locking */
-	pthread_mutex_lock(&player->lock);
-	
-	/* Check playing state directly from player */
-	if (player->mode != PLAYER_PLAYING || player->doPause) {
-		pthread_mutex_unlock(&player->lock);
-		return;
+	msg->type = MSG_TYPE_BROADCAST_SOCKETIO;
+	msg->data = message; /* transfer ownership */
+	msg->dataLen = strlen (message);
+	msg->next = NULL;
+
+	pthread_mutex_lock (&ctx->buckets[bucket].mutex);
+	if (ctx->buckets[bucket].message) {
+		BarWsMessageFree (ctx->buckets[bucket].message); /* free older message */
 	}
-	
-	unsigned int elapsed = player->songPlayed;
-	unsigned int duration = player->songDuration;
-	pthread_mutex_unlock(&player->lock);
-	
-	/* Optimization: skip if unchanged (single-threaded access, no lock needed) */
-	if (elapsed == ctx->progress.lastBroadcast) {
-		return;
+	ctx->buckets[bucket].message = msg;
+	pthread_mutex_unlock (&ctx->buckets[bucket].mutex);
+
+	if (ctx->context) {
+		lws_cancel_service ((struct lws_context *)ctx->context);
 	}
-	ctx->progress.lastBroadcast = elapsed;
-	
-	/* Queue progress update to bucket for WebSocket thread */
-	unsigned int times[2] = {elapsed, duration};
-	BarWsBucketPut(ctx, MSG_TYPE_BROADCAST_PROGRESS, times, sizeof(times));
 }
 
 /* Broadcast message to all connected WebSocket clients */

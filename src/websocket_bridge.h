@@ -23,6 +23,8 @@ THE SOFTWARE.
 
 #pragma once
 
+#include <stdio.h>
+
 #include "main.h"
 
 /* WebSocket bridge functions
@@ -52,6 +54,30 @@ void BarWsDestroy(BarApp_t *app);
 bool BarWsDaemonize(BarApp_t *app);
 void BarWsRemovePidFile(BarApp_t *app);
 
-/* Command processing */
-void BarWsProcessCommands(BarApp_t *app);
+/* Playback manager lifecycle */
+bool BarWsStartPlaybackManager(BarApp_t *app);
+void BarWsStopPlaybackManager(BarApp_t *app);
+
+/* Daemon/singleton helpers */
+void BarWsRelaunchIfNeeded(BarApp_t *app, int argc, char **argv);
+bool BarWsAcquireSingletonLock(BarApp_t *app);
+void BarWsReleaseSingletonLock(BarApp_t *app);
+void BarWsPrintStartupInfo(BarApp_t *app);
+
+/* Input setup for web-only mode */
+void BarWsConfigureWebOnlyInput(BarApp_t *app);
+
+/* Event/error broadcasting */
+bool BarWsIsUnicastRequest(void);
+void BarWsEmitError(BarApp_t *app, const char *event, const char *msg);
+void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
+                       const char *extra);
+void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason);
+
+/* UI info printing */
+void BarWsPrintWebInfo(BarApp_t *app, FILE *stream);
+void BarWsPrintPidFileInfo(BarApp_t *app, bool is_daemon, FILE *stream);
+
+/* True when uiMode is WEB or BOTH (uses BarSettings_t; useful without full app) */
+bool BarWsSettingsIsWebActive(const BarSettings_t *s);
 

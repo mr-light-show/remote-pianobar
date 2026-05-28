@@ -20,13 +20,41 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#include <check.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <check.h>
 
 #include "../../src/log.h"
+
+/* --- debug mask API (always available) --- */
+
+START_TEST (test_log_debug_mask_set_get_roundtrip)
+{
+	log_set_debug_mask (0xFF);
+	ck_assert_uint_eq (log_get_debug_mask (), 0xFF);
+	log_set_debug_mask (0x00);
+	ck_assert_uint_eq (log_get_debug_mask (), 0x00);
+}
+END_TEST
+
+START_TEST (test_log_debug_mask_zero_default)
+{
+	log_set_debug_mask (0);
+	ck_assert_uint_eq (log_get_debug_mask (), 0);
+}
+END_TEST
+
+START_TEST (test_log_debug_mask_partial_bits)
+{
+	log_set_debug_mask (0x05);
+	ck_assert_uint_eq (log_get_debug_mask (), 0x05);
+	log_set_debug_mask (0);
+}
+END_TEST
+
+/* --- HAVE_DEBUGLOG path --- */
 
 #ifndef HAVE_DEBUGLOG
 
@@ -101,18 +129,26 @@ END_TEST
 
 #endif /* HAVE_DEBUGLOG */
 
-Suite *log_suite(void) {
-	Suite *s = suite_create("Log");
-	TCase *tc = tcase_create("DEBUG_STATE");
+Suite *log_suite (void) {
+	Suite *s = suite_create ("Log");
+
+	TCase *tc_mask = tcase_create ("debug_mask");
+	tcase_add_test (tc_mask, test_log_debug_mask_set_get_roundtrip);
+	tcase_add_test (tc_mask, test_log_debug_mask_zero_default);
+	tcase_add_test (tc_mask, test_log_debug_mask_partial_bits);
+	suite_add_tcase (s, tc_mask);
+
+	TCase *tc_debug = tcase_create ("DEBUG_STATE");
 #ifdef HAVE_DEBUGLOG
-	tcase_add_test(tc, test_log_init_debug_state_banner);
-	tcase_add_test(tc, test_log_init_debug_ui_without_state);
-	tcase_add_test(tc, test_log_write_debug_state);
-	tcase_add_test(tc, test_log_write_unknown_kind);
+	tcase_add_test (tc_debug, test_log_init_debug_state_banner);
+	tcase_add_test (tc_debug, test_log_init_debug_ui_without_state);
+	tcase_add_test (tc_debug, test_log_write_debug_state);
+	tcase_add_test (tc_debug, test_log_write_unknown_kind);
 #endif
 #ifndef HAVE_DEBUGLOG
-	tcase_add_test(tc, test_log_stub_no_debuglog);
+	tcase_add_test (tc_debug, test_log_stub_no_debuglog);
 #endif
-	suite_add_tcase(s, tc);
+	suite_add_tcase (s, tc_debug);
+
 	return s;
 }

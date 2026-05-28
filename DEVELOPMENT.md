@@ -162,8 +162,11 @@ make
 ### Remote Pianobar Build
 
 ```bash
-# Clean previous builds
+# Clean previous builds (removes compiled objects and binaries)
 make clean
+
+# Remove all build AND coverage artifacts (*.gcda, *.gcno, *.gcov) in one step
+make distclean
 
 # Build Remote Pianobar with debug symbols (WebSocket enabled by default)
 make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"

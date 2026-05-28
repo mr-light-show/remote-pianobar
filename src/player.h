@@ -129,3 +129,12 @@ void BarPlayerDestroy (player_t * const p);
 BarPlayerMode BarPlayerGetMode (player_t * const player);
 bool BarPlayerIsPaused (player_t * const player);
 
+/*
+ * Block until player->mode == mode or timeoutMs elapses.
+ * Returns true if the mode was reached; false on timeout or NULL player.
+ * Uses CLOCK_REALTIME for the timed wait.
+ */
+bool BarPlayerWaitForMode (player_t * const player,
+                            BarPlayerMode mode,
+                            unsigned int timeoutMs);
+

@@ -20,34 +20,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#ifndef _WEBSOCKET_QUEUE_H
-#define _WEBSOCKET_QUEUE_H
+#pragma once
+#include <stdbool.h>
+#include <pthread.h>
+#include "main.h"
 
-#include <stddef.h>
+/*
+ * Fetch the next playlist for the current station from Pandora.
+ * Returns true when a playable playlist is ready.
+ * Returns false when the station was cleared, an internal error occurred,
+ * or no tracks were returned.
+ */
+bool BarPlaybackFetchPlaylist (BarApp_t *app);
 
-/* Message types for bucket communication */
-typedef enum {
-	/* Broadcast messages (Main → WebSocket thread) */
-	MSG_TYPE_BROADCAST_SOCKETIO,   /* data is a heap-owned Socket.IO text frame */
-
-	/* Command messages (WebSocket → Main thread) */
-	MSG_TYPE_COMMAND_ACTION,       /* User action */
-	MSG_TYPE_COMMAND_CHANGE_STATION, /* Change station */
-	MSG_TYPE_COMMAND_QUERY,        /* Query state */
-	
-	/* Control messages */
-	MSG_TYPE_SHUTDOWN              /* Shutdown signal */
-} BarWsMsgType_t;
-
-/* Message structure for buckets */
-typedef struct BarWsMessage {
-	BarWsMsgType_t type;           /* Message type */
-	void *data;                    /* Message payload (owned by message) */
-	size_t dataLen;                /* Payload length */
-	struct BarWsMessage *next;     /* Next message in linked list */
-} BarWsMessage_t;
-
-/* Free message (frees data and message itself) */
-void BarWsMessageFree(BarWsMessage_t *msg);
-
-#endif /* _WEBSOCKET_QUEUE_H */
+/*
+ * Start a player thread for the first song in app->playlist.
+ * Returns true after the thread is created successfully.
+ * Returns false for: null app, null thread, missing playlist,
+ * missing station, invalid URL, or pthread_create failure.
+ */
+bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread);

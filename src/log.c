@@ -23,6 +23,7 @@ THE SOFTWARE.
 
 #include "log.h"
 #include "parse_utils.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -42,7 +43,15 @@ THE SOFTWARE.
 #define COLOR_RED     "\033[0;31m"  /* Error */
 #endif
 
-static unsigned int debug_mask = 0;
+static _Atomic unsigned int debug_mask = 0;
+
+void log_set_debug_mask (unsigned int mask) {
+	atomic_store_explicit (&debug_mask, mask, memory_order_relaxed);
+}
+
+unsigned int log_get_debug_mask (void) {
+	return atomic_load_explicit (&debug_mask, memory_order_relaxed);
+}
 
 void log_init(void)
 {

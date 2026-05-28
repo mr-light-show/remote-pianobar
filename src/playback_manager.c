@@ -24,6 +24,10 @@ THE SOFTWARE.
 /* Playback state machine - runs in dedicated thread for WebSocket modes */
 
 #include "playback_manager.h"
+#include "playback_lifecycle.h"
+#include "interrupt.h"
+#include "bar_constants.h"
+#include <stdatomic.h>
 #include <signal.h>
 #include <unistd.h>
 #include "bar_state.h"
@@ -42,19 +46,13 @@ THE SOFTWARE.
 #define PLAYER_FORCE_JOIN_TIMEOUT_SECS 5
 #define PROGRESS_BROADCAST_INTERVAL_SECS 1
 
-/* Forward declarations of functions from main.c */
-extern void BarMainGetPlaylist(BarApp_t *app);
-extern void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread);
-extern sig_atomic_t *interrupted;
-
 /* Forward declaration from ui_act.c (avoid circular include with ui_act.h) */
 extern void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 
 static pthread_t g_playbackThread;
-static volatile bool g_running = false;
-
-static bool g_idleLogged = false;
+static _Atomic bool g_running = false;
+static _Atomic bool g_idleLogged = false;
 
 /*	Join thread with timeout - prevents deadlock if player hangs on network
  *	Returns true if thread joined successfully, false if timeout expired
@@ -93,7 +91,7 @@ static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeou
 			log_write(DEBUG_UI, "PlaybackMgr: pthread_kill error %d\n", ret);
 			return false;
 		}
-		usleep(100000);  /* 100ms */
+		usleep ((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
 	}
 	return false;  /* Timeout */
 #endif
@@ -155,8 +153,8 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 		BarStateSetNextStation(app, NULL);
 	}
 
-	/* In WebSocket mode, interrupted may be temporarily changed by readline */
-	interrupted = &app->doQuit;
+	/* Restore interrupt target to app->doQuit after song finishes */
+	BarInterruptSetTarget (&app->doQuit);
 
 	pthread_mutex_lock(&app->player.lock);
 	app->player.mode = PLAYER_DEAD;
@@ -275,20 +273,19 @@ static void *BarPlaybackManagerThread(void *data) {
 					BarUiPrintStation(&app->settings, nextStation);
 				}
 				
-				/* Fetch playlist from Pandora */
-				BarMainGetPlaylist(app);
-				
-				playlist = BarStateGetPlaylist(app);
-			}
-			
-			/* Start next song */
-			if (playlist != NULL) {
-				g_idleLogged = false;  /* log "Player idle" once when we next become idle */
-				log_write(DEBUG_UI, "PlaybackMgr: Starting next song\n");
-				BarMainStartPlayback(app, &playerThread);
-				/* Note: BarMainStartPlayback already calls BarWsBroadcastSongStart */
-				playerStarted = true;
-			}
+			/* Fetch playlist from Pandora */
+			BarPlaybackFetchPlaylist (app);
+
+			playlist = BarStateGetPlaylist(app);
+		}
+		
+		/* Start next song */
+		if (playlist != NULL) {
+			g_idleLogged = false;  /* log "Player idle" once when we next become idle */
+			log_write(DEBUG_UI, "PlaybackMgr: Starting next song\n");
+			BarPlaybackStartSong (app, &playerThread);
+			playerStarted = true;
+		}
 		}
 	}
 	

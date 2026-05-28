@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include <assert.h>
 
 #include "ui_readline.h"
+#include "interrupt.h"
 #include "parse_utils.h"
 #include "main.h"
 #include <limits.h>
@@ -68,9 +69,9 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 
 	/* not actually used here. just stops the player from receiving the
 	 * signal */
-	sig_atomic_t *prevInt = interrupted, localInt = 0;
+	sig_atomic_t *prevInt = BarInterruptGetTarget (), localInt = 0;
 	if (!(flags & BAR_RL_NOINT)) {
-		interrupted = &localInt;
+		BarInterruptSetTarget (&localInt);
 	}
 
 	memset (buf, 0, bufSize);
@@ -198,7 +199,7 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 		fputs ("\n", stdout);
 	}
 
-	interrupted = prevInt;
+	BarInterruptSetTarget (prevInt);
 
 	buf[bufLen] = '\0';
 	return bufLen;

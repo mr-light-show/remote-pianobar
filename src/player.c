@@ -37,6 +37,7 @@ THE SOFTWARE.
 #include "bar_constants.h"
 #include "miniaudio.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <unistd.h>
@@ -67,6 +68,9 @@ THE SOFTWARE.
 #include <malloc.h>
 #endif
 
+#include <time.h>
+#include <errno.h>
+
 #include "player.h"
 #include "log.h"
 #include "ui.h"
@@ -78,9 +82,10 @@ const enum AVSampleFormat avformat = AV_SAMPLE_FMT_S16;
 /*
  * Memory debugging counters for tracking frame allocations.
  * Enable with PIANOBAR_DEBUG=2 to see frame allocation stats.
+ * Atomic to allow safe read from log/debug paths on other threads.
  */
-static volatile long g_framesAllocated = 0;
-static volatile long g_framesFreed = 0;
+static atomic_long g_framesAllocated = 0;
+static atomic_long g_framesFreed = 0;
 
 /* Get current RSS (Resident Set Size) in KB for memory tracking */
 static long getCurrentRSSKB(void) {
@@ -648,9 +653,7 @@ void BarPlayerSetVolume(player_t * const player) {
  * ============================================================================
  */
 
-#define softfail(msg) \
-	printError(player->settings, msg, ret); \
-	return false;
+/* softfail macro retired: use explicit goto cleanup in openStream / openFilter */
 
 bool BarIsAvErrStaleCdnUrl(int av_err) {
 	if (av_err >= 0) {
@@ -699,7 +702,9 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 		*staleCdn403 = false;
 	}
 
+	bool ok = false;
 	int ret;
+	AVDictionary *options = NULL;
 
 	player->fctx = avformat_alloc_context();
 	player->fctx->interrupt_callback.callback = intCb;
@@ -709,25 +714,29 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 	char timeoutStr[16];
 	ret = snprintf(timeoutStr, sizeof(timeoutStr), "%lu", timeout);
 	assert(ret < (int)sizeof(timeoutStr));
-	AVDictionary *options = NULL;
 	av_dict_set(&options, "timeout", timeoutStr, 0);
 
 	assert(player->url != NULL);
 	if ((ret = avformat_open_input(&player->fctx, player->url, NULL, &options)) < 0) {
 		av_dict_free(&options);
+		options = NULL;
 		if (staleCdn403 != NULL) {
 			*staleCdn403 = BarIsAvErrStaleCdnUrl(ret);
 		}
+		printError(player->settings, "Unable to open audio file", ret);
+		/* avformat_open_input frees fctx on failure (or it wasn't opened); clear the pointer */
 		if (player->fctx != NULL) {
 			avformat_free_context(player->fctx);
 			player->fctx = NULL;
 		}
-		softfail("Unable to open audio file");
+		return false;
 	}
-	av_dict_free(&options);  /* Free any remaining options not consumed by FFmpeg */
+	av_dict_free(&options);
+	options = NULL;
 
 	if ((ret = avformat_find_stream_info(player->fctx, NULL)) < 0) {
-		softfail("find_stream_info");
+		printError(player->settings, "find_stream_info", ret);
+		goto cleanup;
 	}
 
 	for (size_t i = 0; i < player->fctx->nb_streams; i++) {
@@ -736,41 +745,63 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 
 	player->streamIdx = av_find_best_stream(player->fctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
 	if (player->streamIdx < 0) {
-		softfail("find_best_stream");
+		ret = player->streamIdx;
+		printError(player->settings, "find_best_stream", ret);
+		goto cleanup;
 	}
 
 	player->st = player->fctx->streams[player->streamIdx];
 	player->st->discard = AVDISCARD_DEFAULT;
 
 	if ((player->cctx = avcodec_alloc_context3(NULL)) == NULL) {
-		softfail("avcodec_alloc_context3");
+		ret = AVERROR(ENOMEM);
+		printError(player->settings, "avcodec_alloc_context3", ret);
+		goto cleanup;
 	}
-	const AVCodecParameters * const cp = player->st->codecpar;
-	if ((ret = avcodec_parameters_to_context(player->cctx, cp)) < 0) {
-		softfail("avcodec_parameters_to_context");
-	}
+	{
+		const AVCodecParameters * const cp = player->st->codecpar;
+		if ((ret = avcodec_parameters_to_context(player->cctx, cp)) < 0) {
+			printError(player->settings, "avcodec_parameters_to_context", ret);
+			goto cleanup;
+		}
 
-	const AVCodec * const decoder = avcodec_find_decoder(cp->codec_id);
-	if (decoder == NULL) {
-		softfail("find_decoder");
-	}
+		const AVCodec * const decoder = avcodec_find_decoder(cp->codec_id);
+		if (decoder == NULL) {
+			ret = AVERROR_DECODER_NOT_FOUND;
+			printError(player->settings, "find_decoder", ret);
+			goto cleanup;
+		}
 
-	if ((ret = avcodec_open2(player->cctx, decoder, NULL)) < 0) {
-		softfail("codec_open2");
+		if ((ret = avcodec_open2(player->cctx, decoder, NULL)) < 0) {
+			printError(player->settings, "codec_open2", ret);
+			goto cleanup;
+		}
 	}
 
 	if (player->lastTimestamp > 0) {
 		av_seek_frame(player->fctx, player->streamIdx, player->lastTimestamp, 0);
 	}
 
-	const unsigned int songDuration = av_q2d(player->st->time_base) *
-			(double)player->st->duration;
-	pthread_mutex_lock(&player->lock);
-	player->songPlayed = 0;
-	player->songDuration = songDuration;
-	pthread_mutex_unlock(&player->lock);
+	{
+		const unsigned int songDuration = av_q2d(player->st->time_base) *
+				(double)player->st->duration;
+		pthread_mutex_lock(&player->lock);
+		player->songPlayed = 0;
+		player->songDuration = songDuration;
+		pthread_mutex_unlock(&player->lock);
+	}
 
-	return true;
+	ok = true;
+cleanup:
+	if (!ok) {
+		if (player->cctx != NULL) {
+			avcodec_free_context(&player->cctx);
+		}
+		if (player->fctx != NULL) {
+			avformat_close_input(&player->fctx);
+		}
+	}
+	return ok;
 }
 
 static int getSampleRate(const player_t * const player) {
@@ -782,11 +813,15 @@ static int getSampleRate(const player_t * const player) {
 
 static bool openFilter(player_t * const player) {
 	char strbuf[BAR_BUF_SMALL];
+	bool ok = false;
 	int ret = 0;
 	AVCodecParameters * const cp = player->st->codecpar;
+	AVFilterContext *fafmt = NULL;
 
 	if ((player->fgraph = avfilter_graph_alloc()) == NULL) {
-		softfail("graph_alloc");
+		ret = AVERROR(ENOMEM);
+		printError(player->settings, "graph_alloc", ret);
+		return false;
 	}
 
 	AVRational time_base = player->st->time_base;
@@ -802,38 +837,49 @@ static bool openFilter(player_t * const player) {
 	if ((ret = avfilter_graph_create_filter(&player->fabuf,
 			avfilter_get_by_name("abuffer"), "source", strbuf, NULL,
 			player->fgraph)) < 0) {
-		softfail("create_filter abuffer");
+		printError(player->settings, "create_filter abuffer", ret);
+		goto cleanup;
 	}
 
 	/* Create aformat filter (sample format conversion) */
-	AVFilterContext *fafmt = NULL;
 	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d",
 			av_get_sample_fmt_name(avformat), getSampleRate(player));
 	if ((ret = avfilter_graph_create_filter(&fafmt,
 					avfilter_get_by_name("aformat"), "format", strbuf, NULL,
 					player->fgraph)) < 0) {
-		softfail("create_filter aformat");
+		printError(player->settings, "create_filter aformat", ret);
+		goto cleanup;
 	}
 
 	/* Create abuffersink (sink) filter */
 	if ((ret = avfilter_graph_create_filter(&player->fbufsink,
 			avfilter_get_by_name("abuffersink"), "sink", NULL, NULL,
 			player->fgraph)) < 0) {
-		softfail("create_filter abuffersink");
+		printError(player->settings, "create_filter abuffersink", ret);
+		goto cleanup;
 	}
 
 	/* Link filters: abuffer -> aformat -> abuffersink
 	 * (volume control is handled by miniaudio, not FFmpeg) */
 	if (avfilter_link(player->fabuf, 0, fafmt, 0) != 0 ||
 			avfilter_link(fafmt, 0, player->fbufsink, 0) != 0) {
-		softfail("filter_link");
+		ret = AVERROR_UNKNOWN;
+		printError(player->settings, "filter_link", ret);
+		goto cleanup;
 	}
 
 	if ((ret = avfilter_graph_config(player->fgraph, NULL)) < 0) {
-		softfail("graph_config");
+		printError(player->settings, "graph_config", ret);
+		goto cleanup;
 	}
 
-	return true;
+	ok = true;
+cleanup:
+	if (!ok && player->fgraph != NULL) {
+		avfilter_graph_free(&player->fgraph);
+		player->fgraph = NULL;
+	}
+	return ok;
 }
 
 /*
@@ -868,6 +914,33 @@ BarPlayerMode BarPlayerGetMode(player_t * const player) {
 	const BarPlayerMode ret = player->mode;
 	pthread_mutex_unlock(&player->lock);
 	return ret;
+}
+
+bool BarPlayerWaitForMode (player_t * const player,
+                            BarPlayerMode mode,
+                            unsigned int timeoutMs)
+{
+	if (player == NULL) { return false; }
+
+	struct timespec deadline;
+	clock_gettime (CLOCK_REALTIME, &deadline);
+	deadline.tv_sec  += (time_t)(timeoutMs / 1000);
+	deadline.tv_nsec += (long)((timeoutMs % 1000) * 1000000L);
+	if (deadline.tv_nsec >= 1000000000L) {
+		deadline.tv_sec  += 1;
+		deadline.tv_nsec -= 1000000000L;
+	}
+
+	pthread_mutex_lock (&player->lock);
+	while (player->mode != mode) {
+		int rc = pthread_cond_timedwait (&player->cond, &player->lock, &deadline);
+		if (rc == ETIMEDOUT) {
+			pthread_mutex_unlock (&player->lock);
+			return false;
+		}
+	}
+	pthread_mutex_unlock (&player->lock);
+	return true;
 }
 
 /*

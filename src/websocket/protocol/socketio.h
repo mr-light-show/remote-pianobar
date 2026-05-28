@@ -55,8 +55,19 @@ void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi);
 /* Handle incoming Socket.IO message */
 void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi);
 
+/* Returns a heap-allocated Socket.IO text frame for event + data.
+   Caller owns the result and must free() it.
+   Returns NULL on allocation failure.
+   Passing data=NULL produces a no-payload frame: 2["eventName"] */
+char *BarSocketIoFormatEventMessage (const char *event, struct json_object *data);
+
 /* Emit event to all connected clients */
 void BarSocketIoEmit(const char *event, struct json_object *data);
+
+/* Payload builders — each returns a new json_object reference; caller must json_object_put(). */
+struct json_object *BarSocketIoBuildStartPayload    (BarApp_t *app);
+struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app);
+struct json_object *BarSocketIoBuildProcessPayload  (BarApp_t *app);
 
 /* Emit 'start' event (song started) */
 void BarSocketIoEmitStart(BarApp_t *app);

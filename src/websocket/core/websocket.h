@@ -100,17 +100,15 @@ bool BarWebsocketInit(BarApp_t *app);
 /* Destroy WebSocket server */
 void BarWebsocketDestroy(BarApp_t *app);
 
-/* Broadcast song start event */
-void BarWebsocketBroadcastSongStart(BarApp_t *app);
-
-/* Broadcast song stop event */
-void BarWebsocketBroadcastSongStop(BarApp_t *app);
-
-/* Broadcast volume change */
-void BarWebsocketBroadcastVolume(BarApp_t *app, int volume);
-
-/* Broadcast progress update */
-void BarWebsocketBroadcastProgress(BarApp_t *app);
+/*
+ * Enqueue a pre-formatted Socket.IO event for all connected clients.
+ * Takes ownership of `message` — do not free() it after this call.
+ * Frees `message` immediately if app or wsContext is NULL.
+ * On bucket replacement, the older message is freed. Thread-safe.
+ */
+void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
+                                            BarWsBucketType_t bucket,
+                                            char *message);
 
 /* Get current elapsed time */
 unsigned int BarWebsocketGetElapsed(BarApp_t *app);

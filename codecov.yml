@@ -1,8 +1,18 @@
 # https://docs.codecov.com/docs/codecovyml-reference
+# Patch status: changed lines must meet target (see AGENTS.md).
 coverage:
   status:
     project: off
-    patch: off
+    patch:
+      default:
+        target: 95%
+        informational: false
+      c-tests:
+        target: 95%
+        informational: false
+      web-tests:
+        target: 95%
+        informational: false
 
 ignore:
   - "src/l10n_defaults_gen.c"

@@ -24,6 +24,7 @@ THE SOFTWARE.
 /* functions responding to user's keystrokes */
 
 #include "config.h"
+#include "bar_constants.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -91,7 +92,7 @@ typedef enum { TRANSFORM_FEEDBACK_UI, TRANSFORM_FEEDBACK_LOGGED } BarTransformFe
 /*	Transform station if shared; report progress via UI or log depending on feedback.
  *	@return 0 = error, 1 = success
  */
-static int BarTransformIfSharedWithFeedback (BarApp_t *app, PianoStation_t *station,
+static bool BarTransformIfSharedWithFeedback (BarApp_t *app, PianoStation_t *station,
 		BarTransformFeedback_t feedback) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
@@ -103,28 +104,28 @@ static int BarTransformIfSharedWithFeedback (BarApp_t *app, PianoStation_t *stat
 			BarUiMsg (&app->settings, MSG_INFO, "Transforming station... ");
 			if (!BarUiPianoCall (app, PIANO_REQUEST_TRANSFORM_STATION, station,
 					&pRet, &wRet))
-				return 0;
+				return false;
 		} else {
 			log_write(DEBUG_WEBSOCKET, "Transforming shared station...\n");
 			if (!BarUiPianoCallLogged (app, PIANO_REQUEST_TRANSFORM_STATION, station,
 					"Transforming station", &pRet, &wRet))
-				return 0;
+				return false;
 		}
 	}
-	return 1;
+	return true;
 }
 
 /*	Transform station if necessary to allow changes like rename, rate, ...
- *	@return 0 = error, 1 = everything went well
+ *	@return false on error, true on success
  */
-int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_UI);
 }
 
 /*	Logged version of BarTransformIfShared for WebSocket thread
- *	Prints action to stdout/log
+ *	@return false on error, true on success
  */
-int BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
+bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_LOGGED);
 }
 
@@ -346,13 +347,7 @@ BarUiActCallback(BarUiActExplain) {
 	reqData.song = selSong;
 	reqData.retExplain = NULL; /* Initialize to NULL to avoid freeing garbage */
 
-	/* Check if this is a WebSocket request (unicast target is set) or CLI request */
-	#ifdef WEBSOCKET_ENABLED
-	bool isWebSocketRequest = (BarSocketIoGetUnicastTarget() != NULL);
-	#else
-	bool isWebSocketRequest = false;
-	#endif
-
+	bool isWebSocketRequest = BarWsIsUnicastRequest();
 	bool callSuccess;
 
 	if (!isWebSocketRequest) {
@@ -362,11 +357,9 @@ BarUiActCallback(BarUiActExplain) {
 		/* WebSocket request - use logged API call */
 		callSuccess = BarUiPianoCallLogged(app, PIANO_REQUEST_EXPLAIN, &reqData,
 				"Receiving explanation", &pRet, &wRet);
-		#ifdef WEBSOCKET_ENABLED
 		if (!callSuccess) {
-			BarSocketIoEmitError(app, "song.explain", "Failed to receive explanation");
+			BarWsEmitError(app, "song.explain", "Failed to receive explanation");
 		}
-		#endif
 	}
 
 	if (callSuccess) {
@@ -375,12 +368,9 @@ BarUiActCallback(BarUiActExplain) {
 				BarUiMsg (&app->settings, MSG_ERR, "No explanation provided.\n");
 			}
 			
-			/* Notify WebSocket clients that no explanation was available */
-			#ifdef WEBSOCKET_ENABLED
 			if (isWebSocketRequest) {
-				BarSocketIoEmitError(app, "song.explain", "No explanation provided by Pandora");
+				BarWsEmitError(app, "song.explain", "No explanation provided by Pandora");
 			}
-			#endif
 		} else {
 		if (!isWebSocketRequest) {
 			BarUiMsg (&app->settings, MSG_INFO, "%s\n", reqData.retExplain);
@@ -661,13 +651,8 @@ BarUiActCallback(BarUiActTempBanSong) {
 BarUiActCallback(BarUiActPrintUpcoming) {
 	PianoSong_t * const nextSong = PianoListNextP (selSong);
 	
-	/* Check if this is a WebSocket request (unicast target is set) or CLI request */
-	#ifdef WEBSOCKET_ENABLED
-	bool isWebSocketRequest = (BarSocketIoGetUnicastTarget() != NULL);
-	#else
-	bool isWebSocketRequest = false;
-	#endif
-	
+	bool isWebSocketRequest = BarWsIsUnicastRequest();
+
 	if (nextSong != NULL) {
 		if (!isWebSocketRequest) {
 			BarUiListSongs (app, nextSong, NULL);
@@ -678,12 +663,9 @@ BarUiActCallback(BarUiActPrintUpcoming) {
 			BarUiMsg (&app->settings, MSG_INFO, "No songs in queue.\n");
 		}
 		
-		/* Notify WebSocket clients that no songs are queued */
-		#ifdef WEBSOCKET_ENABLED
 		if (isWebSocketRequest) {
-			BarSocketIoEmitError(app, "query.upcoming", "No songs in queue");
+			BarWsEmitError(app, "query.upcoming", "No songs in queue");
 		}
-		#endif
 	}
 }
 
@@ -792,11 +774,13 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 	 * referencing songs from the old playlist. */
 	if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
 		BarUiDoSkipSong(&app->player);
-		for (int i = 0; i < 100 && BarPlayerGetMode(&app->player) != PLAYER_DEAD; i++) {
-			usleep(100000);
+		if (!BarPlayerWaitForMode (&app->player, PLAYER_DEAD,
+		                            BAR_PLAYER_STOP_TIMEOUT_MS)) {
+			BarUiMsg (&app->settings, MSG_ERR, "%s",
+			          BarL10nGet (&app->l10n, "cli.player_stop_timeout"));
 		}
 	}
-	
+
 	/* Clear playlist and stations */
 	BarStateDrainPlaylist(app);
 	BarStateSetCurrentStation(app, NULL);
@@ -825,10 +809,7 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 	}
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	
-#ifdef WEBSOCKET_ENABLED
-	/* Notify connected clients; do not close WebSocket so UI can show "Not Connected to Pandora" */
-	BarSocketIoEmitPandoraDisconnected(reason);
-#endif
+	BarWsBroadcastPandoraDisconnected(app, reason);
 	
 	if (strcmp(reason, "idle_timeout") == 0) {
 		BarUiMsg(&app->settings, MSG_INFO, "Playback stopped due to inactivity.\n");
@@ -1271,9 +1252,7 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	if (user == NULL || pass == NULL) {
 		BarUiMsg(&app->settings, MSG_ERR, 
 			"Cannot reconnect: No credentials configured.\n");
-#ifdef WEBSOCKET_ENABLED
-		BarSocketIoEmitError(app, "app.pandora-reconnect", "No credentials configured");
-#endif
+		BarWsEmitError(app, "app.pandora-reconnect", "No credentials configured");
 		return;
 	}
 
@@ -1288,19 +1267,16 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
 
 	/* Signal player to stop, then wait for the playback manager thread to
-	 * fully clean up (join player thread, reset interrupted pointer, set
-	 * mode to PLAYER_DEAD).  Without this wait, the playback manager may
-	 * start a new song from the old playlist before we destroy the Piano
-	 * handle, causing a use-after-free and an assertion failure in
-	 * BarMainStartPlayback (interrupted != &app->doQuit). */
+	 * fully clean up (join player thread, restore interrupt target to
+	 * &app->doQuit, set mode to PLAYER_DEAD).  Without this wait, the
+	 * playback manager may start a new song from the old playlist before we
+	 * destroy the Piano handle, causing a use-after-free. */
 	if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
 		BarUiDoSkipSong(&app->player);
-		for (int i = 0; i < 100 && BarPlayerGetMode(&app->player) != PLAYER_DEAD; i++) {
-			usleep(100000);  /* 100ms, up to 10s total */
-		}
-		if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
-			BarUiMsg(&app->settings, MSG_ERR,
-				"Player did not stop within timeout, proceeding anyway.\n");
+		if (!BarPlayerWaitForMode (&app->player, PLAYER_DEAD,
+		                            BAR_PLAYER_STOP_TIMEOUT_MS)) {
+			BarUiMsg (&app->settings, MSG_ERR, "%s",
+			          BarL10nGet (&app->l10n, "cli.player_stop_timeout"));
 		}
 	}
 
@@ -1363,9 +1339,8 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 			BarUiMsg(&app->settings, MSG_INFO, "Resuming station: %s\n", station->name);
 			BarStateSetNextStation(app, station);
 		} else {
-#ifdef WEBSOCKET_ENABLED
-			BarSocketIoEmitErrorEx(app, "app.pandora-reconnect", "Last station was deleted", app->lastStationId);
-#endif
+			BarWsEmitErrorEx(app, "app.pandora-reconnect", "Last station was deleted",
+			                  app->lastStationId);
 		}
 		free(app->lastStationId);
 		app->lastStationId = NULL;

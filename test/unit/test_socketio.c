@@ -621,6 +621,57 @@ START_TEST (test_socketio_emit_error_wrapper) {
 }
 END_TEST
 
+/* Mapped-but-unimplemented actions must emit an error event, not silently no-op */
+START_TEST (test_socketio_unimplemented_actions_emit_error)
+{
+	static const char *unimplemented[] = {
+		"query.history", "song.bookmark", "app.settings", NULL
+	};
+
+	BarApp_t app;
+	BarWsContext_t ctx;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx,  0, sizeof (ctx));
+	BarSettingsInit (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	app.wsContext = &ctx;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+
+	for (size_t i = 0; unimplemented[i] != NULL; i++) {
+		clearBroadcastMock ();
+		BarSocketIoHandleAction (&app, unimplemented[i], NULL, NULL);
+		ck_assert_msg (lastBroadcastMessage != NULL,
+		               "Expected error broadcast for action '%s'", unimplemented[i]);
+		ck_assert_msg (strstr (lastBroadcastMessage, "\"error\"") != NULL,
+		               "Expected 'error' event for action '%s'", unimplemented[i]);
+		ck_assert_msg (strstr (lastBroadcastMessage, unimplemented[i]) != NULL,
+		               "Expected operation name in error payload for '%s'", unimplemented[i]);
+	}
+
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_format_event_message_returns_valid_packet)
+{
+	struct json_object *data = json_object_new_object ();
+	json_object_object_add (data, "elapsed", json_object_new_int (7));
+
+	char *message = BarSocketIoFormatEventMessage ("progress", data);
+
+	ck_assert_ptr_nonnull (message);
+	ck_assert (strncmp (message, "2[", 2) == 0);
+	ck_assert (strstr (message, "\"progress\"") != NULL);
+	ck_assert (strstr (message, "\"elapsed\"")  != NULL);
+
+	free (message);
+	json_object_put (data);
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -652,6 +703,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_translate, test_socketio_emit_error_ex_null_app);
 	tcase_add_test(tc_translate, test_socketio_emit_error_ex_empty_station_id);
 	tcase_add_test(tc_translate, test_socketio_emit_error_wrapper);
+	tcase_add_test(tc_translate, test_socketio_unimplemented_actions_emit_error);
 	suite_add_tcase(s, tc_translate);
 	
 	/* Event handler tests */
@@ -660,6 +712,11 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_ping_keepalive_noop);
 	tcase_add_test(tc_handle, test_socketio_rating_emits_state);
 	suite_add_tcase(s, tc_handle);
+
+	/* Formatter tests */
+	TCase *tc_format = tcase_create ("Format");
+	tcase_add_test (tc_format, test_socketio_format_event_message_returns_valid_packet);
+	suite_add_tcase (s, tc_format);
 	
 	return s;
 }

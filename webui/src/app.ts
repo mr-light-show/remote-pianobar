@@ -3,6 +3,7 @@ import { customElement, state } from 'lit/decorators.js';
 import { SocketService } from './services/socket-service';
 import { resolveStationIdFromStationsList } from './station-sync';
 import { t, tf } from './i18n';
+import type { StationPayload, ErrorPayload } from './protocol';
 
 import './components/album-art';
 import './components/progress-bar';
@@ -39,7 +40,7 @@ export class PianobarApp extends LitElement {
   @state() private totalTime = 0;
   @state() private volume = 50;
   @state() private rating = 0;
-  @state() private stations: any[] = [];
+  @state() private stations: StationPayload[] = [];
   @state() private currentStation = '';
   @state() private currentStationId = '';
   @state() private songStationName = '';
@@ -51,21 +52,21 @@ export class PianobarApp extends LitElement {
   @state() private playNewStationModalOpen = false;
   @state() private newStationName = '';
   @state() private selectStationModalOpen = false;
-  @state() private genreCategories: any[] = [];
+  @state() private genreCategories: unknown[] = [];
   @state() private genreLoading = false;
-  @state() private searchResults: any = { categories: [] };
+  @state() private searchResults: { categories: unknown[] } = { categories: [] };
   @state() private searchLoading = false;
   @state() private addMusicModalOpen = false;
   @state() private renameStationModalOpen = false;
   @state() private stationModeModalOpen = false;
-  @state() private stationModes: any[] = [];
+  @state() private stationModes: unknown[] = [];
   @state() private modesLoading = false;
   @state() private stationSeedsModalOpen = false;
-  @state() private stationInfo: any = null;
+  @state() private stationInfo: unknown = null;
   @state() private infoLoading = false;
   /** True until backend emits pandora.disconnected; set true again on process (reconnected). */
   @state() private pandoraConnected = true;
-  @state() private accounts: Array<{id: string; label: string}> = [];
+  @state() private accounts: Array<{id: string; label?: string}> = [];
   @state() private currentAccountId = '';
   @state() private switchAccountModalOpen = false;
   
@@ -254,23 +255,22 @@ export class PianobarApp extends LitElement {
   
   setupSocketListeners() {
     this.socket.on('start', (data) => {
-      this.albumArt = data.coverArt;
-      this.songTitle = data.title;
-      this.albumName = data.album || '';
-      this.artistName = data.artist;
-      this.totalTime = data.duration;
+      this.albumArt = data.coverArt ?? '';
+      this.songTitle = data.title ?? t('web.ui.not_playing');
+      this.albumName = data.album ?? '';
+      this.artistName = data.artist ?? t('web.ui.em_dash');
+      this.totalTime = data.duration ?? 0;
       this.playing = true;
-      this.paused = false;  // Reset paused state when new song starts
-      this.rating = data.rating || 0;
-      this.songStationName = data.songStationName || '';
-      this.currentTrackToken = data.trackToken || '';
-      
-      // Update current station (even if empty)
-      if ('station' in data) {
-        this.currentStation = data.station ?? '';
+      this.paused = false;
+      this.rating = data.rating ?? 0;
+      this.songStationName = data.songStationName ?? '';
+      this.currentTrackToken = data.trackToken ?? '';
+
+      if (data.station !== undefined) {
+        this.currentStation = data.station;
       }
-      if ('stationId' in data) {
-        this.currentStationId = String(data.stationId ?? '').trim();
+      if (data.stationId !== undefined) {
+        this.currentStationId = String(data.stationId).trim();
       }
       this.syncCurrentStationIdFromStationsList();
     });
@@ -342,7 +342,7 @@ export class PianobarApp extends LitElement {
     });
     
     this.socket.on('stationModes', (data) => {
-      this.stationModes = data.modes || [];
+      this.stationModes = data.modes ?? [];
       this.modesLoading = false;
     });
     
@@ -459,7 +459,7 @@ export class PianobarApp extends LitElement {
     });
     
     // Error event
-    this.socket.on('error', (data: { operation?: string; message?: string; stationId?: string }) => {
+    this.socket.on('error', (data: ErrorPayload) => {
       console.error('Received error:', data);
       const message = data.message || t('web.ui.error_generic');
       const operation = data.operation || '';

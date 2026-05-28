@@ -128,6 +128,44 @@ static inline bool BarStateUsesRwlock(const BarApp_t *app) {
 #define ASSERT_DECODER_LOCK_NOT_HELD(player) ((void)0)
 #endif
 
+/* Snapshot types — heap-allocated copies of state fields; safe to use without holding any lock */
+
+typedef struct {
+	char *id;
+	char *name;
+	char *displayName;
+	bool  isQuickMix;
+	bool  isQuickMixed; /* useQuickMix — included in QuickMix */
+} BarStationSnapshot_t;
+
+typedef struct {
+	BarStationSnapshot_t *items;
+	size_t                count;
+} BarStationSnapshotList_t;
+
+typedef struct {
+	char        *stationId;
+	char        *stationName;
+	char        *songTitle;
+	char        *songArtist;
+	char        *songAlbum;
+	char        *songCoverArt;
+	char        *trackToken;
+	char        *songStationId;   /* song->stationId for songStationName lookup */
+	unsigned int duration;
+	int          rating;
+	bool         hasSong;
+	bool         hasStation;
+} BarPlaybackSnapshot_t;
+
+/* Copy all station fields under read lock; caller frees with BarStateFreeStationSnapshot. */
+bool BarStateSnapshotStations (const BarApp_t *app, BarStationSnapshotList_t *out);
+void BarStateFreeStationSnapshot (BarStationSnapshotList_t *snap);
+
+/* Copy current playback fields (station + song) under lock; caller frees with BarStateFreePlaybackSnapshot. */
+void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out);
+void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap);
+
 /* Initialize/destroy state mutex */
 void BarStateInit(BarApp_t *app);
 void BarStateDestroy(BarApp_t *app);
