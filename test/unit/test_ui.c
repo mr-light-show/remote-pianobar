@@ -151,15 +151,24 @@ START_TEST (test_sorted_stations_orders_by_name_az)
 }
 END_TEST
 
-START_TEST (test_sorted_stations_empty_list_returns_null)
+START_TEST (test_sorted_stations_orders_by_name_za)
 {
-	size_t count = 99;
-	PianoStation_t **sorted = BarSortedStations (NULL, &count, BAR_SORT_NAME_AZ);
+	PianoStation_t beta, alpha;
+	size_t count = 0;
+	PianoStation_t **sorted;
 
-	ck_assert_uint_eq (count, 0);
-	if (sorted != NULL) {
-		free (sorted);
-	}
+	memset (&beta, 0, sizeof (beta));
+	memset (&alpha, 0, sizeof (alpha));
+	beta.name = "Beta Station";
+	alpha.name = "Alpha Station";
+	beta.head.next = (PianoListHead_t *) &alpha;
+
+	sorted = BarSortedStations (&beta, &count, BAR_SORT_NAME_ZA);
+	ck_assert_ptr_nonnull (sorted);
+	ck_assert_uint_eq (count, 2);
+	ck_assert_str_eq (sorted[0]->name, "Beta Station");
+	ck_assert_str_eq (sorted[1]->name, "Alpha Station");
+	free (sorted);
 }
 END_TEST
 
@@ -172,7 +181,7 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_print_startup_info_web_mode_includes_url);
 	tcase_add_test (tc, test_print_startup_info_daemon_includes_pid_and_pid_file);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
-	tcase_add_test (tc, test_sorted_stations_empty_list_returns_null);
+	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
 	suite_add_tcase (s, tc);
 	return s;
 }
