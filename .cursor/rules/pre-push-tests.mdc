@@ -36,6 +36,26 @@ You **MUST NOT** run `git push` until **both** are true:
 
 ---
 
+## CI parity (clean test build)
+
+CI runs **`PIANOBAR_INTEGRATION=1 make test-coverage`**, which **`make clean`s first**. Incremental **`make test-all` alone** can miss compile errors in new nested test paths (e.g. `test/integration/`).
+
+**When `Makefile`, `test/**`, or `.github/workflows/test.yml` changed in your branch**, also run **before push** (see skill `.cursor/skills/pre-push-ci-parity/SKILL.md`):
+
+```bash
+make distclean && PIANOBAR_INTEGRATION=1 make test-all
+```
+
+—or, if `lcov` is installed:
+
+```bash
+PIANOBAR_INTEGRATION=1 make test-coverage
+```
+
+Allow ≥ **180000 ms**. The pre-push hook runs this automatically when commits being pushed touch `Makefile` or `test/**`.
+
+---
+
 ## What `make test-all` does
 
 Unit tests plus cppcheck static analysis across configured variants.

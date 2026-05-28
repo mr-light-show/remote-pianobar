@@ -20,6 +20,7 @@ Player protocol strings and shared concepts start here (`locale/en.yaml`), then 
 3. Run the **verification commands** below for every surface you touched.
 4. **User-facing text:** edit `locale/en.yaml`, then `make locale-codegen`. Do not hand-edit generated locale artifacts.
 5. **Before `git push`:** run `make test-all` from the repo root (allow ≥120s). Do not push if it fails.
+   - If **`Makefile`**, **`test/**`**, or **`.github/workflows/test.yml`** changed: also run a **clean** build before push — `make distclean && PIANOBAR_INTEGRATION=1 make test-all` (or `PIANOBAR_INTEGRATION=1 make test-coverage` when `lcov` is available). See `.cursor/skills/pre-push-ci-parity/SKILL.md`.
 6. **Commits and pushes** only when the user explicitly asks.
 
 ---
@@ -49,6 +50,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Build player | `make` |
 | C unit tests | `make test` |
 | **Pre-push gate** (tests + cppcheck) | `make test-all` |
+| **Pre-push CI parity** (after `Makefile` / `test/**` changes) | `make distclean && PIANOBAR_INTEGRATION=1 make test-all` |
 | C coverage (CI-style) | `make test-coverage` (requires `lcov`) |
 | C static analysis | `make lint` / `make lint-test` |
 | AddressSanitizer tests | `make test-asan` |
@@ -56,7 +58,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Web UI coverage | `cd webui && npm test -- --run --coverage` |
 | Unified build + test | `./build.sh --test` |
 
-**Note:** Local pre-push hook runs `make test-all`. GitHub Actions C job runs `make test-coverage` and uploads to Codecov. Run both when you change testable C logic.
+**Note:** Local pre-push hook runs `make test-all`, or **`make distclean && PIANOBAR_INTEGRATION=1 make test-all`** when pushed commits touch `Makefile` or `test/**`. GitHub Actions C job runs `PIANOBAR_INTEGRATION=1 make test-coverage` (clean build). Run the CI-parity command when you change test infrastructure — see `.cursor/skills/pre-push-ci-parity/SKILL.md`.
 
 Tests are disabled when building with `NOWEBSOCKET=1`.
 
