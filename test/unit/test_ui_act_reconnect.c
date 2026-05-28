@@ -18,6 +18,7 @@
 #include "../../src/settings.h"
 #include "../../src/system_volume.h"
 #include "../../src/ui.h"
+#include "../../src/ui_readline.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "../../src/websocket_bridge.h"
@@ -61,6 +62,10 @@ void BarUiActQuit (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActSkipSong (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
+void BarUiActDeleteStation (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActBookmark (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
 void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
@@ -83,6 +88,24 @@ clear_mock (void)
 {
 	free (last_broadcast_msg);
 	last_broadcast_msg = NULL;
+}
+
+static void
+rl_input_from_fd (BarReadlineFds_t *input, int read_fd)
+{
+	memset (input, 0, sizeof (*input));
+	FD_ZERO (&input->set);
+	FD_SET (read_fd, &input->set);
+	input->fds[0] = read_fd;
+	input->fds[1] = -1;
+	input->maxfd = read_fd + 1;
+}
+
+static void
+rl_write_input (int write_fd, const char *data)
+{
+	ck_assert (write (write_fd, data, strlen (data)) >= 0);
+	close (write_fd);
 }
 
 static void
@@ -118,8 +141,22 @@ static void
 ws_context_destroy (BarWsContext_t *ctx)
 {
 	for (int i = 0; i < BUCKET_COUNT; i++) {
+		if (ctx->buckets[i].message != NULL) {
+			BarWsMessageFree (ctx->buckets[i].message);
+			ctx->buckets[i].message = NULL;
+		}
 		pthread_mutex_destroy (&ctx->buckets[i].mutex);
 	}
+}
+
+static void
+teardown_web_app_with_station (BarApp_t *app, BarWsContext_t *ctx)
+{
+	pthread_cond_destroy (&app->player.cond);
+	pthread_mutex_destroy (&app->player.lock);
+	BarStateDestroy (app);
+	ws_context_destroy (ctx);
+	BarSettingsDestroy (&app->settings);
 }
 
 static void
@@ -127,12 +164,15 @@ setup_web_app_with_station (BarApp_t *app, BarWsContext_t *ctx,
 		PianoStation_t *station, PianoSong_t *song)
 {
 	memset (app, 0, sizeof (*app));
+	memset (ctx, 0, sizeof (*ctx));
 	BarSettingsInit (&app->settings);
 	app->settings.uiMode = BAR_UI_MODE_WEB;
-	BarStateInit (app);
-	player_primitives_init (app);
-	ws_context_init (ctx);
 	app->wsContext = ctx;
+	ws_context_init (ctx);
+	BarStateInit (app);
+	ck_assert_int_eq (pthread_mutex_init (&app->player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app->player.cond, NULL), 0);
+	app->player.settings = &app->settings;
 	station->id = "S1";
 	station->name = "Station One";
 	station->isCreator = true;
@@ -797,10 +837,7 @@ START_TEST (test_ui_act_love_song_broadcasts_process)
 	BarUiPianoCallClearTestHook ();
 
 	ck_assert (strstr (ws_bucket_payload (&ctx, BUCKET_STATE), "process") != NULL);
-	ws_context_destroy (&ctx);
-	player_primitives_destroy (&app);
-	BarStateDestroy (&app);
-	BarSettingsDestroy (&app.settings);
+	teardown_web_app_with_station (&app, &ctx);
 }
 END_TEST
 
@@ -819,10 +856,7 @@ START_TEST (test_ui_act_ban_song_skips_current_playlist_track)
 	BarUiPianoCallClearTestHook ();
 
 	ck_assert (strstr (ws_bucket_payload (&ctx, BUCKET_STATE), "process") != NULL);
-	ws_context_destroy (&ctx);
-	player_primitives_destroy (&app);
-	BarStateDestroy (&app);
-	BarSettingsDestroy (&app.settings);
+	teardown_web_app_with_station (&app, &ctx);
 }
 END_TEST
 
@@ -1048,6 +1082,106 @@ START_TEST (test_ui_do_pandora_disconnect_piano_reinit_failure)
 }
 END_TEST
 
+static bool
+mock_delete_station_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                        PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type == PIANO_REQUEST_DELETE_STATION) {
+		ck_assert_ptr_nonnull (data);
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_ui_act_delete_station_confirmed)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t current, doomed;
+	PianoSong_t song;
+	int pipefd[2];
+
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&current, 0, sizeof (current));
+	memset (&doomed, 0, sizeof (doomed));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.wsContext = &ctx;
+	ws_context_init (&ctx);
+	BarStateInit (&app);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+	app.player.settings = &app.settings;
+	current.id = "S1";
+	current.name = "Keep";
+	current.isCreator = true;
+	doomed.id = "S2";
+	doomed.name = "Delete Me";
+	doomed.isCreator = true;
+	PianoListAppend (&current.head, &doomed.head);
+	app.ph.stations = &current;
+	BarStateSetCurrentStation (&app, &current);
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], "y\n");
+	rl_input_from_fd (&app.input, pipefd[0]);
+
+	BarUiPianoCallSetTestHook (mock_delete_station_ok);
+	BarUiActDeleteStation (&app, &doomed, &song, 1);
+	BarUiPianoCallClearTestHook ();
+
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), &current);
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATIONS].message);
+	close (pipefd[0]);
+	teardown_web_app_with_station (&app, &ctx);
+}
+END_TEST
+
+static bool
+mock_bookmark_song_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                       PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_BOOKMARK_SONG) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_ui_act_bookmark_song)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	int pipefd[2];
+
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], "s\n");
+	rl_input_from_fd (&app.input, pipefd[0]);
+
+	BarUiPianoCallSetTestHook (mock_bookmark_song_ok);
+	BarUiActBookmark (&app, &station, &song, 1);
+	BarUiPianoCallClearTestHook ();
+
+	close (pipefd[0]);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -1081,6 +1215,8 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_explain_websocket_failure_emits_error);
 	tcase_add_test (tc, test_ui_act_explain_websocket_success_broadcasts);
 	tcase_add_test (tc, test_ui_act_print_upcoming_websocket_empty_emits_error);
+	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
+	tcase_add_test (tc, test_ui_act_bookmark_song);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_playlist_session_error_message);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_piano_reinit_failure);
 	suite_add_tcase (s, tc);

@@ -8,13 +8,13 @@ coverage:
         target: 90%
         informational: false
         paths:
-          - "src/**"
+          - "src/**/*.c"
           - "webui/src/**"
       c-tests:
         target: 90%
         informational: false
         paths:
-          - "src/**"
+          - "src/**/*.c"
       web-tests:
         target: 90%
         informational: false
@@ -23,5 +23,7 @@ coverage:
 
 ignore:
   - "src/l10n_defaults_gen.c"
+  - "src/**/*.h"
+  - "src/**/*.md"
   - "test/**"
   - "webui/test/**"

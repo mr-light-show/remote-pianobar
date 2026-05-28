@@ -1383,6 +1383,115 @@ START_TEST (test_socketio_handle_rename_station_success)
 }
 END_TEST
 
+static bool
+mock_add_seed (BarApp_t *app, const PianoRequestType_t type, void *data,
+               PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type == PIANO_REQUEST_ADD_SEED) {
+		PianoRequestDataAddSeed_t *req = data;
+		ck_assert_str_eq (req->musicId, "AM:123");
+		ck_assert_ptr_nonnull (req->station);
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_socketio_handle_add_music_success)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	station.id = "S1";
+	station.name = "Station";
+	station.isCreator = true;
+	app.ph.stations = &station;
+
+	BarUiPianoCallSetTestHook (mock_add_seed);
+	data = json_object_new_object ();
+	json_object_object_add (data, "musicId", json_object_new_string ("AM:123"));
+	json_object_object_add (data, "stationId", json_object_new_string ("S1"));
+	BarSocketIoHandleAddMusic (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static bool
+mock_delete_station (BarApp_t *app, const PianoRequestType_t type, void *data,
+                     PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type == PIANO_REQUEST_DELETE_STATION) {
+		ck_assert_ptr_nonnull (data);
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_socketio_handle_delete_station_success)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	station.id = "S1";
+	station.name = "Delete Me";
+	station.isCreator = true;
+	app.ph.stations = &station;
+	BarStateSetCurrentStation (&app, &station);
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarUiPianoCallSetTestHook (mock_delete_station);
+	data = json_object_new_object ();
+	json_object_object_add (data, "stationId", json_object_new_string ("S1"));
+	BarSocketIoHandleDeleteStation (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+	clearBroadcastMock ();
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_handle_add_music_missing_fields_noop)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarSocketIoHandleAddMusic (&app, json_object_new_object ());
+	ck_assert_ptr_null (lastBroadcastMessage);
+	clearBroadcastMock ();
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -1437,6 +1546,9 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_volume_set_clamps_out_of_range);
 	tcase_add_test(tc_handle, test_socketio_volume_set_system_mode);
 	tcase_add_test(tc_handle, test_socketio_handle_rename_station_success);
+	tcase_add_test(tc_handle, test_socketio_handle_add_music_success);
+	tcase_add_test(tc_handle, test_socketio_handle_delete_station_success);
+	tcase_add_test(tc_handle, test_socketio_handle_add_music_missing_fields_noop);
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_sorts_snapshot);
 	tcase_add_test(tc_handle, test_socketio_unknown_action_emits_nothing);
 	suite_add_tcase(s, tc_handle);

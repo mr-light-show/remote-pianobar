@@ -139,6 +139,8 @@ Codecov patch coverage reflects **only what CI uploads** — it does **not** mer
 
 **Implication:** production lines compiled only under `NOWEBSOCKET=1`, or only when integration env vars are unset, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
 
+The `codecov/patch/c-tests` gate scopes to **`src/**/*.c` only** — changed headers (`*.h`) and docs (`*.md`) in `src/` are excluded from the patch denominator because they are not executable.
+
 Unit tests in `test/unit/test_player.c` also exercise `BarPlayerThread` error paths (invalid URL, connection refused, non-audio file) without requiring `PIANOBAR_INTEGRATION=1`.
 
 ## Adding New Tests
