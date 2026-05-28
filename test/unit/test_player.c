@@ -551,6 +551,81 @@ START_TEST (test_player_thread_video_only_container)
 }
 END_TEST
 
+START_TEST (test_player_thread_double_interrupt_during_playback)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	pthread_t thread;
+	uintptr_t thread_ret = PLAYER_RET_OK;
+
+	if (!player_mp3_fixture_path (url, sizeof url)) {
+		return;
+	}
+	player_thread_test_setup (&player, &settings);
+	if (!player.engineInitialized) {
+		player_thread_test_teardown (&player, &settings);
+		return;
+	}
+
+	player.url = strdup (url);
+	ck_assert_ptr_nonnull (player.url);
+	BarInterruptSetTarget (&player.interrupted);
+	ck_assert_int_eq (pthread_create (&thread, NULL, BarPlayerThread, &player), 0);
+	ck_assert (BarPlayerWaitForMode (&player, PLAYER_PLAYING, 10000));
+
+	BarInterruptIncrement ();
+	BarInterruptIncrement ();
+	pthread_mutex_lock (&player.lock);
+	player.doQuit = true;
+	pthread_cond_broadcast (&player.cond);
+	pthread_mutex_unlock (&player.lock);
+
+	ck_assert_int_eq (pthread_join (thread, (void **) &thread_ret), 0);
+	free (player.url);
+	player.url = NULL;
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_truncated_mp3_fixture_fails_open)
+{
+	player_t player;
+	BarSettings_t settings;
+	char src[PATH_MAX];
+	char tmppath[] = "/tmp/pianobar-trunc-XXXXXX";
+	char url[PATH_MAX + 32];
+	FILE *in, *out;
+	unsigned char buf[128];
+	size_t n;
+
+	if (!player_mp3_fixture_path (url, sizeof url)) {
+		return;
+	}
+	snprintf (src, sizeof src, "%s", url + strlen ("file://"));
+
+	close (mkstemp (tmppath));
+	in = fopen (src, "rb");
+	out = fopen (tmppath, "wb");
+	ck_assert_ptr_nonnull (in);
+	ck_assert_ptr_nonnull (out);
+	n = fread (buf, 1, sizeof buf, in);
+	ck_assert (n > 0);
+	ck_assert_int_eq (fwrite (buf, 1, n, out), n);
+	fclose (in);
+	fclose (out);
+
+	player_thread_test_setup (&player, &settings);
+	snprintf (url, sizeof url, "file://%s", tmppath);
+	const uintptr_t ret = run_player_thread_sync (&player, url);
+	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
+	unlink (tmppath);
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -588,6 +663,8 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_thread, test_player_thread_interrupt_during_playback);
 	tcase_add_test (tc_thread, test_player_reinit_reuses_existing_engine);
 	tcase_add_test (tc_thread, test_player_thread_video_only_container);
+	tcase_add_test (tc_thread, test_player_thread_double_interrupt_during_playback);
+	tcase_add_test (tc_thread, test_player_thread_truncated_mp3_fixture_fails_open);
 	suite_add_tcase (s, tc_thread);
 	
 	return s;

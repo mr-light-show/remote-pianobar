@@ -66,6 +66,8 @@ void BarUiActDeleteStation (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActBookmark (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
+void BarUiActSettings (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
 void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
@@ -1182,6 +1184,97 @@ START_TEST (test_ui_act_bookmark_song)
 }
 END_TEST
 
+static bool
+mock_get_settings_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                      PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type == PIANO_REQUEST_GET_SETTINGS) {
+		PianoSettings_t *settings = data;
+		settings->username = "olduser";
+		settings->explicitContentFilter = false;
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	if (type == PIANO_REQUEST_CHANGE_SETTINGS) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_ui_act_settings_change_username)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	int pipefd[2];
+
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	app.settings.username = strdup ("olduser");
+	app.settings.password = strdup ("oldpass");
+	BarStateInit (&app);
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], "0\nnewuser\n\n");
+	rl_input_from_fd (&app.input, pipefd[0]);
+
+	BarUiPianoCallSetTestHook (mock_get_settings_ok);
+	BarUiActSettings (&app, &station, &song, 1);
+	BarUiPianoCallClearTestHook ();
+
+	ck_assert_str_eq (app.settings.username, "newuser");
+	close (pipefd[0]);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static bool
+mock_bookmark_artist_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                         PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_BOOKMARK_ARTIST) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_ui_act_bookmark_artist)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	int pipefd[2];
+
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], "a\n");
+	rl_input_from_fd (&app.input, pipefd[0]);
+
+	BarUiPianoCallSetTestHook (mock_bookmark_artist_ok);
+	BarUiActBookmark (&app, &station, &song, 1);
+	BarUiPianoCallClearTestHook ();
+
+	close (pipefd[0]);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -1217,6 +1310,8 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_print_upcoming_websocket_empty_emits_error);
 	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
+	tcase_add_test (tc, test_ui_act_bookmark_artist);
+	tcase_add_test (tc, test_ui_act_settings_change_username);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_playlist_session_error_message);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_piano_reinit_failure);
 	suite_add_tcase (s, tc);

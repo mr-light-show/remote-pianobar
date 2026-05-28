@@ -226,6 +226,44 @@ START_TEST(test_websocket_bridge_start_stop_and_paused_progress) {
 }
 END_TEST
 
+START_TEST (test_websocket_bridge_progress_skips_duplicate_elapsed)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	PianoStation_t station;
+	test_setup_web_app (&app, &ctx);
+	test_attach_station_and_song (&app, &station, &song);
+
+	BarPlayerSetMode (&app.player, PLAYER_PLAYING);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.songPlayed = 30;
+	app.player.songDuration = 180;
+	pthread_mutex_unlock (&app.player.lock);
+
+	BarWsBroadcastProgress (&app);
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_PROGRESS].message);
+	BarWsMessageFree (ctx.buckets[BUCKET_PROGRESS].message);
+	ctx.buckets[BUCKET_PROGRESS].message = NULL;
+
+	BarWsBroadcastProgress (&app);
+	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
+
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_websocket_bridge_disconnect_all_clients_with_context)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	BarWsDisconnectAllClients (&app);
+	ck_assert (1);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 	BarApp_t app;
 	BarWsContext_t ctx;
@@ -549,6 +587,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_broadcast_process_queues_snapshot_payload);
 	tcase_add_test(tc_core, test_websocket_bridge_broadcasts_real_player_state_buckets);
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
+	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
+	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_without_unicast_target);
