@@ -305,7 +305,9 @@ WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_socketio.c \
 		${TEST_DIR}/unit/test_error_messages.c \
 		${TEST_DIR}/unit/test_ui_act_reconnect.c \
-		${TEST_DIR}/unit/test_ui_act_station.c
+		${TEST_DIR}/unit/test_ui_act_station.c \
+		${TEST_DIR}/integration/fixture_http.c \
+		${TEST_DIR}/integration/test_playback_integration.c
 
 ifeq ($(NOWEBSOCKET),1)
 TEST_SRC:=${BASE_TEST_SRC}
@@ -334,6 +336,11 @@ endif
 test: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite..."
 	${SILENTCMD}./${TEST_BIN}
+
+# Integration tests (local HTTP audio fixture + mocked Pandora playlist)
+test-integration: ${TEST_BIN}
+	${SILENTECHO} "   TEST  Running integration tests..."
+	${SILENTCMD}PIANOBAR_INTEGRATION=1 ./${TEST_BIN}
 
 # Run static analysis (requires cppcheck)
 # Suppressions: .cppcheck-suppress (miniaudio.h and project-specific false positives)
@@ -396,4 +403,4 @@ test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen

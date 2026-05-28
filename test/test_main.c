@@ -62,6 +62,7 @@ Suite *socketio_suite(void);
 Suite *error_messages_suite(void);
 Suite *ui_act_suite(void);
 Suite *ui_act_station_suite(void);
+Suite *playback_integration_suite(void);
 #endif
 
 int main(void) {
@@ -77,6 +78,7 @@ int main(void) {
 	srunner_add_suite(sr, error_messages_suite());
 	srunner_add_suite(sr, ui_act_suite());
 	srunner_add_suite(sr, ui_act_station_suite());
+	srunner_add_suite(sr, playback_integration_suite());
 #else
 	/* NOWEBSOCKET=1: no WebSocket suites — start with a base suite */
 	sr = srunner_create(settings_suite());

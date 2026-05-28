@@ -45,6 +45,7 @@ This will:
 ### Individual Test Targets
 
 - `make test` - Run unit tests only
+- `make test-integration` - Run integration tests (sets `PIANOBAR_INTEGRATION=1`)
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
 - `make test-asan` - Run tests with AddressSanitizer (memory leak detection)
@@ -68,10 +69,12 @@ test/
 │   ├── test_http_server.c   # HTTP file serving tests
 │   ├── test_daemon.c        # Daemonization tests
 │   └── test_socketio.c      # Socket.IO protocol tests (future)
-├── integration/             # Integration tests (future)
-│   └── test_client_server.c
+├── integration/             # Integration tests (opt-in)
+│   ├── fixture_http.c       # Local HTTP server for audio fixtures
+│   └── test_playback_integration.c
 └── fixtures/                # Test data files
-    └── test_config.ini
+    ├── test_config.ini
+    └── tone.mp3             # Short MP3 for player integration tests
 ```
 
 ## Current Test Coverage
@@ -96,6 +99,30 @@ test/
 - Process detection
 
 **Total Test Cases**: 19
+
+### Integration tests (`test/integration/`)
+
+Heavy tests for `playback_lifecycle.c` and `player.c` that exercise real HTTP audio
+decoding and mocked Pandora playlist fetch. They are **opt-in** locally:
+
+```bash
+make test-integration
+# or
+PIANOBAR_INTEGRATION=1 ./pianobar_test
+```
+
+CI runs them during `make test-coverage` (`PIANOBAR_INTEGRATION=1`).
+
+Requirements:
+- `test/fixtures/tone.mp3` (committed; regenerate with ffmpeg if needed)
+- Working audio output device (miniaudio engine init); audio tests skip gracefully if unavailable
+- `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
+
+Production code exposes `BarUiPianoCallSetTestHook()` / `BarUiPianoCallClearTestHook()`
+so playlist fetch can be mocked without network access.
+
+Coverage includes lifecycle failure paths (empty playlist, session error, generic failure),
+player error/interrupt paths, two-song manual advance, and playback-manager end-to-end.
 
 ## Adding New Tests
 

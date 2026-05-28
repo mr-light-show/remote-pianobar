@@ -339,12 +339,26 @@ void BarUiPianoHttpMutexDestroy (BarApp_t *app) {
 	pthread_mutex_destroy (&app->pianoHttpMutex);
 }
 
+static BarUiPianoCallTestHook_fn g_barUiPianoCallTestHook = NULL;
+
+void BarUiPianoCallSetTestHook (BarUiPianoCallTestHook_fn hook) {
+	g_barUiPianoCallTestHook = hook;
+}
+
+void BarUiPianoCallClearTestHook (void) {
+	g_barUiPianoCallTestHook = NULL;
+}
+
 /*	piano wrapper: prepare/execute http request and pass result back to
  *	libpiano. Holds pianoHttpMutex for the whole call (including nested
  *	re-login) so only one thread uses app->http / overlapping Piano state.
  */
 bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	if (g_barUiPianoCallTestHook != NULL) {
+		return g_barUiPianoCallTestHook (app, type, data, pRet, wRet);
+	}
+
 	PianoReturn_t pRetLocal = PIANO_RET_OK;
 	CURLcode wRetLocal = CURLE_OK;
 	bool ret = false;
