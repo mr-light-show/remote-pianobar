@@ -21,9 +21,11 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "../../src/main.h"
 #include "../../src/settings.h"
 #include "../../src/bar_state.h"
@@ -222,6 +224,96 @@ START_TEST(test_websocket_bridge_start_stop_and_paused_progress) {
 }
 END_TEST
 
+START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	PianoStation_t station;
+	test_setup_web_app (&app, &ctx);
+	test_attach_station_and_song (&app, &station, &song);
+
+	BarSocketIoSetBroadcastCallback (compatCapture);
+	g_compatBuf[0] = '\0';
+
+	ck_assert (!BarWsIsUnicastRequest ());
+
+	BarWsBroadcastExplanation (&app, "ignored without unicast target");
+	ck_assert_str_eq (g_compatBuf, "");
+
+	int dummy_wsi = 0;
+	BarSocketIoSetUnicastTarget (&dummy_wsi);
+	ck_assert (BarWsIsUnicastRequest ());
+	BarWsBroadcastExplanation (&app, "Because you like rock.");
+	ck_assert (strstr (g_compatBuf, "Because you like rock.") != NULL);
+	BarSocketIoSetUnicastTarget (NULL);
+
+	g_compatBuf[0] = '\0';
+	BarWsEmitError (&app, "station.change", "Station not found");
+	ck_assert (strstr (g_compatBuf, "\"error\"") != NULL);
+	ck_assert (strstr (g_compatBuf, "Station not found") != NULL);
+
+	g_compatBuf[0] = '\0';
+	BarWsEmitErrorEx (&app, "station.change", "Station not found", "abc-123");
+	ck_assert (strstr (g_compatBuf, "abc-123") != NULL);
+
+	g_compatBuf[0] = '\0';
+	BarWsBroadcastPandoraDisconnected (&app, "session_invalid");
+	ck_assert (strstr (g_compatBuf, "session_invalid") != NULL);
+
+	BarSocketIoSetBroadcastCallback (NULL);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_print_helpers_and_input_setup) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+
+	app.input.fds[0] = 99;
+	app.input.fds[1] = 100;
+	app.input.maxfd = 200;
+	BarWsConfigureWebOnlyInput (&app);
+	ck_assert_int_eq (app.input.fds[0], -1);
+	ck_assert_int_eq (app.input.fds[1], -1);
+	ck_assert_int_eq (app.input.maxfd, 0);
+
+	FILE *out = tmpfile ();
+	ck_assert_ptr_nonnull (out);
+
+	/* CLI mode: no web output expected. */
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarWsPrintWebInfo (&app, out);
+	BarWsPrintPidFileInfo (&app, true, out);
+	rewind (out);
+	char buf[256] = {0};
+	size_t n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void)n;
+	ck_assert_str_eq (buf, "");
+
+	rewind (out);
+	ck_assert_int_eq (ftruncate (fileno (out), 0), 0);
+
+	/* WEB mode prints URL using configured host/port. */
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("192.0.2.7");
+	app.settings.websocketPort = 9123;
+	app.settings.pidFile = strdup ("/tmp/test_pianobar.pid");
+	BarWsPrintWebInfo (&app, out);
+	BarWsPrintPidFileInfo (&app, true, out);
+	rewind (out);
+	memset (buf, 0, sizeof (buf));
+	n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void)n;
+	ck_assert (strstr (buf, "192.0.2.7") != NULL);
+	ck_assert (strstr (buf, "9123") != NULL);
+	ck_assert (strstr (buf, "/tmp/test_pianobar.pid") != NULL);
+
+	fclose (out);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_predicates_and_cli_noops) {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
@@ -352,6 +444,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_broadcast_process_queues_snapshot_payload);
 	tcase_add_test(tc_core, test_websocket_bridge_broadcasts_real_player_state_buckets);
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
+	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
+	tcase_add_test(tc_core, test_websocket_bridge_print_helpers_and_input_setup);
 	tcase_add_test(tc_core, test_websocket_bridge_predicates_and_cli_noops);
 	
 	suite_add_tcase(s, tc_core);
