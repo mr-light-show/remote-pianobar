@@ -17,12 +17,24 @@
 #include "../../src/player.h"
 #include "../../src/settings.h"
 #include "../../src/system_volume.h"
+#include "../../src/ui.h"
+#include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 
 /* Declaration only — avoid ui_dispatch.h (pulls full shortcut table + ui_act.h). */
 void BarUiActPandoraReconnect (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActHelp (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActSongInfo (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActPrintUpcoming (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActHistory (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActPandoraDisconnect (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActExplain (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
@@ -390,6 +402,289 @@ START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
 }
 END_TEST
 
+START_TEST (test_ui_act_song_info_quickmix_resolves_child_station)
+{
+	BarApp_t app;
+	PianoStation_t quickmix, child;
+	PianoSong_t song;
+	memset (&app, 0, sizeof (app));
+	memset (&quickmix, 0, sizeof (quickmix));
+	memset (&child, 0, sizeof (child));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	free (app.settings.npSongFormat);
+	app.settings.npSongFormat = strdup ("%t");
+	free (app.settings.npStationFormat);
+	app.settings.npStationFormat = strdup ("%n");
+	app.settings.loveIcon = strdup ("+");
+	app.settings.banIcon = strdup ("-");
+	app.settings.tiredIcon = strdup ("t");
+	app.settings.atIcon = strdup ("@");
+	BarStateInit (&app);
+	quickmix.id = "qm";
+	quickmix.name = "QuickMix";
+	quickmix.isQuickMix = true;
+	child.id = "child";
+	child.name = "Child Station";
+	song.title = "Song";
+	song.artist = "Artist";
+	song.album = "Album";
+	song.detailUrl = "";
+	song.rating = PIANO_RATE_NONE;
+	song.stationId = child.id;
+	app.ph.stations = &child;
+
+	BarUiActSongInfo (&app, &quickmix, &song, 1);
+
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_ui_act_print_upcoming_lists_and_broadcasts)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t cur, next;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&station, 0, sizeof (station));
+	memset (&cur, 0, sizeof (cur));
+	memset (&next, 0, sizeof (next));
+	BarSettingsInit (&app.settings);
+	app.wsContext = &ctx;
+	cur.title = "Current";
+	cur.head.next = &next.head;
+	next.title = "Next Song";
+	next.artist = "Next Artist";
+	next.stationId = "s1";
+	next.length = 180;
+	station.id = "s1";
+	station.name = "Station One";
+	app.ph.stations = &station;
+	BarStateInit (&app);
+	BarStateSetCurrentStation (&app, &station);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	BarSocketIoSetUnicastTarget ((void *) 0x1);
+	clear_mock ();
+
+	BarUiActPrintUpcoming (&app, &station, &cur, 1);
+
+	ck_assert_ptr_nonnull (last_broadcast_msg);
+	ck_assert (strstr (last_broadcast_msg, "query.upcoming.result") != NULL);
+
+	BarSocketIoSetUnicastTarget (NULL);
+	clear_mock ();
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_ui_act_print_upcoming_empty_queue_cli_message)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t cur;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&cur, 0, sizeof (cur));
+	BarSettingsInit (&app.settings);
+	cur.title = "Only";
+
+	BarUiActPrintUpcoming (&app, &station, &cur, 1);
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_ui_act_history_disabled)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.history = 0;
+
+	BarUiActHistory (&app, NULL, NULL, 1);
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "stop-station";
+	BarStateSetCurrentStation (&app, &station);
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	BarUiActPandoraDisconnect (&app, NULL, NULL, 1);
+
+	ck_assert_ptr_nonnull (last_broadcast_msg);
+	ck_assert (strstr (last_broadcast_msg, "pandora.disconnected") != NULL);
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+static bool
+mock_transform_station (BarApp_t *app, const PianoRequestType_t type, void *data,
+                        PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_TRANSFORM_STATION) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_transform_shared_station_invokes_transform_request)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	station.isCreator = false;
+
+	BarUiPianoCallSetTestHook (mock_transform_station);
+	ck_assert (BarTransformIfShared (&app, &station));
+	ck_assert (BarWsTransformIfShared (&app, &station));
+	BarUiPianoCallClearTestHook ();
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static bool
+mock_explain_empty (BarApp_t *app, const PianoRequestType_t type, void *data,
+                    PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type == PIANO_REQUEST_EXPLAIN) {
+		PianoRequestDataExplain_t *req = data;
+		req->retExplain = NULL;
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_ui_act_explain_handles_empty_response)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	song.title = "Explain Me";
+
+	BarUiPianoCallSetTestHook (mock_explain_empty);
+	BarUiActExplain (&app, &station, &song, 1);
+	BarUiPianoCallClearTestHook ();
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+typedef struct {
+	player_t *player;
+} SetDeadArgs_t;
+
+static void *
+set_player_dead_thread (void *arg)
+{
+	SetDeadArgs_t *args = (SetDeadArgs_t *) arg;
+	usleep (20000);
+	BarPlayerSetMode (args->player, PLAYER_DEAD);
+	return NULL;
+}
+
+START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
+{
+	BarApp_t app;
+	pthread_t helper;
+	SetDeadArgs_t args;
+	memset (&app, 0, sizeof (app));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	BarPlayerSetMode (&app.player, PLAYER_PLAYING);
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	args.player = &app.player;
+	ck_assert_int_eq (pthread_create (&helper, NULL, set_player_dead_thread, &args), 0);
+	BarUiDoPandoraDisconnect (&app, "user", NULL);
+	ck_assert_int_eq (pthread_join (helper, NULL), 0);
+
+	ck_assert_ptr_nonnull (last_broadcast_msg);
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+START_TEST (test_ui_act_volume_system_mode)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	player_primitives_init (&app);
+	app.settings.volumeMode = BAR_VOLUME_MODE_SYSTEM;
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	BarUiActVolDown (&app, NULL, NULL, 1);
+	BarUiActVolUp (&app, NULL, NULL, 1);
+	BarUiActVolReset (&app, NULL, NULL, 1);
+
+	clear_mock ();
+	player_primitives_destroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -407,6 +702,15 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_when_player_already_dead);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_idle_timeout_message);
 	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
+	tcase_add_test (tc, test_ui_act_song_info_quickmix_resolves_child_station);
+	tcase_add_test (tc, test_ui_act_print_upcoming_lists_and_broadcasts);
+	tcase_add_test (tc, test_ui_act_print_upcoming_empty_queue_cli_message);
+	tcase_add_test (tc, test_ui_act_history_disabled);
+	tcase_add_test (tc, test_ui_act_pandora_disconnect_delegates_to_helper);
+	tcase_add_test (tc, test_transform_shared_station_invokes_transform_request);
+	tcase_add_test (tc, test_ui_act_explain_handles_empty_response);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_player_stop);
+	tcase_add_test (tc, test_ui_act_volume_system_mode);
 	suite_add_tcase (s, tc);
 	return s;
 }

@@ -1043,6 +1043,260 @@ START_TEST (test_socketio_format_event_message_returns_valid_packet)
 }
 END_TEST
 
+START_TEST (test_socketio_emit_explanation_includes_text)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitExplanation (&app, "Because you liked jazz.");
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "song.explanation") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "Because you liked jazz.") != NULL);
+
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_emit_explanation_null_args_noop)
+{
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitExplanation (NULL, "ignored");
+	BarSocketIoEmitExplanation ((BarApp_t *) 1, NULL);
+
+	ck_assert_ptr_null (lastBroadcastMessage);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_emit_upcoming_lists_songs)
+{
+	BarApp_t app;
+	PianoSong_t first, second;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&first, 0, sizeof (first));
+	memset (&second, 0, sizeof (second));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	first.title = "First";
+	first.artist = "Artist One";
+	first.stationId = "s1";
+	first.head.next = &second.head;
+	second.title = "Second";
+	second.artist = "Artist Two";
+	second.stationId = "s1";
+	station.id = "s1";
+	station.name = "Station One";
+	app.ph.stations = &station;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitUpcoming (&app, &first, 5);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "query.upcoming.result") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "First") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "Second") != NULL);
+
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_emit_genres_from_cached_categories)
+{
+	BarApp_t app;
+	PianoGenreCategory_t category;
+	PianoGenre_t genre;
+	memset (&app, 0, sizeof (app));
+	memset (&category, 0, sizeof (category));
+	memset (&genre, 0, sizeof (genre));
+	BarSettingsInit (&app.settings);
+	category.name = "Rock";
+	genre.name = "Classic Rock";
+	genre.musicId = "G123";
+	category.genres = &genre;
+	app.ph.genreStations = &category;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitGenres (&app);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "Classic Rock") != NULL);
+
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+
+START_TEST (test_socketio_handle_get_genres_emits_cached_payload)
+{
+	BarApp_t app;
+	PianoGenreCategory_t category;
+	PianoGenre_t genre;
+	memset (&app, 0, sizeof (app));
+	memset (&category, 0, sizeof (category));
+	memset (&genre, 0, sizeof (genre));
+	BarSettingsInit (&app.settings);
+	BarUiPianoHttpMutexInit (&app);
+	category.name = "Pop";
+	genre.name = "Top Pop";
+	genre.musicId = "G999";
+	category.genres = &genre;
+	app.ph.genreStations = &category;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoHandleGetGenres (&app);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
+	ck_assert (strstr (lastBroadcastMessage, "Top Pop") != NULL);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+static bool
+mock_genre_fetch_auth_fail (BarApp_t *app, const PianoRequestType_t type, void *data,
+                            PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_GET_GENRE_STATIONS) {
+		*pRet = PIANO_RET_INVALID_LOGIN;
+		*wRet = CURLE_OK;
+		return false;
+	}
+	return false;
+}
+
+START_TEST (test_socketio_handle_get_genres_auth_failure_notifies_disconnect)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	BarUiPianoHttpMutexInit (&app);
+	app.ph.genreStations = NULL;
+
+	BarUiPianoCallSetTestHook (mock_genre_fetch_auth_fail);
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoHandleGetGenres (&app);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+
+	BarUiPianoCallClearTestHook ();
+	BarUiPianoHttpMutexDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_handle_message_station_get_genres_event)
+{
+	BarApp_t app;
+	PianoGenreCategory_t category;
+	PianoGenre_t genre;
+	memset (&app, 0, sizeof (app));
+	memset (&category, 0, sizeof (category));
+	memset (&genre, 0, sizeof (genre));
+	BarSettingsInit (&app.settings);
+	BarUiPianoHttpMutexInit (&app);
+	category.name = "Jazz";
+	genre.name = "Smooth Jazz";
+	genre.musicId = "G555";
+	category.genres = &genre;
+	app.ph.genreStations = &category;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoHandleMessage (&app, "2[\"station.getGenres\"]", NULL);
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_emit_process_unicast_targets_client)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station;
+	void *fake_wsi = (void *) 0xdeadbeef;
+	memset (&app, 0, sizeof (app));
+	memset (&song, 0, sizeof (song));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	song.title = "Unicast Song";
+	song.artist = "Artist";
+	song.stationId = "s-unicast";
+	station.id = "s-unicast";
+	station.name = "Unicast Station";
+	app.playlist = &song;
+	app.curStation = &station;
+	app.ph.stations = &station;
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoEmitProcessUnicast (&app, fake_wsi);
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "process") != NULL);
+	ck_assert_ptr_null (BarSocketIoGetUnicastTarget ());
+
+	pthread_mutex_destroy (&app.player.lock);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
+START_TEST (test_socketio_handle_add_genre_missing_music_id)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	BarUiPianoHttpMutexInit (&app);
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoHandleAddGenre (&app, json_object_new_object ());
+
+	ck_assert_ptr_null (lastBroadcastMessage);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -1103,6 +1357,18 @@ Suite *socketio_suite(void) {
 	TCase *tc_format = tcase_create ("Format");
 	tcase_add_test (tc_format, test_socketio_format_event_message_returns_valid_packet);
 	suite_add_tcase (s, tc_format);
+
+	TCase *tc_extra = tcase_create ("Extended coverage");
+	tcase_add_test (tc_extra, test_socketio_emit_explanation_includes_text);
+	tcase_add_test (tc_extra, test_socketio_emit_explanation_null_args_noop);
+	tcase_add_test (tc_extra, test_socketio_emit_upcoming_lists_songs);
+	tcase_add_test (tc_extra, test_socketio_emit_genres_from_cached_categories);
+	tcase_add_test (tc_extra, test_socketio_handle_get_genres_emits_cached_payload);
+	tcase_add_test (tc_extra, test_socketio_handle_get_genres_auth_failure_notifies_disconnect);
+	tcase_add_test (tc_extra, test_socketio_handle_message_station_get_genres_event);
+	tcase_add_test (tc_extra, test_socketio_emit_process_unicast_targets_client);
+	tcase_add_test (tc_extra, test_socketio_handle_add_genre_missing_music_id);
+	suite_add_tcase (s, tc_extra);
 	
 	return s;
 }
