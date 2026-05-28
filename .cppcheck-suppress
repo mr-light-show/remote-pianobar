@@ -1,7 +1,7 @@
 # Third-party: miniaudio single-header library (we do not fix upstream)
 *:src/miniaudio.h
-# BarStateInit/BarStateDestroy modify app (e.g. stateRwlock); const would be incorrect
-constParameterPointer:src/bar_state.c
+# bar_state.c: state_needs_lock() always returns false in NOWEBSOCKET build; condition is intentional
+knownConditionTrueFalse:src/bar_state.c
 # main.c: used in platform-specific daemon paths / config-dependent code
 unreadVariable:src/main.c
 constVariablePointer:src/main.c

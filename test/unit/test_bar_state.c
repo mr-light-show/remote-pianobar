@@ -405,6 +405,29 @@ START_TEST(test_bar_state_is_pandora_connected) {
 }
 END_TEST
 
+/* stateRwlock must be acquired and released in BAR_UI_MODE_WEB, not only BOTH.
+   After BarStateSetCurrentStation returns, the lock must be acquirable again. */
+START_TEST(test_bar_state_lock_taken_in_web_mode) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+
+	PianoStation_t st;
+	memset(&st, 0, sizeof(st));
+	st.id = (char *)"web-station";
+
+	BarStateSetCurrentStation(&app, &st);
+
+	/* Lock must have been released — trywrlock must succeed */
+	int rc = pthread_rwlock_trywrlock(&app.stateRwlock);
+	ck_assert_int_eq(rc, 0);
+	pthread_rwlock_unlock(&app.stateRwlock);
+
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -441,6 +464,10 @@ Suite *bar_state_suite(void) {
 	TCase *tc_misc = tcase_create("Misc");
 	tcase_add_test(tc_misc, test_bar_state_is_pandora_connected);
 	suite_add_tcase(s, tc_misc);
+
+	TCase *tc_web = tcase_create("WEB mode locking");
+	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
+	suite_add_tcase(s, tc_web);
 
 	return s;
 }
