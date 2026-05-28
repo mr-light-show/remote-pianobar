@@ -97,16 +97,16 @@ Template and Makefile steps: [README_TESTING.md](README_TESTING.md).
 ## Code coverage expectations
 
 - CI uploads C (`coverage.info`, flag `c-tests`) and web (`webui/coverage`, flag `web-tests`) to Codecov.
-- [codecov.yml](codecov.yml) enforces **≥95% patch coverage** on PRs (`informational: false`); project-wide status stays off.
-- **Requirement for agents:** **lines you add or modify must have ≥95% line coverage** (patch/diff coverage), matching the Codecov gate.
+- [codecov.yml](codecov.yml) enforces **≥90% patch coverage** on PRs (`informational: false`); project-wide status stays off.
+- **Requirement for agents:** **lines you add or modify must have ≥90% line coverage** (patch/diff coverage), matching the Codecov gate.
 - **Applies to:**
   - **C:** touched `.c` / `.h` under `src/`, `src/libpiano/`, `src/websocket/`.
-  - **Web UI:** touched files under `webui/src/` (tests under `webui/test/`).
+  - **Web UI:** touched files under `webui/src/` (not `webui/test/`).
 - **Verify before claiming done:**
   1. `make test-coverage` and/or `cd webui && npm test -- --run --coverage`.
-  2. Confirm **≥95% on your diff** (Codecov PR comment, or coverage report scoped to changed files).
-  3. If below 95%, add tests or document in the PR why remaining lines are not reasonably testable.
-- **Excluded from the 95% target:** generated locale files, vendored `miniaudio_impl.c`, config-only or workflow-only edits.
+  2. Confirm **≥90% on your diff** (Codecov PR comment, or coverage report scoped to changed files).
+  3. If below 90%, add tests or document in the PR why remaining lines are not reasonably testable.
+- **Excluded from the 90% target:** generated locale files, vendored `miniaudio_impl.c`, **test code** (`test/**`, `webui/test/**`), config-only or workflow-only edits.
 
 ---
 

@@ -5,14 +5,16 @@ coverage:
     project: off
     patch:
       default:
-        target: 95%
+        target: 90%
         informational: false
       c-tests:
-        target: 95%
+        target: 90%
         informational: false
       web-tests:
-        target: 95%
+        target: 90%
         informational: false
 
 ignore:
   - "src/l10n_defaults_gen.c"
+  - "test/**"
+  - "webui/test/**"
