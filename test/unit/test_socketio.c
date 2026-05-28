@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -364,6 +365,130 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	#endif
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+}
+END_TEST
+
+START_TEST(test_socketio_handle_query_stations_event_emits_station_list) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&app, 0, sizeof(app));
+	memset(&station, 0, sizeof(station));
+	BarSettingsInit(&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.settings.sortOrder = BAR_SORT_NAME_AZ;
+	station.id = "station-1";
+	station.name = "Station One";
+	app.ph.stations = &station;
+
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
+
+	BarSocketIoHandleMessage(&app, "2[\"query.stations\"]", NULL);
+
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "\"stations\"") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "Station One") != NULL);
+
+	BarSettingsDestroy(&app.settings);
+	clearBroadcastMock();
+}
+END_TEST
+
+START_TEST(test_socketio_handle_action_object_command_emits_not_implemented_error) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	memset(&app, 0, sizeof(app));
+	memset(&ctx, 0, sizeof(ctx));
+	BarSettingsInit(&app.settings);
+	ck_assert(BarL10nInit(&app.l10n, &app.settings));
+	app.wsContext = &ctx;
+
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
+
+	BarSocketIoHandleMessage(&app, "2[\"action\",{\"command\":\"app.settings\"}]", NULL);
+
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "\"error\"") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "app.settings") != NULL);
+
+	BarL10nDestroy(&app.l10n);
+	BarSettingsDestroy(&app.settings);
+	clearBroadcastMock();
+}
+END_TEST
+
+START_TEST(test_socketio_handle_station_change_missing_station_reports_error) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	BarSettingsInit(&app.settings);
+	ck_assert(BarL10nInit(&app.l10n, &app.settings));
+
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
+
+	BarSocketIoHandleMessage(&app, "2[\"station.change\",{\"id\":\"missing-station\"}]", NULL);
+
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "\"error\"") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "missing-station") != NULL);
+
+	BarL10nDestroy(&app.l10n);
+	BarSettingsDestroy(&app.settings);
+	clearBroadcastMock();
+}
+END_TEST
+
+START_TEST(test_socketio_dispatches_legacy_query_and_station_change_string) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	BarSettingsInit(&app.settings);
+	ck_assert(BarL10nInit(&app.l10n, &app.settings));
+
+	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	clearBroadcastMock();
+
+	BarSocketIoHandleMessage(&app, "2[\"query.state\",{}]", NULL);
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "[") != NULL);
+
+	clearBroadcastMock();
+	BarSocketIoHandleMessage(&app, "2[\"changeStation\",\"missing-station\"]", NULL);
+	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert(strstr(lastBroadcastMessage, "missing-station") != NULL);
+
+	BarL10nDestroy(&app.l10n);
+	BarSettingsDestroy(&app.settings);
+	clearBroadcastMock();
+}
+END_TEST
+
+START_TEST(test_socketio_table_dispatch_rejects_missing_payload_for_mutating_events) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	BarSettingsInit(&app.settings);
+
+	const char *events[] = {
+		"station.delete",
+		"station.createFrom",
+		"station.addGenre",
+		"station.addMusic",
+		"station.addShared",
+		"station.rename",
+		"station.setMode",
+		"station.getInfo",
+		"station.deleteSeed",
+		"station.deleteFeedback",
+		"music.search",
+	};
+
+	for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
+		char frame[128];
+		snprintf(frame, sizeof(frame), "2[\"%s\"]", events[i]);
+		BarSocketIoHandleMessage(&app, frame, NULL);
+	}
+
+	BarSettingsDestroy(&app.settings);
 }
 END_TEST
 
@@ -746,6 +871,11 @@ Suite *socketio_suite(void) {
 	tc_handle = tcase_create("Event Handlers");
 	tcase_add_test(tc_handle, test_socketio_handle_query);
 	tcase_add_test(tc_handle, test_socketio_ping_keepalive_noop);
+	tcase_add_test(tc_handle, test_socketio_handle_query_stations_event_emits_station_list);
+	tcase_add_test(tc_handle, test_socketio_handle_action_object_command_emits_not_implemented_error);
+	tcase_add_test(tc_handle, test_socketio_handle_station_change_missing_station_reports_error);
+	tcase_add_test(tc_handle, test_socketio_dispatches_legacy_query_and_station_change_string);
+	tcase_add_test(tc_handle, test_socketio_table_dispatch_rejects_missing_payload_for_mutating_events);
 	tcase_add_test(tc_handle, test_socketio_rating_emits_state);
 	tcase_add_test(tc_handle, test_socketio_build_start_payload_uses_snapshot_song_station_name);
 	suite_add_tcase(s, tc_handle);

@@ -25,6 +25,28 @@ THE SOFTWARE.
 #include <pthread.h>
 
 #include "../../src/playback_lifecycle.h"
+#include "../../src/settings.h"
+#include "../../src/l10n.h"
+#include "../../src/player.h"
+
+static void setup_playback_app (BarApp_t *app) {
+	memset (app, 0, sizeof (*app));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_CLI;
+	app->settings.npSongFormat = strdup ("%t");
+	app->settings.loveIcon = strdup ("+");
+	app->settings.banIcon = strdup ("-");
+	app->settings.tiredIcon = strdup ("t");
+	app->settings.atIcon = strdup ("@");
+	ck_assert (BarL10nInit (&app->l10n, &app->settings));
+	BarPlayerInit (&app->player, &app->settings);
+}
+
+static void teardown_playback_app (BarApp_t *app) {
+	BarPlayerDestroy (&app->player);
+	BarL10nDestroy (&app->l10n);
+	BarSettingsDestroy (&app->settings);
+}
 
 /* BarPlaybackStartSong: null app must return false without crashing */
 START_TEST (test_playback_start_rejects_null_app)
@@ -55,12 +77,56 @@ START_TEST (test_playback_start_rejects_null_playlist)
 }
 END_TEST
 
+START_TEST (test_playback_start_rejects_missing_current_station)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	pthread_t playerThread = 0;
+	memset (&song, 0, sizeof (song));
+	setup_playback_app (&app);
+
+	app.playlist = &song;
+
+	ck_assert (!BarPlaybackStartSong (&app, &playerThread));
+
+	teardown_playback_app (&app);
+}
+END_TEST
+
+START_TEST (test_playback_start_rejects_non_http_audio_url)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station;
+	pthread_t playerThread = 0;
+	memset (&song, 0, sizeof (song));
+	memset (&station, 0, sizeof (station));
+	setup_playback_app (&app);
+
+	station.id = "station-1";
+	station.name = "Station One";
+	song.title = "Bad URL Song";
+	song.artist = "Artist";
+	song.album = "Album";
+	song.detailUrl = "";
+	song.audioUrl = "file:///tmp/song.mp3";
+	app.curStation = &station;
+	app.playlist = &song;
+
+	ck_assert (!BarPlaybackStartSong (&app, &playerThread));
+
+	teardown_playback_app (&app);
+}
+END_TEST
+
 Suite *playback_lifecycle_suite (void) {
 	Suite *s = suite_create ("playback_lifecycle");
 	TCase *tc = tcase_create ("core");
 	tcase_add_test (tc, test_playback_start_rejects_null_app);
 	tcase_add_test (tc, test_playback_start_rejects_null_thread);
 	tcase_add_test (tc, test_playback_start_rejects_null_playlist);
+	tcase_add_test (tc, test_playback_start_rejects_missing_current_station);
+	tcase_add_test (tc, test_playback_start_rejects_non_http_audio_url);
 	suite_add_tcase (s, tc);
 	return s;
 }

@@ -56,3 +56,9 @@ bool BarSystemVolumeAvailable(void);
  * Safe to call from any thread */
 bool BarSystemVolumeRefreshDevice(void);
 
+/* Parse pactl --format=json get-sink-volume output.
+ * Exposed for regression tests; production callers should use BarSystemVolumeGet. */
+#ifndef __APPLE__
+int BarSystemVolumeParsePactlJsonVolume(const char *buf);
+#endif
+

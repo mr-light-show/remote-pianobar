@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include <check.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <stdio.h>
@@ -64,6 +65,16 @@ START_TEST(test_daemon_is_running_nonexistent) {
 }
 END_TEST
 
+START_TEST(test_daemon_get_ipv4_address_returns_nonempty_address) {
+	char addr[64];
+	memset(addr, 0, sizeof(addr));
+
+	BarDaemonGetIPv4Address(addr, sizeof(addr));
+
+	ck_assert_str_ne(addr, "");
+}
+END_TEST
+
 /* Create test suite */
 Suite *daemon_suite(void) {
 	Suite *s;
@@ -77,6 +88,7 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_daemonize_null);
 	tcase_add_test(tc_core, test_daemon_is_running_null);
 	tcase_add_test(tc_core, test_daemon_is_running_nonexistent);
+	tcase_add_test(tc_core, test_daemon_get_ipv4_address_returns_nonempty_address);
 	
 	suite_add_tcase(s, tc_core);
 	

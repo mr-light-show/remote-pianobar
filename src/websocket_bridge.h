@@ -34,6 +34,7 @@ THE SOFTWARE.
 /* Mode predicates - return false when WebSocket is disabled */
 bool BarIsWebOnlyMode(const BarApp_t *app);
 bool BarShouldSkipCliOutput(const BarApp_t *app);
+bool BarWsIsWebActive(const BarApp_t *app);
 
 /* Event broadcasts */
 void BarWsBroadcastVolume(BarApp_t *app);

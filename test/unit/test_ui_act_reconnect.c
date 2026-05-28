@@ -39,6 +39,8 @@ void BarUiActQuit (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActSkipSong (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
+bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
+bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
 static char *last_broadcast_msg = NULL;
 
@@ -241,6 +243,22 @@ START_TEST (test_disconnect_player_wait_returns_fast_when_already_dead)
 }
 END_TEST
 
+START_TEST (test_transform_owned_station_skips_pandora_call)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	station.isCreator = true;
+
+	ck_assert (BarTransformIfShared (&app, &station));
+	ck_assert (BarWsTransformIfShared (&app, &station));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -254,6 +272,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_skip_song_sets_do_quit);
 	tcase_add_test (tc, test_ui_act_quit);
 	tcase_add_test (tc, test_disconnect_player_wait_returns_fast_when_already_dead);
+	tcase_add_test (tc, test_transform_owned_station_skips_pandora_call);
 	suite_add_tcase (s, tc);
 	return s;
 }

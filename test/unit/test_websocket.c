@@ -93,48 +93,161 @@ static void test_ws_context_destroy_buckets (BarWsContext_t *ctx) {
 	}
 }
 
+static const char *test_bucket_payload (BarWsContext_t *ctx, BarWsBucketType_t bucket) {
+	ck_assert_ptr_nonnull (ctx->buckets[bucket].message);
+	ck_assert_ptr_nonnull (ctx->buckets[bucket].message->data);
+	return (const char *)ctx->buckets[bucket].message->data;
+}
+
+static void test_setup_web_app (BarApp_t *app, BarWsContext_t *ctx) {
+	memset (app, 0, sizeof (*app));
+	memset (ctx, 0, sizeof (*ctx));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_WEB;
+	app->settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app->settings.volume = 40;
+	app->wsContext = ctx;
+	test_ws_context_init_buckets (ctx);
+	BarStateInit (app);
+	pthread_mutex_init (&app->player.lock, NULL);
+	pthread_cond_init (&app->player.cond, NULL);
+}
+
+static void test_teardown_web_app (BarApp_t *app, BarWsContext_t *ctx) {
+	pthread_cond_destroy (&app->player.cond);
+	pthread_mutex_destroy (&app->player.lock);
+	BarStateDestroy (app);
+	test_ws_context_destroy_buckets (ctx);
+	BarSettingsDestroy (&app->settings);
+}
+
+static void test_attach_station_and_song (BarApp_t *app,
+		PianoStation_t *station, PianoSong_t *song) {
+	memset (station, 0, sizeof (*station));
+	memset (song, 0, sizeof (*song));
+
+	station->id = "station-1";
+	station->name = "Station One";
+	station->displayName = "Display One";
+	song->title = "Song One";
+	song->artist = "Artist One";
+	song->stationId = "station-1";
+	app->ph.stations = station;
+	app->curStation = station;
+	app->playlist = song;
+}
+
 START_TEST(test_websocket_bridge_broadcast_process_queues_snapshot_payload) {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoSong_t song;
 	PianoStation_t station;
-	memset (&app, 0, sizeof (app));
-	memset (&ctx, 0, sizeof (ctx));
-	memset (&song, 0, sizeof (song));
-	memset (&station, 0, sizeof (station));
-
-	BarSettingsInit (&app.settings);
-	app.settings.uiMode = BAR_UI_MODE_WEB;
-	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
-	app.settings.volume = 40;
-	app.wsContext = &ctx;
-	test_ws_context_init_buckets (&ctx);
-	BarStateInit (&app);
-	pthread_mutex_init (&app.player.lock, NULL);
-
-	station.id = "station-1";
-	station.name = "Station One";
-	station.displayName = "Display One";
-	song.title = "Song One";
-	song.artist = "Artist One";
-	song.stationId = "station-1";
-	app.ph.stations = &station;
-	app.curStation = &station;
-	app.playlist = &song;
+	test_setup_web_app (&app, &ctx);
+	test_attach_station_and_song (&app, &station, &song);
 
 	BarWsBroadcastProcess (&app);
 
-	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATE].message);
-	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATE].message->data);
-	const char *payload = (const char *)ctx.buckets[BUCKET_STATE].message->data;
+	const char *payload = test_bucket_payload (&ctx, BUCKET_STATE);
 	ck_assert (strstr (payload, "\"process\"") != NULL);
 	ck_assert (strstr (payload, "\"song\"") != NULL);
 	ck_assert (strstr (payload, "songStationName") != NULL);
 	ck_assert (strstr (payload, "Display One") != NULL);
 
-	pthread_mutex_destroy (&app.player.lock);
-	BarStateDestroy (&app);
-	test_ws_context_destroy_buckets (&ctx);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_broadcasts_real_player_state_buckets) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	PianoStation_t station;
+	test_setup_web_app (&app, &ctx);
+	test_attach_station_and_song (&app, &station, &song);
+
+	BarWsBroadcastVolume (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "\"volume\"") != NULL);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "40") != NULL);
+	app.settings.volume = 41;
+	BarWsBroadcastVolume (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "41") != NULL);
+
+	BarWsBroadcastStations (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATIONS), "\"stations\"") != NULL);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATIONS), "Display One") != NULL);
+
+	BarPlayerSetMode (&app.player, PLAYER_PLAYING);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.songPlayed = 45;
+	app.player.songDuration = 180;
+	pthread_mutex_unlock (&app.player.lock);
+	BarWsBroadcastProgress (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "\"progress\"") != NULL);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "\"elapsed\"") != NULL);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "45") != NULL);
+
+	BarWsBroadcastSongStart (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATE), "\"start\"") != NULL);
+	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
+
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_start_stop_and_paused_progress) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	PianoStation_t station;
+	test_setup_web_app (&app, &ctx);
+	test_attach_station_and_song (&app, &station, &song);
+
+	BarWsBroadcastSongStart (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATE), "\"start\"") != NULL);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATE), "Song One") != NULL);
+
+	BarWsBroadcastSongStop (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATE), "\"stop\"") != NULL);
+
+	BarPlayerSetMode (&app.player, PLAYER_PLAYING);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.doPause = true;
+	app.player.songPlayed = 60;
+	app.player.songDuration = 180;
+	pthread_mutex_unlock (&app.player.lock);
+	BarWsBroadcastProgress (&app);
+	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
+
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_predicates_and_cli_noops) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.lockFd = 42;
+
+	ck_assert (!BarIsWebOnlyMode (&app));
+	ck_assert (!BarShouldSkipCliOutput (&app));
+	ck_assert (!BarWsIsWebActive (&app));
+	ck_assert (!BarWsSettingsIsWebActive (&app.settings));
+	ck_assert (BarWsInit (&app));
+	BarWsDestroy (&app);
+	ck_assert (BarWsDaemonize (&app));
+	BarWsRemovePidFile (&app);
+	ck_assert (BarWsStartPlaybackManager (&app));
+	BarWsStopPlaybackManager (&app);
+	ck_assert (BarWsAcquireSingletonLock (&app));
+	ck_assert_int_eq (app.lockFd, -1);
+
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	ck_assert (BarIsWebOnlyMode (&app));
+	ck_assert (BarShouldSkipCliOutput (&app));
+	ck_assert (BarWsIsWebActive (&app));
+	ck_assert (BarWsSettingsIsWebActive (&app.settings));
+
 	BarSettingsDestroy (&app.settings);
 }
 END_TEST
@@ -237,6 +350,9 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_broadcast_null);
 	tcase_add_test(tc_core, test_websocket_bridge_singleton_lock_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_broadcast_process_queues_snapshot_payload);
+	tcase_add_test(tc_core, test_websocket_bridge_broadcasts_real_player_state_buckets);
+	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
+	tcase_add_test(tc_core, test_websocket_bridge_predicates_and_cli_noops);
 	
 	suite_add_tcase(s, tc_core);
 

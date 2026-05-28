@@ -488,8 +488,11 @@ static void pulseaudioDestroy(void) {
  */
 
 /* Parse volume percentage from pactl --format=json output.
- * Returns 0–100 on success, -1 on failure. */
-static int pactlParseJsonVolume(const char *buf) {
+ * Returns 0-100 on success, -1 on failure. */
+int BarSystemVolumeParsePactlJsonVolume(const char *buf) {
+	if (buf == NULL) {
+		return -1;
+	}
 	struct json_object *root = json_tokener_parse(buf);
 	if (!root) {
 		return -1;
@@ -545,7 +548,7 @@ static int pactlGetVolume(void) {
 		char buf[4096];
 		pactlReadAll(fp, buf, sizeof(buf));
 		pclose(fp);
-		int vol = pactlParseJsonVolume(buf);
+		int vol = BarSystemVolumeParsePactlJsonVolume(buf);
 		if (vol >= 0) {
 			return vol;
 		}

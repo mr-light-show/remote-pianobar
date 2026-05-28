@@ -33,6 +33,7 @@ export default defineConfig({
         'node_modules/',
         'test/',
         'dist/',
+        'src/protocol.ts',
         '../src/l10n_defaults_gen.c',
         'vite.config.js'
       ]

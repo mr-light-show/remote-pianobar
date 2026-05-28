@@ -215,6 +215,129 @@ START_TEST (test_settings_locale_from_config) {
 }
 END_TEST
 
+START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = dispatch-user\n"
+			"password = dispatch-pass\n"
+			"audio_quality = medium\n"
+			"sort = quickmix_10_name_za\n"
+			"volume_mode = system\n"
+			"audio_backend = alsa\n"
+			"autoselect = 1\n"
+			"station_display_name_override = /^(.*)$/Station: \\\\1/\n"
+			"event_command = ~/bin/eventcmd\n"
+			"fifo = ~/pianobar.fifo\n"
+			"audio_pipe = ~/audio.pipe\n"
+			"history = 7\n"
+			"max_retry = 4\n"
+			"timeout = 19\n"
+			"pause_timeout = 11\n"
+			"buffer_seconds = 9\n"
+			"volume = 62\n"
+			"system_volume_player_gain = -12\n"
+			"max_gain = 10\n"
+			"sample_rate = 44100\n"
+			"gain_mul = 1.5\n"
+			"ui_mode = web\n"
+			"websocket_port = 8123\n"
+			"websocket_host = 0.0.0.0\n"
+			"webui_path = /srv/pianobar-web\n"
+			"pid_file = ~/pianobar.pid\n"
+			"log_file = ~/pianobar.log\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_str_eq (s.username, "dispatch-user");
+	ck_assert_str_eq (s.password, "dispatch-pass");
+	ck_assert_int_eq (s.audioQuality, PIANO_AQ_MEDIUM);
+	ck_assert_int_eq (s.sortOrder, BAR_SORT_QUICKMIX_10_NAME_ZA);
+	ck_assert_int_eq (s.volumeMode, BAR_VOLUME_MODE_SYSTEM);
+	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_ALSA);
+	ck_assert (s.autoselect);
+	ck_assert_uint_eq (s.stationDisplayNameOverrideCount, 1);
+	ck_assert (s.stationDisplayNameOverrides[0].valid);
+	ck_assert_str_eq (s.stationDisplayNameOverrides[0].pattern, "^(.*)$");
+	ck_assert_str_eq (s.stationDisplayNameOverrides[0].replacement, "Station: \\\\1");
+	char expected[512];
+	snprintf (expected, sizeof (expected), "%s/bin/eventcmd", tmpl);
+	ck_assert_str_eq (s.eventCmd, expected);
+	snprintf (expected, sizeof (expected), "%s/pianobar.fifo", tmpl);
+	ck_assert_str_eq (s.fifo, expected);
+	snprintf (expected, sizeof (expected), "%s/audio.pipe", tmpl);
+	ck_assert_str_eq (s.audioPipe, expected);
+	ck_assert_uint_eq (s.history, 7);
+	ck_assert_uint_eq (s.maxRetry, 4);
+	ck_assert_uint_eq (s.timeout, 19);
+	ck_assert_uint_eq (s.pauseTimeout, 11);
+	ck_assert_uint_eq (s.bufferSecs, 9);
+	ck_assert_int_eq (s.volume, 62);
+	ck_assert_int_eq (s.systemVolumePlayerGain, -12);
+	ck_assert_int_eq (s.maxGain, 10);
+	ck_assert_int_eq (s.sampleRate, 44100);
+	ck_assert (s.gainMul > 1.49f && s.gainMul < 1.51f);
+#ifdef WEBSOCKET_ENABLED
+	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_WEB);
+	ck_assert_int_eq (s.websocketPort, 8123);
+	ck_assert_str_eq (s.websocketHost, "0.0.0.0");
+	ck_assert_str_eq (s.webuiPath, "/srv/pianobar-web");
+	snprintf (expected, sizeof (expected), "%s/pianobar.pid", tmpl);
+	ck_assert_str_eq (s.pidFile, expected);
+	snprintf (expected, sizeof (expected), "%s/pianobar.log", tmpl);
+	ck_assert_str_eq (s.logFile, expected);
+#endif
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_table_dispatch_handles_typical_user_overrides_and_typos) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"audio_quality = high\n"
+			"audio_backend = coreaudio\n"
+			"ui_mode = both\n"
+			"autoselect = maybe\n"
+			"volume = 200\n"
+			"history = -1\n"
+			"station_display_name_override = /[/broken/\n"
+			"act_songlove = L\n"
+			"act_songban = disabled\n"
+			"format_msg_info = [info] %s\\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_int_eq (s.audioQuality, PIANO_AQ_HIGH);
+	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_COREAUDIO);
+#ifdef WEBSOCKET_ENABLED
+	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_BOTH);
+#endif
+	/* Invalid values should not clobber defaults. */
+	ck_assert_int_ne (s.volume, 200);
+	ck_assert_uint_ne (s.history, (unsigned int)-1);
+	ck_assert_uint_eq (s.stationDisplayNameOverrideCount, 1);
+	ck_assert (!s.stationDisplayNameOverrides[0].valid);
+	ck_assert_int_eq (s.keys[BAR_KS_LOVE], 'L');
+	ck_assert_int_eq (s.keys[BAR_KS_BAN], BAR_KS_DISABLED);
+	ck_assert_str_eq (s.msgFormat[MSG_INFO].prefix, "[info] ");
+	ck_assert_str_eq (s.msgFormat[MSG_INFO].postfix, "\\n");
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
 START_TEST (test_parse_int_in_range_valid)
 {
 	int out = -1;
@@ -302,6 +425,8 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_set_active_account_by_id);
 	tcase_add_test (tc, test_settings_get_active_account_empty);
 	tcase_add_test (tc, test_settings_locale_from_config);
+	tcase_add_test (tc, test_settings_table_dispatch_realistic_player_and_web_config);
+	tcase_add_test (tc, test_settings_table_dispatch_handles_typical_user_overrides_and_typos);
 
 	TCase *tc_parse = tcase_create ("ParseIntInRange");
 	tcase_add_test (tc_parse, test_parse_int_in_range_valid);
