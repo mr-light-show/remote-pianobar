@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include "../../src/main.h"
 #include "../../src/settings.h"
 #include "../../src/ui.h"
+#include "../../src/libpiano/piano.h"
 
 static char *read_tmpfile (FILE *stream)
 {
@@ -172,6 +173,37 @@ START_TEST (test_sorted_stations_orders_by_name_za)
 }
 END_TEST
 
+static bool
+mock_ui_piano_logged (BarApp_t *app, const PianoRequestType_t type, void *data,
+                      PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	(void) type;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+START_TEST (test_ui_piano_call_logged_delegates_to_hook)
+{
+	BarApp_t app;
+	PianoReturn_t pRet = PIANO_RET_ERR;
+	CURLcode wRet = CURLE_FAILED_INIT;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+
+	BarUiPianoCallSetTestHook (mock_ui_piano_logged);
+	ck_assert (BarUiPianoCallLogged (&app, PIANO_REQUEST_GET_SETTINGS, NULL,
+	                                 "Loading settings", &pRet, &wRet));
+	BarUiPianoCallClearTestHook ();
+
+	ck_assert_int_eq (pRet, PIANO_RET_OK);
+	ck_assert_int_eq (wRet, CURLE_OK);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -182,6 +214,7 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_print_startup_info_daemon_includes_pid_and_pid_file);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
+	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
 	suite_add_tcase (s, tc);
 	return s;
 }

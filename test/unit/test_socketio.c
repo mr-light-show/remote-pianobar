@@ -25,6 +25,8 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <json-c/json.h>
 #include "../../src/main.h"
 #include "../../src/l10n.h"
@@ -1297,6 +1299,90 @@ START_TEST (test_socketio_handle_add_genre_missing_music_id)
 }
 END_TEST
 
+START_TEST (test_socketio_volume_set_system_mode)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	BarSettingsInit (&app.settings);
+	app.settings.volumeMode = BAR_VOLUME_MODE_SYSTEM;
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL), 0);
+	app.player.settings = &app.settings;
+	app.wsContext = &ctx;
+
+	data = json_object_new_object ();
+	json_object_object_add (data, "volume", json_object_new_int (42));
+	BarSocketIoHandleAction (&app, "volume.set", data, NULL);
+
+	pthread_mutex_lock (&ctx.volumeBroadcastMutex);
+	ck_assert (ctx.delayedVolumeBroadcast.pending);
+	pthread_mutex_unlock (&ctx.volumeBroadcastMutex);
+
+	json_object_put (data);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	pthread_mutex_destroy (&app.player.lock);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static bool
+mock_rename_station (BarApp_t *app, const PianoRequestType_t type, void *data,
+                     PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type == PIANO_REQUEST_RENAME_STATION) {
+		PianoRequestDataRenameStation_t *req = data;
+		ck_assert_ptr_nonnull (req->newName);
+		ck_assert_str_eq (req->newName, "Renamed");
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_socketio_handle_rename_station_success)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	json_object *data;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	station.id = "S1";
+	station.name = "Old";
+	station.isCreator = true;
+	app.ph.stations = &station;
+	app.wsContext = &ctx;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarUiPianoCallSetTestHook (mock_rename_station);
+	data = json_object_new_object ();
+	json_object_object_add (data, "stationId", json_object_new_string ("S1"));
+	json_object_object_add (data, "newName", json_object_new_string ("Renamed"));
+	BarSocketIoHandleRenameStation (&app, data);
+	BarUiPianoCallClearTestHook ();
+
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+
+	json_object_put (data);
+	clearBroadcastMock ();
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -1349,6 +1435,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_change_station_switches_when_found);
 	tcase_add_test(tc_handle, test_socketio_volume_set_action_updates_player_volume);
 	tcase_add_test(tc_handle, test_socketio_volume_set_clamps_out_of_range);
+	tcase_add_test(tc_handle, test_socketio_volume_set_system_mode);
+	tcase_add_test(tc_handle, test_socketio_handle_rename_station_success);
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_sorts_snapshot);
 	tcase_add_test(tc_handle, test_socketio_unknown_action_emits_nothing);
 	suite_add_tcase(s, tc_handle);

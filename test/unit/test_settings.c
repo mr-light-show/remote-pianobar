@@ -566,10 +566,47 @@ START_TEST (test_parse_int_in_range_trailing_garbage_fails)
 }
 END_TEST
 
+START_TEST (test_settings_expand_tilde_without_home)
+{
+	char *abs = BarSettingsExpandTilde ("/absolute/path", NULL);
+	ck_assert_str_eq (abs, "/absolute/path");
+	free (abs);
+
+	char *tilde = BarSettingsExpandTilde ("~/config", NULL);
+	ck_assert_str_eq (tilde, "~/config");
+	free (tilde);
+}
+END_TEST
+
+START_TEST (test_settings_audio_quality_dispatch)
+{
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+
+	ck_assert_int_eq (write_file (cfg, "audio_quality = low\n"), 0);
+	BarSettings_t low;
+	read_settings_in_dir (&low, tmpl);
+	ck_assert_int_eq (low.audioQuality, PIANO_AQ_LOW);
+	BarSettingsDestroy (&low);
+
+	ck_assert_int_eq (write_file (cfg, "audio_quality = medium\n"), 0);
+	BarSettings_t medium;
+	read_settings_in_dir (&medium, tmpl);
+	ck_assert_int_eq (medium.audioQuality, PIANO_AQ_MEDIUM);
+	BarSettingsDestroy (&medium);
+}
+END_TEST
+
 Suite *settings_suite (void) {
 	Suite *s = suite_create ("Settings");
 	TCase *tc = tcase_create ("Core");
 	tcase_add_test (tc, test_settings_expand_tilde);
+	tcase_add_test (tc, test_settings_expand_tilde_without_home);
+	tcase_add_test (tc, test_settings_audio_quality_dispatch);
 	tcase_add_test (tc, test_settings_file_backed_account_only);
 	tcase_add_test (tc, test_settings_main_plus_file_accounts_default);
 	tcase_add_test (tc, test_settings_set_active_account_by_id);

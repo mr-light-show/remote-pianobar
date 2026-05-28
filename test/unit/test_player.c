@@ -504,6 +504,53 @@ START_TEST (test_player_thread_interrupt_during_playback)
 }
 END_TEST
 
+START_TEST (test_player_reinit_reuses_existing_engine)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+	if (!player.engineInitialized) {
+		player_thread_test_teardown (&player, &settings);
+		return;
+	}
+	const ma_engine *engine_before = &player.engine;
+	BarPlayerInit (&player, &settings);
+	ck_assert (player.engineInitialized);
+	ck_assert_ptr_eq (&player.engine, engine_before);
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_video_only_container)
+{
+	player_t player;
+	BarSettings_t settings;
+	char tmppath[] = "/tmp/pianobar-videoonly-XXXXXX";
+	char url[PATH_MAX + 32];
+
+	if (system ("command -v ffmpeg >/dev/null 2>&1") != 0) {
+		return;
+	}
+
+	close (mkstemp (tmppath));
+	char cmd[512];
+	snprintf (cmd, sizeof cmd,
+	          "ffmpeg -y -loglevel quiet -f lavfi -i color=c=black:s=64x64:d=0.1 "
+	          "-c:v libx264 -an '%s' 2>/dev/null", tmppath);
+	if (system (cmd) != 0) {
+		unlink (tmppath);
+		return;
+	}
+
+	player_thread_test_setup (&player, &settings);
+	snprintf (url, sizeof url, "file://%s", tmppath);
+	const uintptr_t ret = run_player_thread_sync (&player, url);
+	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
+	unlink (tmppath);
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -539,6 +586,8 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_thread, test_player_thread_hardfail_when_engine_uninitialized);
 	tcase_add_test (tc_thread, test_player_thread_plays_local_mp3_fixture);
 	tcase_add_test (tc_thread, test_player_thread_interrupt_during_playback);
+	tcase_add_test (tc_thread, test_player_reinit_reuses_existing_engine);
+	tcase_add_test (tc_thread, test_player_thread_video_only_container);
 	suite_add_tcase (s, tc_thread);
 	
 	return s;
