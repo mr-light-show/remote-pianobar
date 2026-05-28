@@ -95,7 +95,10 @@ void BarWsBroadcastSongStart(BarApp_t *app) {
 
 void BarWsBroadcastProcess(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
-		BarSocketIoEmitProcess(app);
+		struct json_object *data = BarSocketIoBuildProcessPayload (app);
+		char *msg = BarSocketIoFormatEventMessage ("process", data);
+		json_object_put (data);
+		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
 	}
 }
 
@@ -209,7 +212,10 @@ void BarWsStopPlaybackManager(BarApp_t *app) {
 
 /* Daemon singleton lock — returns false if lock cannot be acquired */
 bool BarWsAcquireSingletonLock(BarApp_t *app) {
-	if (!app || app->settings.uiMode == BAR_UI_MODE_CLI) {
+	if (!app) {
+		return true;
+	}
+	if (app->settings.uiMode == BAR_UI_MODE_CLI) {
 		app->lockFd = -1;
 		return true;
 	}

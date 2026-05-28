@@ -504,32 +504,15 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 
 /* Emit 'start' event (song started) */
 void BarSocketIoEmitStart(BarApp_t *app) {
-	json_object *data, *songData;
-	PianoSong_t *song = BarStateGetPlaylist(app);
-	
-	if (!app || !song) {
+	if (!app) {
 		return;
 	}
-	
-	/* Create song JSON with all fields including trackToken and songStationName */
-	songData = BarSocketIoCreateSongJson(app, song, true, "songStationName");
-	if (!songData) {
+
+	json_object *data = BarSocketIoBuildStartPayload (app);
+	if (data == NULL) {
 		return;
 	}
-	
-	/* Copy all song fields to root level for 'start' event */
-	data = json_object_get(songData);  /* Increment ref count */
-	
-	/* Add current station info */
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	if (curStation) {
-		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
-		json_object_object_add(data, "station", 
-		                       json_object_new_string(displayName));
-		json_object_object_add(data, "stationId",
-		                       json_object_new_string(curStation->id));
-	}
-	
+
 	BarSocketIoEmit("start", data);
 	json_object_put(data);
 }
@@ -621,91 +604,15 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 
 /* Emit 'process' event (full state) */
 void BarSocketIoEmitProcess(BarApp_t *app) {
-	json_object *data, *song;
-	
 	if (!app) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
 		return;
 	}
-	
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess starting\n");
-	
-	data = json_object_new_object();
-	PianoSong_t *playlist = BarStateGetPlaylist(app);
-	json_object_object_add(data, "playing", 
-	                       json_object_new_boolean(playlist != NULL));
-	
-	/* Include pause state */
-	pthread_mutex_lock(&app->player.lock);
-	bool paused = app->player.doPause;
-	pthread_mutex_unlock(&app->player.lock);
-	json_object_object_add(data, "paused", json_object_new_boolean(paused));
-	
-	/* Include current volume as 0-100 percentage */
-	int volumePercent;
-	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
-		volumePercent = BarSystemVolumeGet();
-		if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
-	} else {
-		/* Player mode: volume is already 0-100 linear */
-		volumePercent = app->settings.volume;
-	}
-	json_object_object_add(data, "volume", json_object_new_int(volumePercent));
-	
-	/* Always include station fields, even if NULL */
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	if (curStation) {
-		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
-		json_object_object_add(data, "station", 
-		                       json_object_new_string(displayName));
-		json_object_object_add(data, "stationId",
-		                       json_object_new_string(curStation->id));
-	} else {
-		json_object_object_add(data, "station", 
-		                       json_object_new_string(""));
-		json_object_object_add(data, "stationId",
-		                       json_object_new_string(""));
-	}
-	
-	if (playlist) {
-		/* Create song JSON with all fields including trackToken and songStationName */
-		song = BarSocketIoCreateSongJson(app, playlist, true, "songStationName");
-		if (song) {
-			json_object_object_add(data, "song", song);
-		}
-		
-		/* Include current elapsed time */
-		unsigned int elapsed = BarWebsocketGetElapsed(app);
-		json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
-	}
-	
-	/* Emit account info when multiple accounts are configured */
-	if (app->settings.accountCount > 0) {
-		const BarAccount_t *active = BarSettingsGetActiveAccount(&app->settings);
-		if (active) {
-			json_object *currentAcct = json_object_new_object();
-			json_object_object_add(currentAcct, "id",
-					json_object_new_string(active->id));
-			json_object_object_add(currentAcct, "label",
-					json_object_new_string(active->label ? active->label : active->id));
-			json_object_object_add(data, "current_account", currentAcct);
-		}
 
-		json_object *accountsArr = json_object_new_array();
-		for (size_t i = 0; i < app->settings.accountCount; i++) {
-			json_object *acctObj = json_object_new_object();
-			json_object_object_add(acctObj, "id",
-					json_object_new_string(app->settings.accounts[i].id));
-			json_object_object_add(acctObj, "label",
-					json_object_new_string(
-						app->settings.accounts[i].label ?
-						app->settings.accounts[i].label :
-						app->settings.accounts[i].id));
-			json_object_array_add(accountsArr, acctObj);
-		}
-		json_object_object_add(data, "accounts", accountsArr);
+	json_object *data = BarSocketIoBuildProcessPayload (app);
+	if (data == NULL) {
+		return;
 	}
-
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
 	BarSocketIoEmit("process", data);
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
@@ -744,13 +651,9 @@ struct json_object *BarSocketIoBuildStartPayload (BarApp_t *app) {
 	json_object_object_add (data, "rating",     json_object_new_int    (snap.rating));
 	json_object_object_add (data, "duration",   json_object_new_int    ((int) snap.duration));
 
-	/* Resolve songStationName from the song's stationId (brief separate lock acquisition) */
-	if (snap.songStationId) {
-		PianoStation_t *songStation = BarStateFindStationById (app, snap.songStationId);
-		if (songStation) {
-			const char *dn = songStation->displayName ? songStation->displayName : songStation->name;
-			json_object_object_add (data, "songStationName", json_object_new_string (dn ? dn : ""));
-		}
+	if (snap.songStationName) {
+		json_object_object_add (data, "songStationName",
+				json_object_new_string (snap.songStationName));
 	}
 
 	if (snap.hasStation) {
@@ -822,12 +725,9 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 		json_object_object_add (song, "trackToken", json_object_new_string (pbSnap.trackToken   ? pbSnap.trackToken   : ""));
 		json_object_object_add (song, "rating",     json_object_new_int    (pbSnap.rating));
 		json_object_object_add (song, "duration",   json_object_new_int    ((int) pbSnap.duration));
-		if (pbSnap.songStationId) {
-			PianoStation_t *songStation = BarStateFindStationById (app, pbSnap.songStationId);
-			if (songStation) {
-				const char *dn = songStation->displayName ? songStation->displayName : songStation->name;
-				json_object_object_add (song, "songStationName", json_object_new_string (dn ? dn : ""));
-			}
+		if (pbSnap.songStationName) {
+			json_object_object_add (song, "songStationName",
+					json_object_new_string (pbSnap.songStationName));
 		}
 		json_object_object_add (data, "song", song);
 		json_object_object_add (data, "elapsed",

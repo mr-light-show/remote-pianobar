@@ -424,7 +424,7 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 
 	BarInterruptSetTarget (&app->doQuit);
 
-	app->player.mode = PLAYER_DEAD;
+	BarPlayerSetMode (&app->player, PLAYER_DEAD);
 }
 
 /*	print song duration

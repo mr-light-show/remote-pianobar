@@ -25,6 +25,9 @@ THE SOFTWARE.
 #include <string.h>
 #include <time.h>
 #include "../../src/main.h"
+#include "../../src/settings.h"
+#include "../../src/bar_state.h"
+#include "../../src/websocket_bridge.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include <json-c/json.h>
@@ -66,6 +69,73 @@ START_TEST(test_websocket_broadcast_null) {
 	BarWebsocketBroadcastSocketIoMessage (NULL, BUCKET_STATE, msg);
 	/* If we get here without crashing, test passes */
 	ck_assert (1);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_singleton_lock_null_app) {
+	ck_assert(BarWsAcquireSingletonLock(NULL));
+}
+END_TEST
+
+static void test_ws_context_init_buckets (BarWsContext_t *ctx) {
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		pthread_mutex_init (&ctx->buckets[i].mutex, NULL);
+	}
+}
+
+static void test_ws_context_destroy_buckets (BarWsContext_t *ctx) {
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		if (ctx->buckets[i].message != NULL) {
+			BarWsMessageFree (ctx->buckets[i].message);
+			ctx->buckets[i].message = NULL;
+		}
+		pthread_mutex_destroy (&ctx->buckets[i].mutex);
+	}
+}
+
+START_TEST(test_websocket_bridge_broadcast_process_queues_snapshot_payload) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&song, 0, sizeof (song));
+	memset (&station, 0, sizeof (station));
+
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app.settings.volume = 40;
+	app.wsContext = &ctx;
+	test_ws_context_init_buckets (&ctx);
+	BarStateInit (&app);
+	pthread_mutex_init (&app.player.lock, NULL);
+
+	station.id = "station-1";
+	station.name = "Station One";
+	station.displayName = "Display One";
+	song.title = "Song One";
+	song.artist = "Artist One";
+	song.stationId = "station-1";
+	app.ph.stations = &station;
+	app.curStation = &station;
+	app.playlist = &song;
+
+	BarWsBroadcastProcess (&app);
+
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATE].message);
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATE].message->data);
+	const char *payload = (const char *)ctx.buckets[BUCKET_STATE].message->data;
+	ck_assert (strstr (payload, "\"process\"") != NULL);
+	ck_assert (strstr (payload, "\"song\"") != NULL);
+	ck_assert (strstr (payload, "songStationName") != NULL);
+	ck_assert (strstr (payload, "Display One") != NULL);
+
+	pthread_mutex_destroy (&app.player.lock);
+	BarStateDestroy (&app);
+	test_ws_context_destroy_buckets (&ctx);
+	BarSettingsDestroy (&app.settings);
 }
 END_TEST
 
@@ -165,6 +235,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_destroy_null);
 	tcase_add_test(tc_core, test_websocket_elapsed_null);
 	tcase_add_test(tc_core, test_websocket_broadcast_null);
+	tcase_add_test(tc_core, test_websocket_bridge_singleton_lock_null_app);
+	tcase_add_test(tc_core, test_websocket_bridge_broadcast_process_queues_snapshot_payload);
 	
 	suite_add_tcase(s, tc_core);
 

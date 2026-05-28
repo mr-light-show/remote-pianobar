@@ -25,6 +25,7 @@ THE SOFTWARE.
 #include <string.h>
 #include <pthread.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include <libavutil/error.h>
 
@@ -247,6 +248,42 @@ START_TEST (test_player_wait_for_mode_null_returns_false)
 }
 END_TEST
 
+typedef struct {
+	player_t *player;
+	bool result;
+} WaitForModeArgs_t;
+
+static void *wait_for_dead_thread (void *arg)
+{
+	WaitForModeArgs_t *args = (WaitForModeArgs_t *)arg;
+	args->result = BarPlayerWaitForMode (args->player, PLAYER_DEAD, 1000);
+	return NULL;
+}
+
+START_TEST (test_player_set_mode_wakes_waiter)
+{
+	player_t player;
+	BarSettings_t settings;
+	pthread_t waiter;
+	WaitForModeArgs_t args;
+	memset (&player, 0, sizeof (player));
+	BarSettingsInit (&settings);
+	BarPlayerInit (&player, &settings);
+	BarPlayerSetMode (&player, PLAYER_PLAYING);
+
+	args.player = &player;
+	args.result = false;
+	ck_assert_int_eq (pthread_create (&waiter, NULL, wait_for_dead_thread, &args), 0);
+	usleep (20000);
+	BarPlayerSetMode (&player, PLAYER_DEAD);
+	ck_assert_int_eq (pthread_join (waiter, NULL), 0);
+	ck_assert (args.result);
+
+	BarPlayerDestroy (&player);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -269,6 +306,7 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_wait, test_player_wait_for_mode_returns_true_when_already_in_mode);
 	tcase_add_test (tc_wait, test_player_wait_for_mode_times_out_when_mode_differs);
 	tcase_add_test (tc_wait, test_player_wait_for_mode_null_returns_false);
+	tcase_add_test (tc_wait, test_player_set_mode_wakes_waiter);
 	suite_add_tcase (s, tc_wait);
 	
 	return s;

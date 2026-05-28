@@ -156,9 +156,7 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 	/* Restore interrupt target to app->doQuit after song finishes */
 	BarInterruptSetTarget (&app->doQuit);
 
-	pthread_mutex_lock(&app->player.lock);
-	app->player.mode = PLAYER_DEAD;
-	pthread_mutex_unlock(&app->player.lock);
+	BarPlayerSetMode (&app->player, PLAYER_DEAD);
 }
 
 BarPlayerMode BarPlaybackManagerRefreshCachedModeAfterCleanup(

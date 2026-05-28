@@ -492,11 +492,7 @@ static void onSongEnd(void* pUserData, ma_sound* pSound) {
 	player_t* player = (player_t*)pUserData;
 	
 	log_write(DEBUG_AUDIO, "Song end callback fired\n");
-	
-	pthread_mutex_lock(&player->lock);
-	player->mode = PLAYER_FINISHED;
-	pthread_cond_broadcast(&player->cond);
-	pthread_mutex_unlock(&player->lock);
+	BarPlayerSetMode (player, PLAYER_FINISHED);
 }
 
 /*
@@ -610,7 +606,7 @@ void BarPlayerReset(player_t * const p) {
 	p->pauseStartTime = 0;
 	p->songDuration = 0;
 	p->songPlayed = 0;
-	p->mode = PLAYER_DEAD;
+	BarPlayerSetMode (p, PLAYER_DEAD);
 	p->fgraph = NULL;
 	p->fctx = NULL;
 	p->st = NULL;
@@ -902,7 +898,9 @@ bool BarPlayerIsPaused(player_t * const player) {
 	return ret;
 }
 
-static void changeMode(player_t * const player, unsigned int mode) {
+void BarPlayerSetMode (player_t * const player, BarPlayerMode mode) {
+	if (player == NULL) { return; }
+
 	pthread_mutex_lock(&player->lock);
 	player->mode = mode;
 	pthread_cond_broadcast(&player->cond);
@@ -1200,7 +1198,7 @@ void *BarPlayerThread(void *data) {
 			if (openFilter(player) && setupSound(player)) {
 				logRSSAudio("after openFilter+setupSound");
 
-				changeMode(player, PLAYER_PLAYING);
+				BarPlayerSetMode(player, PLAYER_PLAYING);
 				BarPlayerSetVolume(player);
 
 				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
@@ -1236,7 +1234,7 @@ void *BarPlayerThread(void *data) {
 					/* Check if song ended */
 					if (ma_sound_at_end(&player->sound)) {
 						log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
-						changeMode(player, PLAYER_FINISHED);
+						BarPlayerSetMode(player, PLAYER_FINISHED);
 						break;
 					}
 
@@ -1263,7 +1261,7 @@ void *BarPlayerThread(void *data) {
 				pret = PLAYER_RET_SOFTFAIL;
 			}
 		}
-		changeMode(player, PLAYER_WAITING);
+		BarPlayerSetMode(player, PLAYER_WAITING);
 		finish(player);
 
 		/* Check quit after cleanup before retry */
@@ -1273,7 +1271,7 @@ void *BarPlayerThread(void *data) {
 		}
 	} while (retry);
 
-	changeMode(player, PLAYER_FINISHED);
+	BarPlayerSetMode(player, PLAYER_FINISHED);
 
 	return (void *) pret;
 }

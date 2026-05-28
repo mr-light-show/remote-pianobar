@@ -385,12 +385,15 @@ START_TEST(test_socketio_rating_emits_state) {
 	song.trackToken = "test_token";
 	song.rating = PIANO_RATE_LOVE;  /* After successful rate-song, same as ui_act */
 	song.length = 180;
+	song.stationId = "S123456";
 	
 	station.name = "Test Station";
+	station.displayName = "Display Station";
 	station.id = "S123456";
 	
 	app.playlist = &song;
 	app.curStation = &station;
+	app.ph.stations = &station;
 	BarSettingsInit(&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
@@ -410,6 +413,8 @@ START_TEST(test_socketio_rating_emits_state) {
 	ck_assert(strstr(lastBroadcastMessage, "\"song\"") != NULL);
 	ck_assert(strstr(lastBroadcastMessage, "rating") != NULL);
 	ck_assert(strstr(lastBroadcastMessage, "1") != NULL);  /* PIANO_RATE_LOVE = 1 */
+	ck_assert(strstr(lastBroadcastMessage, "songStationName") != NULL);
+	ck_assert(strstr(lastBroadcastMessage, "Display Station") != NULL);
 	
 	pthread_mutex_destroy(&app.player.lock);
 	#ifdef WEBSOCKET_ENABLED
@@ -417,6 +422,37 @@ START_TEST(test_socketio_rating_emits_state) {
 	#endif
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+}
+END_TEST
+
+START_TEST(test_socketio_build_start_payload_uses_snapshot_song_station_name) {
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station;
+
+	memset(&app, 0, sizeof(app));
+	memset(&song, 0, sizeof(song));
+	memset(&station, 0, sizeof(station));
+
+	BarSettingsInit(&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	station.id = "song-station";
+	station.name = "Raw Station";
+	station.displayName = "Snapshot Station";
+	song.title = "Snapshot Song";
+	song.artist = "Snapshot Artist";
+	song.stationId = "song-station";
+	app.playlist = &song;
+	app.ph.stations = &station;
+
+	json_object *payload = BarSocketIoBuildStartPayload(&app);
+	ck_assert_ptr_nonnull(payload);
+	const char *text = json_object_to_json_string(payload);
+	ck_assert(strstr(text, "songStationName") != NULL);
+	ck_assert(strstr(text, "Snapshot Station") != NULL);
+
+	json_object_put(payload);
+	BarSettingsDestroy(&app.settings);
 }
 END_TEST
 
@@ -711,6 +747,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_query);
 	tcase_add_test(tc_handle, test_socketio_ping_keepalive_noop);
 	tcase_add_test(tc_handle, test_socketio_rating_emits_state);
+	tcase_add_test(tc_handle, test_socketio_build_start_payload_uses_snapshot_song_station_name);
 	suite_add_tcase(s, tc_handle);
 
 	/* Formatter tests */

@@ -402,6 +402,18 @@ void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out) 
 		out->songStationId  = song->stationId  ? strdup (song->stationId)  : NULL;
 		out->duration   = song->length;
 		out->rating     = song->rating;
+		if (song->stationId != NULL) {
+			const PianoStation_t *songStation = app->ph.stations;
+			PianoListForeachP (songStation) {
+				if (songStation->id != NULL &&
+						strcmp (songStation->id, song->stationId) == 0) {
+					const char *name = songStation->displayName ?
+							songStation->displayName : songStation->name;
+					out->songStationName = name ? strdup (name) : NULL;
+					break;
+				}
+			}
+		}
 	}
 
 	state_rwlock_unlock_internal (app, "SnapshotPlayback", NULL);
@@ -417,6 +429,7 @@ void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap) {
 	free (snap->songCoverArt);
 	free (snap->trackToken);
 	free (snap->songStationId);
+	free (snap->songStationName);
 	memset (snap, 0, sizeof (*snap));
 }
 

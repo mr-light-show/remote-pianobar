@@ -505,8 +505,11 @@ START_TEST(test_bar_state_snapshot_playback_with_song)
 
 	station.id   = "sid";
 	station.name = "My Station";
+	station.displayName = "Display Station";
+	app.ph.stations = &station;
 	song.title   = "Cool Track";
 	song.artist  = "Cool Artist";
+	song.stationId = "sid";
 
 	app.curStation = &station;
 	app.playlist   = &song;
@@ -516,13 +519,15 @@ START_TEST(test_bar_state_snapshot_playback_with_song)
 	ck_assert (snap.hasStation);
 	ck_assert (snap.hasSong);
 	ck_assert_str_eq (snap.stationId,   "sid");
-	ck_assert_str_eq (snap.stationName, "My Station");
+	ck_assert_str_eq (snap.stationName, "Display Station");
 	ck_assert_str_eq (snap.songTitle,   "Cool Track");
 	ck_assert_str_eq (snap.songArtist,  "Cool Artist");
+	ck_assert_str_eq (snap.songStationName, "Display Station");
 
 	BarStateFreePlaybackSnapshot (&snap);
 	ck_assert_ptr_null (snap.stationId);
 	ck_assert_ptr_null (snap.songTitle);
+	ck_assert_ptr_null (snap.songStationName);
 	BarStateDestroy (&app);
 }
 END_TEST

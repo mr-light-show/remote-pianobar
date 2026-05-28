@@ -119,10 +119,10 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 	BarWsBroadcastSongStart (app);
 
 	/* Prevent race condition: mode must not be DEAD when thread starts */
-	app->player.mode = PLAYER_WAITING;
+	BarPlayerSetMode (&app->player, PLAYER_WAITING);
 	if (pthread_create (playerThread, NULL, BarPlayerThread, &app->player) != 0) {
 		BarInterruptSetTarget (&app->doQuit);
-		app->player.mode = PLAYER_DEAD;
+		BarPlayerSetMode (&app->player, PLAYER_DEAD);
 		return false;
 	}
 	return true;

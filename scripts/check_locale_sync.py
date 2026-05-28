@@ -89,9 +89,7 @@ def main() -> int:
     ha_common_path = None
     ha: dict = {}
     if ha_path.exists():
-        raw = load_json(ha_path)
-        # HA stores extra UI strings under "common" with slug keys
-        ha = raw.get("common", {})
+        ha = load_json(ha_path)
         ha_common_path = ha_path
 
     # Card (JSON) — optional (sibling repo)

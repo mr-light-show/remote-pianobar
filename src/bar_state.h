@@ -152,6 +152,7 @@ typedef struct {
 	char        *songCoverArt;
 	char        *trackToken;
 	char        *songStationId;   /* song->stationId for songStationName lookup */
+	char        *songStationName; /* copied under lock from song->stationId */
 	unsigned int duration;
 	int          rating;
 	bool         hasSong;
