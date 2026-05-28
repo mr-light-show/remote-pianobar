@@ -7,8 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "../../src/bar_constants.h"
+#include "../../src/bar_state.h"
 #include "../../src/l10n.h"
 #include "../../src/main.h"
 #include "../../src/player.h"
@@ -39,6 +42,8 @@ void BarUiActQuit (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActSkipSong (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
+void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
+		const char *resume_station_id_override);
 bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
@@ -259,6 +264,67 @@ START_TEST (test_transform_owned_station_skips_pandora_call)
 }
 END_TEST
 
+static void
+read_default_settings (BarSettings_t *settings)
+{
+	char tmpl[] = "/tmp/piano_ui_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char sub[512];
+	snprintf (sub, sizeof (sub), "%s/pianobar", tmpl);
+	ck_assert_int_eq (mkdir (sub, 0700), 0);
+	char cfg[512];
+	snprintf (cfg, sizeof (cfg), "%s/config", sub);
+	FILE *f = fopen (cfg, "w");
+	ck_assert_ptr_nonnull (f);
+	fclose (f);
+
+	ck_assert_int_eq (setenv ("HOME", tmpl, 1), 0);
+	ck_assert_int_eq (setenv ("XDG_CONFIG_HOME", tmpl, 1), 0);
+	BarSettingsInit (settings);
+	BarSettingsRead (settings);
+}
+
+START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "resume-station";
+	BarStateSetCurrentStation (&app, &station);
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	BarUiDoPandoraDisconnect (&app, "user", NULL);
+
+	ck_assert_ptr_nonnull (app.lastStationId);
+	ck_assert_str_eq (app.lastStationId, "resume-station");
+	ck_assert_ptr_nonnull (last_broadcast_msg);
+	ck_assert (strstr (last_broadcast_msg, "pandora.disconnected") != NULL);
+	ck_assert (strstr (last_broadcast_msg, "user") != NULL);
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -273,6 +339,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_quit);
 	tcase_add_test (tc, test_disconnect_player_wait_returns_fast_when_already_dead);
 	tcase_add_test (tc, test_transform_owned_station_skips_pandora_call);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_when_player_already_dead);
 	suite_add_tcase (s, tc);
 	return s;
 }

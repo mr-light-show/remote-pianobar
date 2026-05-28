@@ -139,6 +139,11 @@ START_TEST(test_daemon_write_lock_pid_rejects_invalid_fd) {
 }
 END_TEST
 
+START_TEST(test_daemonize_steps_rejects_null_app) {
+	ck_assert(!BarDaemonizeSteps(NULL));
+}
+END_TEST
+
 /* Create test suite */
 Suite *daemon_suite(void) {
 	Suite *s;
@@ -158,6 +163,7 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_get_lock_file_path_is_under_config);
 	tcase_add_test(tc_core, test_daemon_lock_acquire_write_read_roundtrip);
 	tcase_add_test(tc_core, test_daemon_write_lock_pid_rejects_invalid_fd);
+	tcase_add_test(tc_core, test_daemonize_steps_rejects_null_app);
 	
 	suite_add_tcase(s, tc_core);
 	

@@ -532,6 +532,52 @@ START_TEST(test_bar_state_snapshot_playback_with_song)
 }
 END_TEST
 
+START_TEST (test_bar_state_snapshot_playback_unknown_song_station_id)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	memset (&app, 0, sizeof (app));
+	memset (&song, 0, sizeof (song));
+	BarStateInit (&app);
+
+	song.title = "Orphan Track";
+	song.stationId = "missing-station";
+	app.playlist = &song;
+
+	BarPlaybackSnapshot_t snap;
+	BarStateSnapshotPlayback (&app, &snap);
+	ck_assert (snap.hasSong);
+	ck_assert_str_eq (snap.songTitle, "Orphan Track");
+	ck_assert_ptr_null (snap.songStationName);
+
+	BarStateFreePlaybackSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_snapshot_stations_uses_display_name)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarStateInit (&app);
+
+	station.id = "sid";
+	station.name = "Raw Name";
+	station.displayName = "Pretty Name";
+	app.ph.stations = &station;
+
+	BarStationSnapshotList_t snap;
+	ck_assert (BarStateSnapshotStations (&app, &snap));
+	ck_assert_uint_eq (snap.count, 1);
+	ck_assert_str_eq (snap.items[0].displayName, "Pretty Name");
+
+	BarStateFreeStationSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -578,6 +624,8 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_empty);
 	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_no_song);
 	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_with_song);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_unknown_song_station_id);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_uses_display_name);
 	suite_add_tcase(s, tc_snap);
 
 	return s;

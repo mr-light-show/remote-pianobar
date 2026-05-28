@@ -338,6 +338,87 @@ START_TEST (test_settings_table_dispatch_handles_typical_user_overrides_and_typo
 }
 END_TEST
 
+START_TEST (test_settings_table_dispatch_remaining_backends_sorts_and_accounts) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	char acct[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	snprintf (acct, sizeof (acct), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (acct,
+			"user = work-user\n"
+			"password = work-pass\n"
+			"account_label = Work Account\n"
+			"autostart_station = ws-1\n"), 0);
+	ck_assert_int_eq (write_file (cfg,
+			"user = main-user\n"
+			"password = main-pass\n"
+			"sort = quickmix_01_name_za\n"
+			"audio_backend = jack\n"
+			"volume_mode = player\n"
+			"ui_mode = cli\n"
+			"account = work:work.conf\n"
+			"default_account = work\n"
+			"main_account_id = home\n"
+			"account_label = Home Account\n"
+			"format_msg_err = ERR:%s!\n"
+			"unknown_future_key = ignored\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_int_eq (s.sortOrder, BAR_SORT_QUICKMIX_01_NAME_ZA);
+	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_JACK);
+	ck_assert_int_eq (s.volumeMode, BAR_VOLUME_MODE_PLAYER);
+#ifdef WEBSOCKET_ENABLED
+	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_CLI);
+#endif
+	ck_assert_uint_eq (s.accountCount, 2);
+	ck_assert_str_eq (s.accounts[0].id, "home");
+	ck_assert_str_eq (s.accounts[0].label, "Home Account");
+	ck_assert_str_eq (s.accounts[0].username, "main-user");
+	ck_assert_str_eq (s.accounts[1].id, "work");
+	ck_assert_str_eq (s.accounts[1].label, "Work Account");
+	ck_assert_str_eq (s.accounts[1].username, "work-user");
+	ck_assert_str_eq (s.accounts[1].password, "work-pass");
+	ck_assert_str_eq (s.accounts[1].autostartStation, "ws-1");
+	ck_assert_uint_eq (s.activeAccountIndex, 1);
+	ck_assert_str_eq (s.msgFormat[MSG_ERR].prefix, "ERR:");
+	ck_assert_str_eq (s.msgFormat[MSG_ERR].postfix, "!");
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_table_dispatch_auto_and_pulseaudio_backends) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"audio_backend = pulseaudio\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_PULSEAUDIO);
+	BarSettingsDestroy (&s);
+
+	ck_assert_int_eq (write_file (cfg, "audio_backend = wasapi\n"), 0);
+	read_settings_in_dir (&s, tmpl);
+	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_WASAPI);
+	BarSettingsDestroy (&s);
+
+	ck_assert_int_eq (write_file (cfg, "audio_backend = unknown-backend\n"), 0);
+	read_settings_in_dir (&s, tmpl);
+	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_AUTO);
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
 START_TEST (test_parse_int_in_range_valid)
 {
 	int out = -1;
@@ -427,6 +508,8 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_locale_from_config);
 	tcase_add_test (tc, test_settings_table_dispatch_realistic_player_and_web_config);
 	tcase_add_test (tc, test_settings_table_dispatch_handles_typical_user_overrides_and_typos);
+	tcase_add_test (tc, test_settings_table_dispatch_remaining_backends_sorts_and_accounts);
+	tcase_add_test (tc, test_settings_table_dispatch_auto_and_pulseaudio_backends);
 
 	TCase *tc_parse = tcase_create ("ParseIntInRange");
 	tcase_add_test (tc_parse, test_parse_int_in_range_valid);

@@ -284,6 +284,13 @@ START_TEST (test_player_set_mode_wakes_waiter)
 }
 END_TEST
 
+START_TEST (test_player_set_mode_null_is_noop)
+{
+	BarPlayerSetMode (NULL, PLAYER_PLAYING);
+	ck_assert (1);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -307,6 +314,7 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_wait, test_player_wait_for_mode_times_out_when_mode_differs);
 	tcase_add_test (tc_wait, test_player_wait_for_mode_null_returns_false);
 	tcase_add_test (tc_wait, test_player_set_mode_wakes_waiter);
+	tcase_add_test (tc_wait, test_player_set_mode_null_is_noop);
 	suite_add_tcase (s, tc_wait);
 	
 	return s;

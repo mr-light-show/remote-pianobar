@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include <json-c/json.h>
+#include <pthread.h>
 
 /* Wire-compat capture buffer */
 static char g_compatBuf[8192];
@@ -361,6 +362,37 @@ START_TEST(test_websocket_bridge_print_helpers_and_input_setup) {
 }
 END_TEST
 
+START_TEST(test_websocket_schedule_volume_broadcast_sets_pending_flag) {
+	BarWsContext_t ctx;
+	memset (&ctx, 0, sizeof (ctx));
+	ck_assert_int_eq (pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL), 0);
+
+	BarWsScheduleVolumeBroadcast (&ctx, 250);
+
+	pthread_mutex_lock (&ctx.volumeBroadcastMutex);
+	ck_assert (ctx.delayedVolumeBroadcast.pending);
+	ck_assert_int_gt (ctx.delayedVolumeBroadcast.scheduleTime, 0);
+	pthread_mutex_unlock (&ctx.volumeBroadcastMutex);
+
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_both_mode_is_web_active) {
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+
+	ck_assert (BarWsIsWebActive (&app));
+	ck_assert (BarWsSettingsIsWebActive (&app.settings));
+	ck_assert (!BarIsWebOnlyMode (&app));
+	ck_assert (!BarShouldSkipCliOutput (&app));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_predicates_and_cli_noops) {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
@@ -494,6 +526,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
+	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);
+	tcase_add_test(tc_core, test_websocket_bridge_both_mode_is_web_active);
 	tcase_add_test(tc_core, test_websocket_bridge_print_helpers_and_input_setup);
 	tcase_add_test(tc_core, test_websocket_bridge_predicates_and_cli_noops);
 	
