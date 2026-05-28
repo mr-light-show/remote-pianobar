@@ -35,6 +35,7 @@ static const BarL10nDefaultPair_t bar_l10n_defaults[] = {
 	{ "cli.password_prompt", "Password: " },
 	{ "cli.password_read_error", "Error reading password: %s\n" },
 	{ "cli.piano_init_failed", "Initialization failed: %s\n" },
+	{ "cli.piano_reinit_failed", "Failed to reset Pandora session: %s\n" },
 	{ "cli.player_thread_detach", "Player thread did not exit within 10s, detaching\n" },
 	{ "cli.playlist_session_error", "Pandora session error; disconnected. Reconnect to resume playback.\n" },
 	{ "cli.press_help", "Press %c for a list of commands.\n" },

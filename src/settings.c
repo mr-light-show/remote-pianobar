@@ -78,6 +78,9 @@ static char *BarGetXdgConfigDir (const char * const filename) {
 		const size_t len = (strlen (xdgConfigDir) + 1 +
 				strlen (filename) + 1);
 		char * const concat = malloc (len * sizeof (*concat));
+		if (concat == NULL) {
+			return NULL;
+		}
 		snprintf (concat, len, "%s/%s", xdgConfigDir, filename);
 		return concat;
 	}
@@ -89,12 +92,14 @@ static char *BarGetXdgConfigDir (const char * const filename) {
  */
 char *BarSettingsExpandTilde (const char * const path, const char * const home) {
 	assert (path != NULL);
-	assert (home != NULL);
 
-	if (strncmp (path, "~/", 2) == 0) {
-		char * const expanded = malloc ((strlen (home) + 1 + strlen (path)-2 + 1) *
-				sizeof (*expanded));
-		sprintf (expanded, "%s/%s", home, &path[2]);
+	if (home != NULL && strncmp (path, "~/", 2) == 0) {
+		const size_t expandedLen = strlen (home) + 1 + strlen (path) - 2 + 1;
+		char * const expanded = malloc (expandedLen * sizeof (*expanded));
+		if (expanded == NULL) {
+			return strdup (path);
+		}
+		snprintf (expanded, expandedLen, "%s/%s", home, &path[2]);
 		return expanded;
 	}
 
@@ -206,6 +211,9 @@ static char *BarSettingsResolveAccountPath (const char *path, const char *config
 	/* relative to config dir */
 	size_t len = strlen (configDir) + 1 + strlen (path) + 1;
 	char *resolved = malloc (len);
+	if (resolved == NULL) {
+		return NULL;
+	}
 	snprintf (resolved, len, "%s/%s", configDir, path);
 	return resolved;
 }
@@ -357,8 +365,13 @@ void BarSettingsRead (BarSettings_t *settings) {
 	char * const userhome = BarSettingsGetHome ();
 	assert (userhome != NULL);
 	/* set xdg config path (if not set) */
-	char * const defaultxdg = malloc (strlen (userhome) + strlen ("/.config") + 1);
-	sprintf (defaultxdg, "%s/.config", userhome);
+	const size_t defaultxdgLen = strlen (userhome) + strlen ("/.config") + 1;
+	char * const defaultxdg = malloc (defaultxdgLen);
+	if (defaultxdg == NULL) {
+		log_write (LOG_ERROR, "settings: out of memory for XDG config path");
+		return;
+	}
+	snprintf (defaultxdg, defaultxdgLen, "%s/.config", userhome);
 	setenv ("XDG_CONFIG_HOME", defaultxdg, 0);
 	free (defaultxdg);
 

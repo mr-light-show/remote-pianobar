@@ -812,8 +812,17 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 	 * Serialize with BarUiPianoCall — same app->ph. */
 	pthread_mutex_lock(&app->pianoHttpMutex);
 	PianoDestroy(&app->ph);
-	PianoInit(&app->ph, app->settings.partnerUser, app->settings.partnerPassword,
-	          app->settings.device, app->settings.inkey, app->settings.outkey);
+	PianoReturn_t piRet = PianoInit(&app->ph, app->settings.partnerUser,
+	          app->settings.partnerPassword, app->settings.device,
+	          app->settings.inkey, app->settings.outkey);
+	if (piRet != PIANO_RET_OK) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
+		BarUiMsg(&app->settings, MSG_ERR,
+				BarL10nGet(&app->l10n, "cli.piano_reinit_failed"),
+				PianoErrorToStr (piRet));
+		app->player.interrupted = 1;
+		return;
+	}
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	
 #ifdef WEBSOCKET_ENABLED
@@ -1301,8 +1310,17 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 
 	pthread_mutex_lock(&app->pianoHttpMutex);
 	PianoDestroy(&app->ph);
-	PianoInit(&app->ph, app->settings.partnerUser, app->settings.partnerPassword,
-	          app->settings.device, app->settings.inkey, app->settings.outkey);
+	PianoReturn_t piInitRet = PianoInit(&app->ph, app->settings.partnerUser,
+	          app->settings.partnerPassword, app->settings.device,
+	          app->settings.inkey, app->settings.outkey);
+	if (piInitRet != PIANO_RET_OK) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
+		BarUiMsg(&app->settings, MSG_ERR,
+				BarL10nGet(&app->l10n, "cli.piano_reinit_failed"),
+				PianoErrorToStr (piInitRet));
+		app->player.interrupted = 1;
+		return;
+	}
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 
 	if (acct && acct->label) {

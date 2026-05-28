@@ -22,7 +22,6 @@ uselessAssignmentArg:src/system_volume.c
 unreadVariable:src/system_volume.c
 redundantCondition:src/ui.c
 invalidPrintfArgType_sint:src/ui.c
-nullPointerOutOfMemory:src/ui.c
 variableScope:src/ui.c
 knownPointerToBool:src/ui.c
 constParameterCallback:src/ui.c

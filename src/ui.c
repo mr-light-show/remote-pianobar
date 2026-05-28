@@ -502,6 +502,10 @@ PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
 
 	stationCount = PianoListCountP (unsortedStations);
 	stationArray = calloc (stationCount, sizeof (*stationArray));
+	if (stationArray == NULL) {
+		*retStationCount = 0;
+		return NULL;
+	}
 
 	/* copy station pointers */
 	i = 0;
