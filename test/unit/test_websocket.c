@@ -378,6 +378,32 @@ START_TEST(test_websocket_schedule_volume_broadcast_sets_pending_flag) {
 }
 END_TEST
 
+START_TEST(test_websocket_bridge_upcoming_skips_without_unicast_target) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	test_setup_web_app (&app, &ctx);
+	memset (&song, 0, sizeof (song));
+	song.title = "Hidden Upcoming";
+
+	BarSocketIoSetBroadcastCallback (compatCapture);
+	g_compatBuf[0] = '\0';
+	BarSocketIoSetUnicastTarget (NULL);
+
+	BarWsBroadcastUpcoming (&app, &song, 1);
+	ck_assert_str_eq (g_compatBuf, "");
+
+	BarSocketIoSetBroadcastCallback (NULL);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_disconnect_all_clients_null_app) {
+	BarWebsocketDisconnectAllClients (NULL);
+	ck_assert (1);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_both_mode_is_web_active) {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
@@ -525,6 +551,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
+	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_without_unicast_target);
+	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);
 	tcase_add_test(tc_core, test_websocket_bridge_both_mode_is_web_active);

@@ -419,6 +419,75 @@ START_TEST (test_settings_table_dispatch_auto_and_pulseaudio_backends) {
 }
 END_TEST
 
+START_TEST (test_settings_table_dispatch_invalid_websocket_port_ignored) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg, "websocket_port = 70000\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+#ifdef WEBSOCKET_ENABLED
+	/* Out-of-range values are ignored; default remains unset (0). */
+	ck_assert_int_eq (s.websocketPort, 0);
+#endif
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_table_dispatch_rejects_malformed_account_line) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = solo\n"
+			"password = solo\n"
+			"account = missing-colon\n"
+			"default_account = ghost\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert_str_eq (s.accounts[0].username, "solo");
+	ck_assert_uint_eq (s.activeAccountIndex, 0);
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_table_dispatch_all_sort_orders) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+
+	static const struct { const char *key; BarStationSorting_t expect; } cases[] = {
+		{"name_za", BAR_SORT_NAME_ZA},
+		{"quickmix_01_name_az", BAR_SORT_QUICKMIX_01_NAME_AZ},
+		{"quickmix_10_name_az", BAR_SORT_QUICKMIX_10_NAME_AZ},
+		{"quickmix_10_name_za", BAR_SORT_QUICKMIX_10_NAME_ZA},
+	};
+
+	for (size_t i = 0; i < sizeof (cases) / sizeof (cases[0]); i++) {
+		char body[64];
+		snprintf (body, sizeof (body), "sort = %s\n", cases[i].key);
+		ck_assert_int_eq (write_file (cfg, body), 0);
+		BarSettings_t s;
+		read_settings_in_dir (&s, tmpl);
+		ck_assert_int_eq (s.sortOrder, cases[i].expect);
+		BarSettingsDestroy (&s);
+	}
+}
+END_TEST
+
 START_TEST (test_parse_int_in_range_valid)
 {
 	int out = -1;
@@ -510,6 +579,9 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_table_dispatch_handles_typical_user_overrides_and_typos);
 	tcase_add_test (tc, test_settings_table_dispatch_remaining_backends_sorts_and_accounts);
 	tcase_add_test (tc, test_settings_table_dispatch_auto_and_pulseaudio_backends);
+	tcase_add_test (tc, test_settings_table_dispatch_invalid_websocket_port_ignored);
+	tcase_add_test (tc, test_settings_table_dispatch_rejects_malformed_account_line);
+	tcase_add_test (tc, test_settings_table_dispatch_all_sort_orders);
 
 	TCase *tc_parse = tcase_create ("ParseIntInRange");
 	tcase_add_test (tc_parse, test_parse_int_in_range_valid);

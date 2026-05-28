@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include <json-c/json.h>
 #include "../../src/main.h"
 #include "../../src/l10n.h"
+#include "../../src/bar_state.h"
 #include "../../src/settings.h"
 #include "../../src/ui.h"
 #include "../../src/system_volume.h"
@@ -667,6 +668,129 @@ START_TEST (test_socketio_emit_pandora_disconnected_includes_reason) {
 }
 END_TEST
 
+START_TEST (test_socketio_handle_change_station_switches_when_found) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	station.id = "live-station";
+	station.name = "Live Station";
+	app.ph.stations = &station;
+
+	BarSocketIoHandleChangeStation (&app, "live-station");
+
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
+	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_volume_set_action_updates_player_volume) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	BarSettingsInit (&app.settings);
+	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app.settings.volume = 50;
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL), 0);
+	app.player.settings = &app.settings;
+	app.wsContext = &ctx;
+
+	data = json_object_new_object ();
+	json_object_object_add (data, "volume", json_object_new_int (33));
+
+	BarSocketIoHandleAction (&app, "volume.set", data, NULL);
+
+	ck_assert_int_eq (app.settings.volume, 33);
+	pthread_mutex_lock (&ctx.volumeBroadcastMutex);
+	ck_assert (ctx.delayedVolumeBroadcast.pending);
+	pthread_mutex_unlock (&ctx.volumeBroadcastMutex);
+
+	json_object_put (data);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	pthread_mutex_destroy (&app.player.lock);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_volume_set_clamps_out_of_range) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	BarSettingsInit (&app.settings);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL), 0);
+	app.player.settings = &app.settings;
+	app.wsContext = &ctx;
+
+	data = json_object_new_object ();
+	json_object_object_add (data, "volume", json_object_new_int (150));
+	BarSocketIoHandleAction (&app, "volume.set", data, NULL);
+	ck_assert_int_eq (app.settings.volume, 100);
+
+	json_object_put (data);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	pthread_mutex_destroy (&app.player.lock);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_build_stations_payload_sorts_snapshot) {
+	BarApp_t app;
+	PianoStation_t beta, alpha;
+	memset (&app, 0, sizeof (app));
+	memset (&beta, 0, sizeof (beta));
+	memset (&alpha, 0, sizeof (alpha));
+	BarSettingsInit (&app.settings);
+	app.settings.sortOrder = BAR_SORT_NAME_AZ;
+	BarStateInit (&app);
+	beta.id = "b"; beta.name = "Beta";
+	alpha.id = "a"; alpha.name = "Alpha";
+	beta.head.next = (PianoListHead_t *) &alpha;
+	app.ph.stations = &beta;
+
+	json_object *payload = BarSocketIoBuildStationsPayload (&app);
+	ck_assert_ptr_nonnull (payload);
+	ck_assert_int_eq (json_object_array_length (payload), 2);
+	struct json_object *first = json_object_array_get_idx (payload, 0);
+	struct json_object *nameObj = NULL;
+	ck_assert (json_object_object_get_ex (first, "name", &nameObj));
+	ck_assert_str_eq (json_object_get_string (nameObj), "Alpha");
+
+	json_object_put (payload);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_unknown_action_emits_nothing) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	BarSettingsInit (&app.settings);
+	app.wsContext = &ctx;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+
+	BarSocketIoHandleAction (&app, "not.a.real.action", NULL, NULL);
+	ck_assert_ptr_null (lastBroadcastMessage);
+
+	BarSettingsDestroy (&app.settings);
+	clearBroadcastMock ();
+}
+END_TEST
+
 static void free_settings_accounts (BarApp_t *app) {
 	if (!app->settings.accounts || app->settings.accountCount == 0) {
 		return;
@@ -968,6 +1092,11 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_emit_stations_empty_when_list_missing);
 	tcase_add_test(tc_handle, test_socketio_emit_play_state_reports_paused_flag);
 	tcase_add_test(tc_handle, test_socketio_emit_pandora_disconnected_includes_reason);
+	tcase_add_test(tc_handle, test_socketio_handle_change_station_switches_when_found);
+	tcase_add_test(tc_handle, test_socketio_volume_set_action_updates_player_volume);
+	tcase_add_test(tc_handle, test_socketio_volume_set_clamps_out_of_range);
+	tcase_add_test(tc_handle, test_socketio_build_stations_payload_sorts_snapshot);
+	tcase_add_test(tc_handle, test_socketio_unknown_action_emits_nothing);
 	suite_add_tcase(s, tc_handle);
 
 	/* Formatter tests */

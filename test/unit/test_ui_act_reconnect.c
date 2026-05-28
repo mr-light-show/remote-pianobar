@@ -44,6 +44,7 @@ void BarUiActSkipSong (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
+void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
 bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
@@ -325,6 +326,70 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 }
 END_TEST
 
+START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	BarUiDoPandoraDisconnect (&app, "idle_timeout", "override-station");
+
+	ck_assert_ptr_nonnull (app.lastStationId);
+	ck_assert_str_eq (app.lastStationId, "override-station");
+	ck_assert (strstr (last_broadcast_msg, "idle_timeout") != NULL);
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
+{
+	BarApp_t app;
+	PianoStation_t from, to;
+	PianoSong_t song;
+	memset (&app, 0, sizeof (app));
+	memset (&from, 0, sizeof (from));
+	memset (&to, 0, sizeof (to));
+	memset (&song, 0, sizeof (song));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	from.id = "from"; from.name = "From";
+	to.id = "to"; to.name = "To";
+	app.curStation = &from;
+	app.playlist = &song;
+
+	BarUiSwitchStation (&app, &to);
+
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &to);
+	{
+		PianoSong_t *pl = BarStateGetPlaylist (&app);
+		ck_assert_ptr_nonnull (pl);
+		ck_assert_ptr_null (pl->head.next);
+	}
+
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -340,6 +405,8 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_disconnect_player_wait_returns_fast_when_already_dead);
 	tcase_add_test (tc, test_transform_owned_station_skips_pandora_call);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_when_player_already_dead);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_idle_timeout_message);
+	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
 	suite_add_tcase (s, tc);
 	return s;
 }

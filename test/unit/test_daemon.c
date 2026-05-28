@@ -145,6 +145,11 @@ START_TEST(test_daemonize_steps_rejects_null_app) {
 END_TEST
 
 /* Create test suite */
+START_TEST(test_daemon_kill_running_nonexistent_pid_file) {
+	ck_assert(!BarDaemonKillRunning("/tmp/nonexistent_pianobar_kill.pid"));
+}
+END_TEST
+
 Suite *daemon_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -164,6 +169,7 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_lock_acquire_write_read_roundtrip);
 	tcase_add_test(tc_core, test_daemon_write_lock_pid_rejects_invalid_fd);
 	tcase_add_test(tc_core, test_daemonize_steps_rejects_null_app);
+	tcase_add_test(tc_core, test_daemon_kill_running_nonexistent_pid_file);
 	
 	suite_add_tcase(s, tc_core);
 	
