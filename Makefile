@@ -376,8 +376,8 @@ test-all: test lint
 test-coverage: clean
 	${SILENTECHO} "   TEST  Building with coverage instrumentation..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -g -O0" LDFLAGS="${LDFLAGS} --coverage"
-	${SILENTECHO} "   TEST  Running test suite..."
-	${SILENTCMD}./${TEST_BIN}
+	${SILENTECHO} "   TEST  Running test suite (CI parity: integration + headless audio)..."
+	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
 	${SILENTECHO} "   COV   Generating coverage report..."
 	${SILENTCMD}lcov --capture --directory . --output-file coverage.info --rc lcov_branch_coverage=1
 	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info --rc lcov_branch_coverage=1

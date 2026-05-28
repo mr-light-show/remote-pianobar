@@ -23,7 +23,11 @@ THE SOFTWARE.
 #include <check.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <stdlib.h>
 
+#include "../../src/bar_state.h"
+#include "../../src/interrupt.h"
 #include "../../src/playback_lifecycle.h"
 #include "../../src/settings.h"
 #include "../../src/l10n.h"
@@ -39,11 +43,15 @@ static void setup_playback_app (BarApp_t *app) {
 	app->settings.tiredIcon = strdup ("t");
 	app->settings.atIcon = strdup ("@");
 	ck_assert (BarL10nInit (&app->l10n, &app->settings));
+	BarStateInit (app);
+	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
 	BarPlayerInit (&app->player, &app->settings);
 }
 
 static void teardown_playback_app (BarApp_t *app) {
+	BarStateSetPlaylist (app, NULL);
 	BarPlayerDestroy (&app->player);
+	BarStateDestroy (app);
 	BarL10nDestroy (&app->l10n);
 	BarSettingsDestroy (&app->settings);
 }
@@ -119,6 +127,82 @@ START_TEST (test_playback_start_rejects_non_http_audio_url)
 }
 END_TEST
 
+START_TEST (test_playback_start_succeeds_with_http_url)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station;
+	pthread_t playerThread = 0;
+
+	memset (&song, 0, sizeof (song));
+	memset (&station, 0, sizeof (station));
+	setup_playback_app (&app);
+
+	station.id = "station-http";
+	station.name = "HTTP Station";
+	song.title = "HTTP Song";
+	song.artist = "Artist";
+	song.audioUrl = "http://127.0.0.1:9/unreachable.mp3";
+	song.fileGain = 1.0;
+	song.length = 30;
+
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetPlaylist (&app, &song);
+
+	ck_assert (BarPlaybackStartSong (&app, &playerThread));
+	ck_assert (playerThread != 0);
+	ck_assert_int_eq (BarPlayerGetMode (&app.player), PLAYER_WAITING);
+
+	BarInterruptSetTarget (&app.player.interrupted);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.doQuit = true;
+	pthread_cond_broadcast (&app.player.cond);
+	pthread_mutex_unlock (&app.player.lock);
+	(void) pthread_join (playerThread, NULL);
+
+	teardown_playback_app (&app);
+}
+END_TEST
+
+START_TEST (test_playback_start_quickmix_uses_song_station_lookup)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station;
+	PianoStation_t mixStation;
+	pthread_t playerThread = 0;
+
+	memset (&song, 0, sizeof (song));
+	memset (&station, 0, sizeof (station));
+	memset (&mixStation, 0, sizeof (mixStation));
+	setup_playback_app (&app);
+
+	station.id = "quickmix";
+	station.name = "QuickMix";
+	station.isQuickMix = true;
+	mixStation.id = "child-station";
+	mixStation.name = "Child Station";
+	song.stationId = mixStation.id;
+	song.title = "Mix Song";
+	song.artist = "Artist";
+	song.audioUrl = "http://127.0.0.1:9/mix.mp3";
+
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetPlaylist (&app, &song);
+	app.ph.stations = &mixStation;
+
+	ck_assert (BarPlaybackStartSong (&app, &playerThread));
+	BarInterruptSetTarget (&app.player.interrupted);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.doQuit = true;
+	pthread_cond_broadcast (&app.player.cond);
+	pthread_mutex_unlock (&app.player.lock);
+	(void) pthread_join (playerThread, NULL);
+
+	teardown_playback_app (&app);
+}
+END_TEST
+
 Suite *playback_lifecycle_suite (void) {
 	Suite *s = suite_create ("playback_lifecycle");
 	TCase *tc = tcase_create ("core");
@@ -127,6 +211,8 @@ Suite *playback_lifecycle_suite (void) {
 	tcase_add_test (tc, test_playback_start_rejects_null_playlist);
 	tcase_add_test (tc, test_playback_start_rejects_missing_current_station);
 	tcase_add_test (tc, test_playback_start_rejects_non_http_audio_url);
+	tcase_add_test (tc, test_playback_start_succeeds_with_http_url);
+	tcase_add_test (tc, test_playback_start_quickmix_uses_song_station_lookup);
 	suite_add_tcase (s, tc);
 	return s;
 }

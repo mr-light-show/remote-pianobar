@@ -26,9 +26,12 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <errno.h>
 #include <unistd.h>
+#include <limits.h>
+#include <stdio.h>
 
 #include <libavutil/error.h>
 
+#include "../../src/interrupt.h"
 #include "../../src/player.h"
 #include "../../src/settings.h"
 
@@ -291,6 +294,216 @@ START_TEST (test_player_set_mode_null_is_noop)
 }
 END_TEST
 
+/* --- BarPlayerThread / openStream coverage (headless via PIANOBAR_TEST_NO_DEVICE) --- */
+
+static void player_thread_test_setup (player_t *player, BarSettings_t *settings)
+{
+	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
+	memset (player, 0, sizeof (*player));
+	memset (settings, 0, sizeof (*settings));
+	BarSettingsInit (settings);
+	settings->uiMode = BAR_UI_MODE_CLI;
+	settings->timeout = 2;
+	BarPlayerInit (player, settings);
+}
+
+static void player_thread_test_teardown (player_t *player, BarSettings_t *settings)
+{
+	BarPlayerDestroy (player);
+	BarSettingsDestroy (settings);
+}
+
+static uintptr_t run_player_thread_sync (player_t *player, const char *url)
+{
+	player->url = strdup (url);
+	ck_assert_ptr_nonnull (player->url);
+	void *ret = BarPlayerThread (player);
+	free (player->url);
+	player->url = NULL;
+	return (uintptr_t) ret;
+}
+
+static bool player_mp3_fixture_path (char *buf, size_t len)
+{
+	const char *rel = "test/fixtures/tone.mp3";
+	if (access (rel, R_OK) != 0) {
+		return false;
+	}
+	char resolved[PATH_MAX];
+	if (realpath (rel, resolved) == NULL) {
+		return false;
+	}
+	return snprintf (buf, len, "file://%s", resolved) < (int) len;
+}
+
+START_TEST (test_player_thread_rejects_invalid_url)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	const uintptr_t ret = run_player_thread_sync (&player, "not-a-valid-scheme://x");
+	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_connection_refused)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	const uintptr_t ret = run_player_thread_sync (&player,
+	                                              "http://127.0.0.1:9/refused.mp3");
+	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_missing_local_file)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	const uintptr_t ret = run_player_thread_sync (&player,
+	                                              "file:///tmp/pianobar-nonexistent-test.mp3");
+	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_no_audio_stream_in_container)
+{
+	player_t player;
+	BarSettings_t settings;
+	char tmppath[] = "/tmp/pianobar-noaudio-XXXXXX";
+	const int fd = mkstemp (tmppath);
+	ck_assert (fd >= 0);
+	const char payload[] = "not an audio container\n";
+	ck_assert_int_eq ((int) write (fd, payload, sizeof payload - 1),
+	                  (int) (sizeof payload - 1));
+	close (fd);
+
+	player_thread_test_setup (&player, &settings);
+	char url[PATH_MAX + 16];
+	snprintf (url, sizeof url, "file://%s", tmppath);
+	const uintptr_t ret = run_player_thread_sync (&player, url);
+	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
+	unlink (tmppath);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_quit_before_open)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	BarInterruptSetTarget (&player.interrupted);
+	pthread_mutex_lock (&player.lock);
+	player.doQuit = true;
+	pthread_mutex_unlock (&player.lock);
+
+	const uintptr_t ret = run_player_thread_sync (&player, "http://127.0.0.1:9/x.mp3");
+	ck_assert_int_eq (ret, PLAYER_RET_OK);
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_hardfail_when_engine_uninitialized)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+
+	if (!player_mp3_fixture_path (url, sizeof url)) {
+		return;
+	}
+
+	player_thread_test_setup (&player, &settings);
+	player.engineInitialized = false;
+
+	const uintptr_t ret = run_player_thread_sync (&player, url);
+	ck_assert_int_eq (ret, PLAYER_RET_HARDFAIL);
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_plays_local_mp3_fixture)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+
+	if (!player_mp3_fixture_path (url, sizeof url)) {
+		return;
+	}
+	player_thread_test_setup (&player, &settings);
+	if (!player.engineInitialized) {
+		player_thread_test_teardown (&player, &settings);
+		return;
+	}
+
+	const uintptr_t ret = run_player_thread_sync (&player, url);
+	ck_assert_int_eq (ret, PLAYER_RET_OK);
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_thread_interrupt_during_playback)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	pthread_t thread;
+	uintptr_t thread_ret = PLAYER_RET_OK;
+
+	if (!player_mp3_fixture_path (url, sizeof url)) {
+		return;
+	}
+	player_thread_test_setup (&player, &settings);
+	if (!player.engineInitialized) {
+		player_thread_test_teardown (&player, &settings);
+		return;
+	}
+
+	player.url = strdup (url);
+	ck_assert_ptr_nonnull (player.url);
+	ck_assert_int_eq (pthread_create (&thread, NULL, BarPlayerThread, &player), 0);
+	ck_assert (BarPlayerWaitForMode (&player, PLAYER_PLAYING, 10000));
+
+	BarInterruptSetTarget (&player.interrupted);
+	BarInterruptIncrement ();
+	pthread_mutex_lock (&player.lock);
+	player.doQuit = true;
+	pthread_cond_broadcast (&player.cond);
+	pthread_mutex_unlock (&player.lock);
+
+	ck_assert_int_eq (pthread_join (thread, (void **) &thread_ret), 0);
+	free (player.url);
+	player.url = NULL;
+	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -316,6 +529,17 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_wait, test_player_set_mode_wakes_waiter);
 	tcase_add_test (tc_wait, test_player_set_mode_null_is_noop);
 	suite_add_tcase (s, tc_wait);
+
+	TCase *tc_thread = tcase_create ("BarPlayerThread");
+	tcase_add_test (tc_thread, test_player_thread_rejects_invalid_url);
+	tcase_add_test (tc_thread, test_player_thread_connection_refused);
+	tcase_add_test (tc_thread, test_player_thread_missing_local_file);
+	tcase_add_test (tc_thread, test_player_thread_no_audio_stream_in_container);
+	tcase_add_test (tc_thread, test_player_thread_quit_before_open);
+	tcase_add_test (tc_thread, test_player_thread_hardfail_when_engine_uninitialized);
+	tcase_add_test (tc_thread, test_player_thread_plays_local_mp3_fixture);
+	tcase_add_test (tc_thread, test_player_thread_interrupt_during_playback);
+	suite_add_tcase (s, tc_thread);
 	
 	return s;
 }
