@@ -535,7 +535,11 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	}
 	
 	ma_engine_config engineConfig = ma_engine_config_init();
-	engineConfig.noDevice = MA_FALSE;
+	if (getenv ("PIANOBAR_TEST_NO_DEVICE") != NULL) {
+		engineConfig.noDevice = MA_TRUE;
+	} else {
+		engineConfig.noDevice = MA_FALSE;
+	}
 	ma_result result = ma_engine_init(&engineConfig, &p->engine);
 	if (result != MA_SUCCESS) {
 		log_write(LOG_ERROR, "Failed to initialize audio engine: %d\n", result);

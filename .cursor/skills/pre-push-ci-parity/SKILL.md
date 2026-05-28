@@ -3,7 +3,7 @@ name: pre-push-ci-parity
 description: >-
   Use before git push in remote-pianobar when Makefile, test sources, or CI
   workflows changed. Ensures a clean test build matches GitHub Actions
-  (test-coverage), catching nested test path / depfile compile failures that
+  (test-coverage), catching compile and headless-integration failures that
   incremental make test-all misses.
 ---
 
@@ -11,93 +11,91 @@ description: >-
 
 ## Problem this solves
 
-GitHub Actions **c-tests** runs:
+GitHub Actions **c-tests** runs (headless Ubuntu, **no sound card**):
 
 ```bash
-PIANOBAR_INTEGRATION=1 make test-coverage
+PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
 ```
 
 `test-coverage` starts with **`make clean`**, then compiles every test object from scratch.
 
-Local **`make test-all`** (and the default pre-push hook) reuses existing `.o` / `.d` files. That hides Makefile bugs such as:
+Local **`make test-all`** (and the default pre-push hook) can miss:
 
-- Wrong `-MF` depfile paths for nested test dirs (`integration/*.d` at repo root instead of `test/integration/*.d`)
-- Missing `test/<subdir>/%.o` compile rules for new test trees
+- Wrong `-MF` depfile paths for nested test dirs (`integration/*.d` at repo root)
+- Integration tests **timing out** on headless runners (ALSA errors, HTTP fixture `pthread_join` hang, player thread never finishing without `PIANOBAR_TEST_NO_DEVICE`)
 - New `TEST_SRC` entries that never compile until a clean build
 
-**Symptom:** `make test-all` passes locally, CI fails on first compile of `test/integration/*.c`.
+**Symptoms:** incremental `make test-all` passes on macOS; CI reports compile errors, or `Test timeout expired` in `playback_integration`.
 
 ## When to apply
 
-Apply this skill **before claiming push-ready** when **any** of these changed in your branch:
+Apply **before push** when **any** of these changed:
 
-- `Makefile` (especially `TEST_SRC`, `test/*` compile rules, `-MMD`/`-MF`)
-- `test/**` (new suites, dirs, or moved sources)
-- `.github/workflows/test.yml` or integration env vars (`PIANOBAR_INTEGRATION`)
-- `.githooks/pre-push`
-
-Also apply when CI failed with compile errors under `test/` after a green incremental local run.
+- `Makefile`, `test/**`, `src/player.c` (integration / audio init)
+- `.github/workflows/test.yml`, `.githooks/pre-push`
+- CI failed after a green incremental local run
 
 ## Mandatory verification (CI parity)
 
-From repo root, run **one** of:
+**Preferred — Docker repro (matches GHA exactly):**
 
 ```bash
-# Best match for CI (needs lcov installed)
-PIANOBAR_INTEGRATION=1 make test-coverage
+make test-ci-local
 ```
 
+Requires Docker. Runs Ubuntu 24.04 with the same apt packages as CI.
+
+**Alternative — on host (needs `lcov` for full parity):**
+
 ```bash
-# Minimum when lcov is unavailable — still clean-compiles all tests
-make distclean && PIANOBAR_INTEGRATION=1 make test-all
+PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
+```
+
+**Minimum (no lcov):**
+
+```bash
+make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all
 ```
 
 **Requirements before push:**
 
 1. Command exits **0**.
-2. You saw test objects compile from scratch (after `distclean` / `clean`), not only link.
+2. Integration suite completes without `Test timeout expired`.
 3. State in your reply which command you ran.
 
-**Shell timeout:** allow ≥ **180000 ms** (clean build + integration tests is slower than incremental `test-all`).
+**Shell timeout:** ≥ **300000 ms** for `make test-ci-local` or clean `test-coverage`.
+
+## Environment variables (CI + integration)
+
+| Variable | Purpose |
+|----------|---------|
+| `PIANOBAR_INTEGRATION=1` | Run opt-in integration tests |
+| `PIANOBAR_TEST_NO_DEVICE=1` | miniaudio `noDevice` mode — required on headless Linux CI |
+
+Always set **both** when reproducing CI locally.
 
 ## Quick depfile sanity check (Makefile changes)
 
-After editing test compile rules, confirm depfiles sit **next to objects**:
-
 ```bash
 make distclean
-make test/integration/fixture_http.o   # example; use any new nested test .c
+make test/integration/fixture_http.o
 ls test/integration/fixture_http.d test/integration/fixture_http.o
-test ! -e integration/fixture_http.d      # must NOT exist at repo root
+test ! -e integration/fixture_http.d
 ```
 
-For every `test/<subdir>/` test tree, prefer:
+Use **`$(@:.o=.d)`**, not **`$*.d`**, in test compile rules with directory components.
 
-```makefile
-test/<subdir>/%.o: test/<subdir>/%.c
-	$(CC) -c -o $@ ... -MMD -MF $(@:.o=.d) -MP $<
-```
-
-Use **`$(@:.o=.d)`**, not **`$*.d`**, when the pattern has directory components.
-
-## Agent push workflow (with this skill)
+## Agent push workflow
 
 ```
-1. Normal edits
-2. Incremental make test-all (fast feedback during development)
-3. If test infra changed → run CI-parity command above
-4. git push (hook also runs clean build when Makefile/test/** changed)
-5. Reply must cite parity command if step 3 applied
+1. Incremental PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all (dev loop)
+2. Before push on test/CI changes → make test-ci-local OR clean test-coverage command above
+3. git push
 ```
-
-## Do not
-
-- Push after only incremental `make test-all` when `Makefile` or `test/**` changed.
-- Assume the pre-push hook’s default incremental run equals CI.
-- Use `git push --no-verify` to skip parity unless the user explicitly requests it.
 
 ## Related docs
 
-- `.cursor/rules/pre-push-tests.mdc` — always-on push gate
-- `AGENTS.md` — Build and test commands
-- `.github/workflows/test.yml` — CI job definition
+- `scripts/test-ci-local.sh` — Docker CI repro
+- `.cursor/rules/pre-push-tests.mdc` — push gate
+- `AGENTS.md` — commands table
+- `.github/workflows/test.yml` — CI job

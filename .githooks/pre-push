@@ -20,8 +20,8 @@ fi
 if [ "$needs_clean" -eq 1 ]; then
 	echo "pre-push: Makefile or test/** changed — clean build (CI parity)..."
 	make distclean
-	echo "pre-push: running PIANOBAR_INTEGRATION=1 make test-all..."
-	PIANOBAR_INTEGRATION=1 make test-all
+	echo "pre-push: running PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all..."
+	PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all
 else
 	echo "pre-push: running make test-all..."
 	make test-all

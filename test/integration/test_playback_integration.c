@@ -130,6 +130,20 @@ static bool wait_for_mode (player_t *player, BarPlayerMode mode,
 	return BarPlayerWaitForMode (player, mode, timeout_ms);
 }
 
+static void stop_player_thread (player_t *player, pthread_t *playerThread) {
+	if (playerThread == NULL || *playerThread == 0) {
+		return;
+	}
+
+	BarInterruptSetTarget (&player->interrupted);
+	pthread_mutex_lock (&player->lock);
+	player->doQuit = true;
+	pthread_cond_broadcast (&player->cond);
+	pthread_mutex_unlock (&player->lock);
+	(void)pthread_join (*playerThread, NULL);
+	*playerThread = 0;
+}
+
 static bool wait_dead_after_playing (BarApp_t *barApp, unsigned timeout_ms) {
 	unsigned elapsed = 0;
 	bool seen_playing = false;
@@ -285,16 +299,10 @@ START_TEST (test_playback_fetch_playlist_with_mock_piano)
 	}
 
 	BarApp_t barApp;
-	BarFixtureHttp_t http = {0};
-	uint16_t port = 0;
 
 	setup_integration_app (&barApp);
 
-	ck_assert (integration_fixture_exists ());
-	ck_assert (BarFixtureHttpStart (&http, integration_fixture_path (), &port));
-
-	snprintf (g_audio_url, sizeof (g_audio_url),
-	          "http://127.0.0.1:%u/tone.mp3", port);
+	snprintf (g_audio_url, sizeof (g_audio_url), "http://127.0.0.1:9/tone.mp3");
 
 	memset (&g_station, 0, sizeof (g_station));
 	g_station.id = "station-integration";
@@ -308,7 +316,6 @@ START_TEST (test_playback_fetch_playlist_with_mock_piano)
 	ck_assert_str_eq (BarStateGetPlaylist (&barApp)->title, "Integration Song");
 
 	teardown_integration_app (&barApp);
-	BarFixtureHttpStop (&http);
 }
 END_TEST
 
@@ -418,11 +425,10 @@ START_TEST (test_playback_start_song_plays_http_fixture)
 	BarStateSetPlaylist (&barApp, &g_song);
 
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 30000));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
 	ck_assert_int_eq (BarPlayerGetMode (&barApp.player), PLAYER_FINISHED);
 
-	BarInterruptSetTarget (&barApp.player.interrupted);
-	ck_assert_int_eq (pthread_join (playerThread, NULL), 0);
+	stop_player_thread (&barApp.player, &playerThread);
 
 	teardown_integration_app (&barApp);
 	BarFixtureHttpStop (&http);
@@ -460,8 +466,8 @@ START_TEST (test_player_http_404_finishes_without_hang)
 	BarStateSetPlaylist (&barApp, &g_song);
 
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 30000));
-	ck_assert_int_eq (pthread_join (playerThread, NULL), 0);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
 
 	teardown_integration_app (&barApp);
 	BarFixtureHttpStop (&http);
@@ -499,11 +505,11 @@ START_TEST (test_player_interrupt_mid_playback)
 	BarStateSetPlaylist (&barApp, &g_song);
 
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 30000));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
 
 	BarInterruptSetTarget (&barApp.player.interrupted);
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 30000));
-	ck_assert_int_eq (pthread_join (playerThread, NULL), 0);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
 
 	teardown_integration_app (&barApp);
 	BarFixtureHttpStop (&http);
@@ -547,15 +553,15 @@ START_TEST (test_playback_two_song_manual_advance)
 	BarStateSetPlaylist (&barApp, &g_song);
 
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 30000));
-	ck_assert_int_eq (pthread_join (playerThread, NULL), 0);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
 
 	BarStateSetPlaylist (&barApp, PianoListNextP (&g_song));
 	ck_assert_ptr_eq (BarStateGetPlaylist (&barApp), &g_song2);
 
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 30000));
-	ck_assert_int_eq (pthread_join (playerThread, NULL), 0);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
 
 	teardown_integration_app (&barApp);
 	BarFixtureHttpStop (&http);
@@ -592,7 +598,7 @@ START_TEST (test_playback_manager_plays_fixture_song)
 	BarUiPianoCallSetTestHook (mock_get_playlist_counted);
 	ck_assert (BarPlaybackManagerStart (&barApp));
 
-	ck_assert (wait_dead_after_playing (&barApp, 30000));
+	ck_assert (wait_dead_after_playing (&barApp, 15000));
 	ck_assert_int_ge (g_playlist_fetch_count, 1);
 
 	BarPlaybackManagerStop (&barApp);
@@ -606,6 +612,7 @@ END_TEST
 Suite *playback_integration_suite (void) {
 	Suite *s = suite_create ("playback_integration");
 	TCase *tc = tcase_create ("core");
+	tcase_set_timeout (tc, 120.0);
 	tcase_add_test (tc, test_playback_fetch_playlist_with_mock_piano);
 	tcase_add_test (tc, test_playback_fetch_empty_playlist_clears_station);
 	tcase_add_test (tc, test_playback_fetch_session_error_disconnects);

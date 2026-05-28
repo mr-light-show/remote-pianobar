@@ -344,7 +344,12 @@ test: ${TEST_BIN}
 # Integration tests (local HTTP audio fixture + mocked Pandora playlist)
 test-integration: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running integration tests..."
-	${SILENTCMD}PIANOBAR_INTEGRATION=1 ./${TEST_BIN}
+	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
+
+# Reproduce GitHub Actions c-tests in Docker (headless Ubuntu, no sound card)
+test-ci-local:
+	${SILENTECHO} "   TEST  Running CI-local Docker repro..."
+	${SILENTCMD}chmod +x scripts/test-ci-local.sh && ./scripts/test-ci-local.sh
 
 # Run static analysis (requires cppcheck)
 # Suppressions: .cppcheck-suppress (miniaudio.h and project-specific false positives)
@@ -407,4 +412,4 @@ test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen
