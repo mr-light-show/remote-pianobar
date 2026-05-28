@@ -28,7 +28,9 @@ THE SOFTWARE.
 #include <assert.h>
 
 #include "ui_readline.h"
+#include "parse_utils.h"
 #include "main.h"
+#include <limits.h>
 
 /*	return size of previous UTF-8 character
  */
@@ -222,7 +224,9 @@ size_t BarReadlineInt (int *ret, BarReadlineFds_t *input) {
 
 	rlRet = BarReadline (buf, sizeof (buf), "0123456789", input,
 			BAR_RL_DEFAULT, -1);
-	*ret = atoi ((char *) buf);
+	int n = 0;
+	BarParseIntInRange ((char *) buf, 0, INT_MAX, &n);
+	*ret = n;
 
 	return rlRet;
 }

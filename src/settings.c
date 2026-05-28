@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include "config.h"
 #include "bar_constants.h"
 #include "log.h"
+#include "parse_utils.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -565,15 +566,30 @@ void BarSettingsRead (BarSettings_t *settings) {
 			} else if (streq ("event_command", key)) {
 				settings->eventCmd = BarSettingsExpandTilde (val, userhome);
 			} else if (streq ("history", key)) {
-				settings->history = atoi (val);
+				int tmp = (int) settings->history;
+				if (!BarParseIntInRange (val, 0, 10000, &tmp)) {
+					log_write (LOG_ERROR, "settings: invalid value for history: \"%s\", ignoring", val);
+				} else { settings->history = (unsigned int) tmp; }
 			} else if (streq ("max_retry", key)) {
-				settings->maxRetry = atoi (val);
+				int tmp = (int) settings->maxRetry;
+				if (!BarParseIntInRange (val, 0, 100, &tmp)) {
+					log_write (LOG_ERROR, "settings: invalid value for max_retry: \"%s\", ignoring", val);
+				} else { settings->maxRetry = (unsigned int) tmp; }
 			} else if (streq ("timeout", key)) {
-				settings->timeout = atoi (val);
+				int tmp = (int) settings->timeout;
+				if (!BarParseIntInRange (val, 1, 600, &tmp)) {
+					log_write (LOG_ERROR, "settings: invalid value for timeout: \"%s\", ignoring", val);
+				} else { settings->timeout = (unsigned int) tmp; }
 			} else if (streq ("pause_timeout", key)) {
-				settings->pauseTimeout = atoi (val);
+				int tmp = (int) settings->pauseTimeout;
+				if (!BarParseIntInRange (val, 0, 86400, &tmp)) {
+					log_write (LOG_ERROR, "settings: invalid value for pause_timeout: \"%s\", ignoring", val);
+				} else { settings->pauseTimeout = (unsigned int) tmp; }
 			} else if (streq ("buffer_seconds", key)) {
-				settings->bufferSecs = atoi (val);
+				int tmp = (int) settings->bufferSecs;
+				if (!BarParseIntInRange (val, 1, 300, &tmp)) {
+					log_write (LOG_ERROR, "settings: invalid value for buffer_seconds: \"%s\", ignoring", val);
+				} else { settings->bufferSecs = (unsigned int) tmp; }
 			} else if (streq ("sort", key)) {
 				size_t i;
 				static const char *mapping[] = {"name_az",
@@ -602,9 +618,13 @@ void BarSettingsRead (BarSettings_t *settings) {
 				free (settings->atIcon);
 				settings->atIcon = strdup (val);
 			} else if (streq ("volume", key)) {
-				settings->volume = atoi (val);
+				if (!BarParseIntInRange (val, 0, 100, &settings->volume)) {
+					log_write (LOG_ERROR, "settings: invalid value for volume: \"%s\", ignoring", val);
+				}
 			} else if (streq ("system_volume_player_gain", key)) {
-				settings->systemVolumePlayerGain = atoi (val);
+				if (!BarParseIntInRange (val, -60, 60, &settings->systemVolumePlayerGain)) {
+					log_write (LOG_ERROR, "settings: invalid value for system_volume_player_gain: \"%s\", ignoring", val);
+				}
 			} else if (streq ("station_display_name_override", key)) {
 				/* Parse /regex/replacement/ format */
 				if (val[0] == '/') {
@@ -681,7 +701,9 @@ void BarSettingsRead (BarSettings_t *settings) {
 			} else if (streq ("gain_mul", key)) {
 				settings->gainMul = atof (val);
 			} else if (streq ("max_gain", key)) {
-				settings->maxGain = atoi (val);
+				if (!BarParseIntInRange (val, 0, 100, &settings->maxGain)) {
+					log_write (LOG_ERROR, "settings: invalid value for max_gain: \"%s\", ignoring", val);
+				}
 			} else if (streq ("format_nowplaying_song", key)) {
 				free (settings->npSongFormat);
 				settings->npSongFormat = strdup (val);
@@ -704,9 +726,14 @@ void BarSettingsRead (BarSettings_t *settings) {
 				free (settings->audioPipe);
 				settings->audioPipe = BarSettingsExpandTilde (val, userhome);
 			} else if (streq ("autoselect", key)) {
-				settings->autoselect = atoi (val);
+				int tmp = 0;
+				if (!BarParseIntInRange (val, 0, INT_MAX, &tmp)) {
+					log_write (LOG_ERROR, "settings: invalid value for autoselect: \"%s\", ignoring", val);
+				} else { settings->autoselect = (tmp != 0); }
 			} else if (streq ("sample_rate", key)) {
-				settings->sampleRate = atoi (val);
+				if (!BarParseIntInRange (val, 8000, 192000, &settings->sampleRate)) {
+					log_write (LOG_ERROR, "settings: invalid value for sample_rate: \"%s\", ignoring", val);
+				}
 			} else if (strncmp (formatMsgPrefix, key,
 					strlen (formatMsgPrefix)) == 0) {
 				static const char *mapping[] = {"none", "info", "nowplaying",
@@ -750,7 +777,9 @@ void BarSettingsRead (BarSettings_t *settings) {
 				settings->uiMode = BAR_UI_MODE_BOTH;
 			}
 		} else if (streq ("websocket_port", key)) {
-				settings->websocketPort = atoi (val);
+				if (!BarParseIntInRange (val, 1, 65535, &settings->websocketPort)) {
+					log_write (LOG_ERROR, "settings: invalid value for websocket_port: \"%s\", ignoring", val);
+				}
 			} else if (streq ("websocket_host", key)) {
 				free (settings->websocketHost);
 				settings->websocketHost = strdup (val);

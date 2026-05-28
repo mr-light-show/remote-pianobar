@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include "../../src/main.h"
 #include "../../src/settings.h"
+#include "../../src/parse_utils.h"
 
 static int write_file (const char *path, const char *content) {
 	FILE *f = fopen (path, "w");
@@ -214,6 +215,84 @@ START_TEST (test_settings_locale_from_config) {
 }
 END_TEST
 
+START_TEST (test_parse_int_in_range_valid)
+{
+	int out = -1;
+	ck_assert (BarParseIntInRange ("42", 0, 100, &out));
+	ck_assert_int_eq (out, 42);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_empty_string_fails)
+{
+	int out = 99;
+	ck_assert (!BarParseIntInRange ("", 0, 100, &out));
+	ck_assert_int_eq (out, 99);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_non_numeric_fails)
+{
+	int out = 99;
+	ck_assert (!BarParseIntInRange ("abc", 0, 100, &out));
+	ck_assert_int_eq (out, 99);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_below_min_fails)
+{
+	int out = 99;
+	ck_assert (!BarParseIntInRange ("-1", 0, 100, &out));
+	ck_assert_int_eq (out, 99);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_above_max_fails)
+{
+	int out = 99;
+	ck_assert (!BarParseIntInRange ("101", 0, 100, &out));
+	ck_assert_int_eq (out, 99);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_null_string_fails)
+{
+	int out = 99;
+	ck_assert (!BarParseIntInRange (NULL, 0, 100, &out));
+	ck_assert_int_eq (out, 99);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_null_out_fails)
+{
+	ck_assert (!BarParseIntInRange ("42", 0, 100, NULL));
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_boundary_min)
+{
+	int out = -1;
+	ck_assert (BarParseIntInRange ("0", 0, 100, &out));
+	ck_assert_int_eq (out, 0);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_boundary_max)
+{
+	int out = -1;
+	ck_assert (BarParseIntInRange ("100", 0, 100, &out));
+	ck_assert_int_eq (out, 100);
+}
+END_TEST
+
+START_TEST (test_parse_int_in_range_trailing_garbage_fails)
+{
+	int out = 99;
+	ck_assert (!BarParseIntInRange ("42abc", 0, 100, &out));
+	ck_assert_int_eq (out, 99);
+}
+END_TEST
+
 Suite *settings_suite (void) {
 	Suite *s = suite_create ("Settings");
 	TCase *tc = tcase_create ("Core");
@@ -223,6 +302,20 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_set_active_account_by_id);
 	tcase_add_test (tc, test_settings_get_active_account_empty);
 	tcase_add_test (tc, test_settings_locale_from_config);
+
+	TCase *tc_parse = tcase_create ("ParseIntInRange");
+	tcase_add_test (tc_parse, test_parse_int_in_range_valid);
+	tcase_add_test (tc_parse, test_parse_int_in_range_empty_string_fails);
+	tcase_add_test (tc_parse, test_parse_int_in_range_non_numeric_fails);
+	tcase_add_test (tc_parse, test_parse_int_in_range_below_min_fails);
+	tcase_add_test (tc_parse, test_parse_int_in_range_above_max_fails);
+	tcase_add_test (tc_parse, test_parse_int_in_range_null_string_fails);
+	tcase_add_test (tc_parse, test_parse_int_in_range_null_out_fails);
+	tcase_add_test (tc_parse, test_parse_int_in_range_boundary_min);
+	tcase_add_test (tc_parse, test_parse_int_in_range_boundary_max);
+	tcase_add_test (tc_parse, test_parse_int_in_range_trailing_garbage_fails);
+
 	suite_add_tcase (s, tc);
+	suite_add_tcase (s, tc_parse);
 	return s;
 }

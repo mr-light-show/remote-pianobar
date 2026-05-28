@@ -46,6 +46,7 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/main.c \
 		${PIANOBAR_DIR}/log.c \
 		${PIANOBAR_DIR}/miniaudio_impl.c \
+		${PIANOBAR_DIR}/parse_utils.c \
 		${PIANOBAR_DIR}/player.c \
 		${PIANOBAR_DIR}/bar_state.c \
 		${PIANOBAR_DIR}/playback_manager.c \
@@ -284,9 +285,9 @@ TEST_OBJ:=${TEST_SRC:.c=.o}
 TEST_BIN:=pianobar_test
 
 # Build test suite (only link the modules being tested)
-${TEST_BIN}: locale-codegen ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
+${TEST_BIN}: locale-codegen ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ}
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${LIBPIANO_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}

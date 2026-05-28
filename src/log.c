@@ -22,11 +22,13 @@ THE SOFTWARE.
 */
 
 #include "log.h"
+#include "parse_utils.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <limits.h>
 
 #ifdef HAVE_DEBUGLOG
 #define COLOR_RESET   "\033[0m"
@@ -48,7 +50,12 @@ void log_init(void)
 	const char *const s = getenv("PIANOBAR_DEBUG");
 	unsigned int raw = 0;
 	if (s != NULL) {
-		raw = (unsigned int)atoi(s);
+		int tmp = 0;
+		if (!BarParseIntInRange (s, 0, INT_MAX, &tmp)) {
+			fprintf (stderr, "PIANOBAR_DEBUG: invalid value \"%s\", ignoring\n", s);
+		} else {
+			raw = (unsigned int) tmp;
+		}
 	}
 	debug_mask = raw;
 	if (debug_mask != 0) {
