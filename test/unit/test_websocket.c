@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "../../src/main.h"
 #include "../../src/settings.h"
 #include "../../src/bar_state.h"
+#include "../../src/system_volume.h"
 #include "../../src/websocket_bridge.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
@@ -265,6 +266,52 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 }
 END_TEST
 
+START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoSong_t song;
+	int dummy_wsi = 0;
+
+	test_setup_web_app (&app, &ctx);
+	memset (&song, 0, sizeof (song));
+	song.title = "Up Next";
+
+	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarSocketIoSetUnicastTarget (&dummy_wsi);
+	g_compatBuf[0] = '\0';
+	BarWsBroadcastUpcoming (&app, &song, 1);
+	ck_assert (strstr (g_compatBuf, "Up Next") != NULL);
+
+	g_compatBuf[0] = '\0';
+	BarWsBroadcastPlayState (&app);
+	ck_assert (g_compatBuf[0] != '\0');
+
+	app.lockFd = dup (STDERR_FILENO);
+	ck_assert_int_ge (app.lockFd, 0);
+	BarWsReleaseSingletonLock (&app);
+	ck_assert_int_eq (app.lockFd, -1);
+
+	BarSocketIoSetUnicastTarget (NULL);
+	BarSocketIoSetBroadcastCallback (NULL);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_system_volume_mode_broadcast) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+
+	test_setup_web_app (&app, &ctx);
+	app.settings.volumeMode = BAR_VOLUME_MODE_SYSTEM;
+
+	BarWsBroadcastVolume (&app);
+	ck_assert_ptr_nonnull (test_bucket_payload (&ctx, BUCKET_VOLUME));
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "volume") != NULL);
+
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_print_helpers_and_input_setup) {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
@@ -445,6 +492,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_broadcasts_real_player_state_buckets);
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
+	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
+	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_bridge_print_helpers_and_input_setup);
 	tcase_add_test(tc_core, test_websocket_bridge_predicates_and_cli_noops);
 	

@@ -293,6 +293,8 @@ BASE_TEST_SRC:=\
 		${TEST_DIR}/unit/test_playback_manager.c \
 		${TEST_DIR}/unit/test_playback_lifecycle.c \
 		${TEST_DIR}/unit/test_system_volume.c \
+		${TEST_DIR}/unit/test_ui_readline.c \
+		${TEST_DIR}/unit/test_ui.c \
 		${TEST_DIR}/unit/test_libpiano_response.c
 
 # Tests that require WebSocket objects

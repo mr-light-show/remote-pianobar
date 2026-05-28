@@ -90,6 +90,27 @@ START_TEST (test_system_volume_set_clamps_out_of_range_inputs)
 }
 END_TEST
 
+#ifdef __APPLE__
+START_TEST (test_system_volume_macos_init_get_set_roundtrip)
+{
+	BarSystemVolumeDestroy ();
+	if (!BarSystemVolumeInit (NULL)) {
+		/* No audio output device in this environment. */
+		ck_assert (!BarSystemVolumeAvailable ());
+		return;
+	}
+
+	ck_assert (BarSystemVolumeAvailable ());
+	int vol = BarSystemVolumeGet ();
+	ck_assert_int_ge (vol, 0);
+	ck_assert_int_le (vol, 100);
+	ck_assert (BarSystemVolumeSet (vol));
+	BarSystemVolumeDestroy ();
+	ck_assert (!BarSystemVolumeAvailable ());
+}
+END_TEST
+#endif
+
 Suite *system_volume_suite (void)
 {
 	Suite *s = suite_create ("system_volume");
@@ -98,6 +119,9 @@ Suite *system_volume_suite (void)
 	tcase_add_test (tc, test_system_volume_rejects_malformed_pactl_json);
 	tcase_add_test (tc, test_system_volume_public_api_default_state);
 	tcase_add_test (tc, test_system_volume_set_clamps_out_of_range_inputs);
+#ifdef __APPLE__
+	tcase_add_test (tc, test_system_volume_macos_init_get_set_roundtrip);
+#endif
 	suite_add_tcase (s, tc);
 	return s;
 }

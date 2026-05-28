@@ -49,6 +49,8 @@ Suite *log_suite(void);
 Suite *l10n_suite(void);
 Suite *playback_lifecycle_suite(void);
 Suite *system_volume_suite(void);
+Suite *ui_readline_suite(void);
+Suite *ui_suite(void);
 Suite *libpiano_response_suite(void);
 
 /* Test suite declarations — WebSocket-only */
@@ -91,6 +93,8 @@ int main(void) {
 	srunner_add_suite(sr, log_suite());
 	srunner_add_suite(sr, playback_lifecycle_suite());
 	srunner_add_suite(sr, system_volume_suite());
+	srunner_add_suite(sr, ui_readline_suite());
+	srunner_add_suite(sr, ui_suite());
 	srunner_add_suite(sr, libpiano_response_suite());
 
 	/* Run tests */

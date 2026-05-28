@@ -120,6 +120,25 @@ START_TEST(test_daemon_get_lock_file_path_is_under_config) {
 }
 END_TEST
 
+START_TEST(test_daemon_lock_acquire_write_read_roundtrip) {
+	int lockFd = BarDaemonAcquireLock();
+	if (lockFd < 0) {
+		/* Another instance may hold the default lock on a dev machine. */
+		ck_assert(1);
+		return;
+	}
+
+	ck_assert(BarDaemonWriteLockPid(lockFd));
+	ck_assert_int_eq(BarDaemonReadLockPid(), getpid());
+	close(lockFd);
+}
+END_TEST
+
+START_TEST(test_daemon_write_lock_pid_rejects_invalid_fd) {
+	ck_assert(!BarDaemonWriteLockPid(-1));
+}
+END_TEST
+
 /* Create test suite */
 Suite *daemon_suite(void) {
 	Suite *s;
@@ -137,6 +156,8 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_pid_file_write_detect_remove_roundtrip);
 	tcase_add_test(tc_core, test_daemon_is_running_with_dead_pid);
 	tcase_add_test(tc_core, test_daemon_get_lock_file_path_is_under_config);
+	tcase_add_test(tc_core, test_daemon_lock_acquire_write_read_roundtrip);
+	tcase_add_test(tc_core, test_daemon_write_lock_pid_rejects_invalid_fd);
 	
 	suite_add_tcase(s, tc_core);
 	
