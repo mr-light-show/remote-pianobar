@@ -202,11 +202,15 @@ libpiano.so.0: ${LIBPIANO_RELOBJ} ${LIBPIANO_OBJ}
 # Test-specific compilation rules (must come before general %.o: %.c rule)
 test/%.o: test/%.c
 	${SILENTECHO} "    CC  $< (test)"
-	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $*.d -MP $<
+	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $(@:.o=.d) -MP $<
 
 test/unit/%.o: test/unit/%.c
 	${SILENTECHO} "    CC  $< (test)"
-	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $*.d -MP $<
+	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $(@:.o=.d) -MP $<
+
+test/integration/%.o: test/integration/%.c
+	${SILENTECHO} "    CC  $< (test)"
+	${SILENTCMD}${CC} -c -o $@ ${ALL_CFLAGS} ${CHECK_CFLAGS} -MMD -MF $(@:.o=.d) -MP $<
 
 # Special rule for miniaudio_impl.c - suppress deprecation warnings from third-party library
 src/miniaudio_impl.o: src/miniaudio_impl.c
