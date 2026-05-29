@@ -3,7 +3,18 @@ import { customElement, state } from 'lit/decorators.js';
 import { SocketService } from './services/socket-service';
 import { resolveStationIdFromStationsList } from './station-sync';
 import { t, tf } from './i18n';
-import type { StationPayload, ErrorPayload } from './protocol';
+import type {
+  StationPayload,
+  SongPayload,
+  ErrorPayload,
+  AccountPayload,
+  GenreCategoryPayload,
+  StationModePayload,
+} from './protocol';
+import { VolumeControl } from './components/volume-control';
+import { InfoMenu } from './components/info-menu';
+import { SongActionsMenu } from './components/song-actions-menu';
+import { ToastNotification } from './components/toast-notification';
 
 import './components/album-art';
 import './components/progress-bar';
@@ -52,21 +63,21 @@ export class PianobarApp extends LitElement {
   @state() private playNewStationModalOpen = false;
   @state() private newStationName = '';
   @state() private selectStationModalOpen = false;
-  @state() private genreCategories: unknown[] = [];
+  @state() private genreCategories: GenreCategoryPayload[] = [];
   @state() private genreLoading = false;
   @state() private searchResults: { categories: unknown[] } = { categories: [] };
   @state() private searchLoading = false;
   @state() private addMusicModalOpen = false;
   @state() private renameStationModalOpen = false;
   @state() private stationModeModalOpen = false;
-  @state() private stationModes: unknown[] = [];
+  @state() private stationModes: StationModePayload[] = [];
   @state() private modesLoading = false;
   @state() private stationSeedsModalOpen = false;
   @state() private stationInfo: unknown = null;
   @state() private infoLoading = false;
   /** True until backend emits pandora.disconnected; set true again on process (reconnected). */
   @state() private pandoraConnected = true;
-  @state() private accounts: Array<{id: string; label?: string}> = [];
+  @state() private accounts: AccountPayload[] = [];
   @state() private currentAccountId = '';
   @state() private switchAccountModalOpen = false;
   
@@ -303,10 +314,8 @@ export class PianobarApp extends LitElement {
       const volumeValue = typeof data === 'number' ? data : data.volume;
       if (volumeValue !== undefined) {
         this.volume = volumeValue;  // Keep parent state in sync
-        const volumeControl = this.shadowRoot?.querySelector('volume-control');
-        if (volumeControl) {
-          (volumeControl as any).updateFromServer(volumeValue);
-        }
+        const volumeControl = this.shadowRoot?.querySelector<VolumeControl>('volume-control');
+        volumeControl?.updateFromServer(volumeValue);
       }
     });
     
@@ -351,7 +360,7 @@ export class PianobarApp extends LitElement {
       this.infoLoading = false;
     });
     
-    this.socket.on('pandora.disconnected', (_data: { reason?: string }) => {
+    this.socket.on('pandora.disconnected', (_data) => {
       this.pandoraConnected = false;
       // Clear currently playing song / playback state; keep stations
       this.albumArt = '';
@@ -425,10 +434,8 @@ export class PianobarApp extends LitElement {
       // Update volume control if present
       if (data.volume !== undefined) {
         this.volume = data.volume;
-        const volumeControl = this.shadowRoot?.querySelector('volume-control');
-        if (volumeControl) {
-          (volumeControl as any).updateFromServer(data.volume);
-        }
+        const volumeControl = this.shadowRoot?.querySelector<VolumeControl>('volume-control');
+        volumeControl?.updateFromServer(data.volume);
       }
 
       // Update account info
@@ -467,7 +474,7 @@ export class PianobarApp extends LitElement {
         const stationId = data.stationId || this.currentStationId;
         this.showToast(t('web.ui.toast_station_deleted'));
         if (stationId) {
-          this.stations = this.stations.filter((s: { id: string }) => s.id !== stationId);
+          this.stations = this.stations.filter((s) => s.id !== stationId);
           if (this.currentStationId === stationId) {
             this.currentStation = '';
             this.currentStationId = '';
@@ -479,7 +486,7 @@ export class PianobarApp extends LitElement {
         const stationId = data.stationId;
         this.showToast(t('web.ui.toast_last_station_deleted'));
         if (stationId) {
-          this.stations = this.stations.filter((s: { id: string }) => s.id !== stationId);
+          this.stations = this.stations.filter((s) => s.id !== stationId);
           if (this.currentStationId === stationId) {
             this.currentStation = '';
             this.currentStationId = '';
@@ -673,17 +680,13 @@ export class PianobarApp extends LitElement {
   }
 
   toggleMenu() {
-    const menu = this.shadowRoot?.querySelector('info-menu');
-    if (menu) {
-      (menu as any).toggleMenu();
-    }
+    const menu = this.shadowRoot?.querySelector<InfoMenu>('info-menu');
+    menu?.toggleMenu();
   }
   
   toggleRatingMenu() {
-    const menu = this.shadowRoot?.querySelector('song-actions-menu');
-    if (menu) {
-      (menu as any).toggleMenu();
-    }
+    const menu = this.shadowRoot?.querySelector<SongActionsMenu>('song-actions-menu');
+    menu?.toggleMenu();
   }
   
   handleInfoExplain() {
@@ -945,7 +948,7 @@ export class PianobarApp extends LitElement {
   }
   
   showToast(message: string) {
-    const toast = document.createElement('toast-notification') as any;
+    const toast = document.createElement('toast-notification') as ToastNotification;
     toast.message = message;
     
     // Longer duration for errors
@@ -958,7 +961,7 @@ export class PianobarApp extends LitElement {
     document.body.appendChild(toast);
   }
   
-  showUpcomingSongsToast(songs: any[]) {
+  showUpcomingSongsToast(songs: SongPayload[]) {
     const formatDuration = (seconds: number) => {
       const mins = Math.floor(seconds / 60);
       const secs = seconds % 60;
@@ -985,14 +988,14 @@ export class PianobarApp extends LitElement {
               ${song.rating === 1 ? html`
                 <span class="material-icons">thumb_up</span>
               ` : ''}
-              <div class="song-duration">${formatDuration(song.duration)}</div>
+              <div class="song-duration">${formatDuration(song.duration ?? 0)}</div>
             </div>
           `)}
         </div>
       </div>
     `;
     
-    const toast = document.createElement('toast-notification') as any;
+    const toast = document.createElement('toast-notification') as ToastNotification;
     toast.content = content;
     toast.duration = 5000;
     document.body.appendChild(toast);

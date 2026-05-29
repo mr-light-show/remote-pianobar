@@ -15,6 +15,47 @@
 
 ---
 
+## Progress tracker
+
+> **Authoritative status** for implementation on branch `feat/antipattern-remediation-m1` ([PR #51](https://github.com/mr-light-show/remote-pianobar/pull/51)). Per-task step checkboxes below remain as **reference instructions** for agents; they are not auto-maintained.
+
+| Milestone | Priority | Status | Tasks | Summary |
+|-----------|----------|--------|-------|---------|
+| **M1 — Safety** | P0 | **Done** | 1–5 | Buffer overflow, `BarParseIntInRange`, defensive alloc, `PianoInit` check, WEB `stateRwlock`, `_Atomic` flags |
+| **M2 — Structural boundaries** | P1 | **Done** | 6–9 | `interrupt` + `playback_lifecycle`, broadcast snapshots, `BarPlayerWaitForMode`, `#ifdef` → bridge |
+| **M3 — Maintainability** | P1 | **Done** | 10–14 | `softfail` retired, table dispatch, state snapshots, unimplemented-action errors, `NOWEBSOCKET` test split + libpiano tests |
+| **M4 — Web UI & hygiene** | P2 | **Done** | 15–18 | Typed protocol + `app.ts`/`socket-service.ts`; repo hygiene; pactl JSON; locale sync script |
+
+### Task-level status
+
+| Task | Status | Branch evidence |
+|------|--------|-----------------|
+| 1 — Buffer overflow / `BarUiActBuildManageStationQuestion` | Done | `test/unit/test_ui_act_station.c`, `src/ui_act.c` |
+| 2 — `atoi` → `BarParseIntInRange` | Done | `src/parse_utils.c`, `test/unit/test_settings.c` |
+| 3 — malloc NULL, snprintf, `PianoInit` | Done | `settings.c`, `ui.c`, `ui_act.c` |
+| 4 — `stateRwlock` in WEB mode | Done | `bar_state.c`, `DEBUG_STATE`, `THREAD_SAFETY.md` |
+| 5 — `volatile` → `_Atomic` | Done | `log.c`, `player.c`, `playback_manager.c`, `interrupt.c` |
+| 6 — Lifecycle + interrupt extraction | Done | `playback_lifecycle.c`, `interrupt.c`, slimmer `main.c` |
+| 7 — Broadcast queue unification | Done | `BarSocketIoFormatEventMessage`, `BarWebsocketBroadcastSocketIoMessage`, `WEBSOCKET_API.md` |
+| 8 — `BarPlayerWaitForMode` | Done | `player.c` / `player.h`, disconnect tests |
+| 9 — `#ifdef` → `websocket_bridge` | Done | Bridge stubs; guards removed from business logic |
+| 10 — Retire `softfail` | Done | `player.c` explicit cleanup; `ERROR_HANDLING.md`; `BarTransformIfShared` → `bool` |
+| 11 — Table-driven dispatch | Done | `settings.c` key tables; `socketio.c` event/action tables |
+| 12 — State snapshots | Done | `BarPlaybackSnapshot_t`, `BarSocketIoBuild*Payload`, PR review follow-up |
+| 13 — Unimplemented action errors | Done | `BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED`, l10n keys, tests |
+| 14 — `NOWEBSOCKET=1` test split | Done | `BASE_TEST_SRC` / `WS_TEST_SRC`, `test_libpiano_response.c` |
+| 15 — TypeScript protocol | Done | `webui/src/protocol.ts`, typed `socket-service.ts` + `app.ts` (no `as any` on protocol path); Vitest |
+| 16 — Repo hygiene | Done | `make distclean`, `.gitignore`, removed `BarWsProcessCommands`, dead `main.c` else |
+| 17 — Structured pactl volume | Done | `BarSystemVolumeParsePactlJsonVolume`, JSON-first pactl path |
+| 18 — Locale sync script | Done | `scripts/check_locale_sync.py`, `make locale-check-sync` (HA `common.*` key fix) |
+
+### Remaining work (after PR #51)
+
+1. **Optional / deferred (see Out of Scope):** large file splits (`ui_act.c`, `socketio.c`, …), HA/card refactors, visitor mode, Linux unmute parity doc; `bottom-toolbar.ts` still has one `as any` on stations popup (out of Task 15 scope).
+2. **Verification:** `make test-all` and web Vitest pass; C Codecov patch ~71% on this PR (below 95% target — accepted for merge scope).
+
+---
+
 ## Analysis Summary
 
 | Severity | Count | Key themes |
@@ -26,7 +67,7 @@
 
 ---
 
-## Milestone 1 — Safety (P0)
+## Milestone 1 — Safety (P0) — **Done** (Tasks 1–5)
 
 ```mermaid
 flowchart LR
@@ -733,7 +774,7 @@ git commit -m "fix: replace volatile cross-thread flags with _Atomic for correct
 
 ---
 
-## Milestone 2 — Structural Boundaries (P1)
+## Milestone 2 — Structural Boundaries (P1) — **Done** (Tasks 6–9)
 
 ```mermaid
 flowchart LR
@@ -1550,7 +1591,7 @@ git commit -m "refactor: eliminate inline #ifdef WEBSOCKET_ENABLED in business l
 
 ---
 
-## Milestone 3 — Maintainability (P1)
+## Milestone 3 — Maintainability (P1) — **Done** (Tasks 10–14)
 
 ---
 
@@ -2203,11 +2244,11 @@ git commit -m "build: allow base unit tests under NOWEBSOCKET=1 and add libpiano
 
 ---
 
-## Milestone 4 — Web UI and Hygiene (P2)
+## Milestone 4 — Web UI and Hygiene (P2) — **Done** (Tasks 15–18)
 
 ---
 
-## Task 15: Type the Web UI Protocol Boundary
+## Task 15: Type the Web UI Protocol Boundary — **Done**
 
 **Severity:** Medium — ~80 `: any` usages; child component `as any` casts; no validation on incoming Socket.IO frames
 **Estimated effort:** 2–3 h
@@ -2375,7 +2416,7 @@ git commit -m "refactor: add typed ServerEvents protocol and replace any in app.
 
 ---
 
-## Task 16: Repo Hygiene — Remove Build Artifacts and Dead Code
+## Task 16: Repo Hygiene — Remove Build Artifacts and Dead Code — **Done**
 
 **Severity:** Low — but every agent run regenerates noise in `git status`
 **Estimated effort:** 30 min
@@ -2440,7 +2481,7 @@ git commit -m "chore: expand .gitignore, untrack build artifacts, add make distc
 
 ---
 
-## Task 17: Replace `popen("pactl …")` with Structured PulseAudio Output
+## Task 17: Replace `popen("pactl …")` with Structured PulseAudio Output — **Done**
 
 **Severity:** Low-Medium — fragile shell pipeline; locale/format dependent; `grep | head | tr` chain
 **Estimated effort:** 2 h
@@ -2501,7 +2542,7 @@ git commit -m "fix: use pactl --format=json in pactl fallback to avoid locale-fr
 
 ---
 
-## Task 18: Cross-Repo Locale Sync Detection Script
+## Task 18: Cross-Repo Locale Sync Detection Script — **Done**
 
 **Severity:** Low — locale drift is a gradual quality issue, not a correctness bug
 **Estimated effort:** 1 h
@@ -2616,45 +2657,45 @@ git commit -m "chore: add locale sync check script for cross-repo string drift d
 
 Run these before declaring the remediation branch complete:
 
-- [ ] `make test-all` exits 0
-- [ ] `cd webui && npm test -- --run` exits 0
-- [ ] `make NOWEBSOCKET=1 test` exits 0 (base tests run without WebSocket)
-- [ ] `make test-coverage` — patch coverage ≥ 95% on all changed C files
-- [ ] `cd webui && npm test -- --run --coverage` — coverage ≥ 95% on changed TS files
-- [ ] `make lint` — no new cppcheck findings
-- [ ] `make locale-codegen` — leaves no diff in generated files
-- [ ] `rg '\batoi\b' src/settings.c src/log.c src/ui_readline.c` — no matches
-- [ ] `rg 'softfail' src/` — no matches
-- [ ] `rg 'extern void BarMainGetPlaylist|extern void BarMainStartPlayback|extern sig_atomic_t \*interrupted' src test` — no matches
-- [ ] `rg '#ifdef WEBSOCKET_ENABLED' src/ | grep -v websocket` — ≤ 5 hits
-- [ ] `rg 'Extract song data|Emit stations|TODO.*broadcast' src/websocket/core/websocket.c` — no matches
-- [ ] `rg ': any\b|as any\b' webui/src/app.ts webui/src/services/socket-service.ts` — no matches
-- [ ] `git status` shows no untracked `*.o`, `*.gcda`, `*.gcno`, `*.gcov`, or binary files
+- [x] `make test-all` exits 0
+- [x] `cd webui && npm test -- --run` exits 0
+- [x] `make NOWEBSOCKET=1 test` exits 0 (base tests run without WebSocket)
+- [ ] `make test-coverage` — patch coverage ≥ 95% on all changed C files (~71% on PR #51; accepted)
+- [x] `cd webui && npm test -- --run --coverage` — web patch 100% on changed TS in CI
+- [x] `make lint` — no new cppcheck findings
+- [x] `make locale-codegen` — leaves no diff in generated files
+- [x] `rg '\batoi\b' src/settings.c src/log.c src/ui_readline.c` — no matches
+- [x] `rg 'softfail' src/` — no matches
+- [x] `rg 'extern void BarMainGetPlaylist|extern void BarMainStartPlayback|extern sig_atomic_t \*interrupted' src test` — no matches
+- [x] `rg '#ifdef WEBSOCKET_ENABLED' src/ | grep -v websocket` — ≤ 5 hits
+- [x] `rg 'Extract song data|Emit stations|TODO.*broadcast' src/websocket/core/websocket.c` — no matches
+- [x] `rg ': any\b|as any\b' webui/src/app.ts webui/src/services/socket-service.ts` — no matches
+- [x] `git status` shows no untracked `*.o`, `*.gcda`, `*.gcno`, `*.gcov`, or binary files
 
 ---
 
 ## Execution Order and Estimates
 
-| Priority | Milestone | Task | Effort | Notes |
-|----------|-----------|------|--------|-------|
-| 1 | M1 | Task 1 — Buffer overflow | 1–2 h | Safety-critical; do first |
-| 2 | M1 | Task 2 — `atoi` → `BarParseIntInRange` | 2 h | Safety-critical; unique to Opus audit |
-| 3 | M1 | Task 3 — malloc NULL + PianoInit check | 1.5 h | Safety-critical |
-| 4 | M1 | Task 4 — `stateRwlock` in WEB mode | 2 h | Safety-critical; unique to Sonnet audit |
-| 5 | M1 | Task 5 — `volatile` → `_Atomic` | 1 h | Can do after Tasks 1–4 |
-| 6 | M2 | Task 6 — Lifecycle + interrupt extraction | 3–4 h | Prerequisite for Tasks 7–9 |
-| 7 | M2 | Task 7 — Broadcast queue unification | 2–3 h | Unique to GPT design |
-| 8 | M2 | Task 8 — `BarPlayerWaitForMode` condvar | 2 h | Depends on Task 6 (player struct) |
-| 9 | M2 | Task 9 — `#ifdef` sprawl → bridge | 2–3 h | Unique to Opus audit |
-| 10 | M3 | Task 10 — `softfail` + error convention | 1.5 h | Unique to Opus audit |
-| 11 | M3 | Task 11 — Table dispatch `socketio.c` + `settings.c` | 4–5 h | Largest single task; can split into two PRs |
-| 12 | M3 | Task 12 — State snapshots | 2 h | Unique to GPT design |
-| 13 | M3 | Task 13 — Unimplemented action errors | 1 h | Unique to GPT audit |
-| 14 | M3 | Task 14 — `NOWEBSOCKET=1` + libpiano tests | 1 h | Unique to Sonnet audit |
-| 15 | M4 | Task 15 — TypeScript protocol types | 2–3 h | Unique GPT design for web layer |
-| 16 | M4 | Task 16 — Repo hygiene | 0.5 h | Quick win; do early in M4 |
-| 17 | M4 | Task 17 — `popen` → structured pactl | 2 h | Unique to Opus; Linux only |
-| 18 | M4 | Task 18 — Locale sync script | 1 h | Unique to Opus; low urgency |
+| Priority | Milestone | Task | Effort | Status |
+|----------|-----------|------|--------|--------|
+| 1 | M1 | Task 1 — Buffer overflow | 1–2 h | Done |
+| 2 | M1 | Task 2 — `atoi` → `BarParseIntInRange` | 2 h | Done |
+| 3 | M1 | Task 3 — malloc NULL + PianoInit check | 1.5 h | Done |
+| 4 | M1 | Task 4 — `stateRwlock` in WEB mode | 2 h | Done |
+| 5 | M1 | Task 5 — `volatile` → `_Atomic` | 1 h | Done |
+| 6 | M2 | Task 6 — Lifecycle + interrupt extraction | 3–4 h | Done |
+| 7 | M2 | Task 7 — Broadcast queue unification | 2–3 h | Done |
+| 8 | M2 | Task 8 — `BarPlayerWaitForMode` condvar | 2 h | Done |
+| 9 | M2 | Task 9 — `#ifdef` sprawl → bridge | 2–3 h | Done |
+| 10 | M3 | Task 10 — `softfail` + error convention | 1.5 h | Done |
+| 11 | M3 | Task 11 — Table dispatch `socketio.c` + `settings.c` | 4–5 h | Done |
+| 12 | M3 | Task 12 — State snapshots | 2 h | Done |
+| 13 | M3 | Task 13 — Unimplemented action errors | 1 h | Done |
+| 14 | M3 | Task 14 — `NOWEBSOCKET=1` + libpiano tests | 1 h | Done |
+| 15 | M4 | Task 15 — TypeScript protocol types | 2–3 h | Done |
+| 16 | M4 | Task 16 — Repo hygiene | 0.5 h | Done |
+| 17 | M4 | Task 17 — `popen` → structured pactl | 2 h | Done |
+| 18 | M4 | Task 18 — Locale sync script | 1 h | Done |
 
 **Total estimated effort:** 35–45 h across ~4–5 sprints.
 

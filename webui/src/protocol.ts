@@ -20,8 +20,11 @@ export interface SongPayload {
   rating?: number;
   trackToken?: string;
   stationId?: string;
-  /** Station name as set at song-start time (sent on the `start` event). */
+  /** Current station name on the `start` event. */
   station?: string;
+  /** Station name on `query.upcoming.result` payloads (server uses `stationName` there). */
+  stationName?: string;
+  /** Station name as set at song-start time. */
   songStationName?: string;
 }
 
@@ -58,8 +61,21 @@ export interface ErrorPayload {
   stationId?: string;
 }
 
+export interface StationModePayload {
+  id?: number;
+  name?: string;
+  description?: string;
+  active?: boolean;
+}
+
+export interface GenreCategoryPayload {
+  id?: number;
+  name?: string;
+  [key: string]: unknown;
+}
+
 export interface DisconnectedPayload {
-  reason: string;
+  reason?: string;
 }
 
 export interface SongExplanationPayload {
@@ -85,11 +101,11 @@ export interface ServerEvents {
   'pandora.disconnected': DisconnectedPayload;
   'song.explanation': SongExplanationPayload;
   'query.upcoming.result': SongPayload[];
-  genres: { categories: unknown[] };
+  genres: { categories: GenreCategoryPayload[] };
   /** `searchResults` is the event name the server uses for music/genre search results. */
   searchResults: { categories: unknown[] };
   /** `stationModes` is the event name the server uses for station mode lists. */
-  stationModes: { modes: unknown[] };
+  stationModes: { modes: StationModePayload[] };
   /** `stationInfo` is the event name the server uses for station seed info. */
   stationInfo: unknown;
   'query.stations': StationPayload[];
