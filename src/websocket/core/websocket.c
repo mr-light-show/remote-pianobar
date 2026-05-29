@@ -103,16 +103,6 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
  *    values they don't need.
  */
 
-/* Bucket helper functions */
-
-/* Map message type to bucket */
-static BarWsBucketType_t BarWsGetBucket(BarWsMsgType_t type) {
-	(void)type;
-	/* Only MSG_TYPE_BROADCAST_SOCKETIO uses buckets; bucket is specified
-	 * explicitly by BarWebsocketBroadcastSocketIoMessage. */
-	return BUCKET_STATE; /* Fallback — should not be reached */
-}
-
 /* Initialize buckets */
 static void BarWsBucketsInit(BarWsContext_t *ctx) {
 	if (!ctx) return;
@@ -135,86 +125,6 @@ static void BarWsBucketsDestroy(BarWsContext_t *ctx) {
 		}
 		pthread_mutex_unlock(&ctx->buckets[i].mutex);
 		pthread_mutex_destroy(&ctx->buckets[i].mutex);
-	}
-}
-
-/* Put message in bucket (replaces BarWsQueuePush for broadcasts) */
-static void BarWsBucketPut(BarWsContext_t *ctx, BarWsMsgType_t type,
-                           const void *data, size_t dataLen) {
-	if (!ctx) return;
-	
-	BarWsBucketType_t bucket = BarWsGetBucket(type);
-	
-	/* STALE DATA PREVENTION: STATE bucket clears PROGRESS bucket
-	 * 
-	 * When a song starts or stops, we clear any pending progress updates.
-	 * This prevents clients from receiving progress for a song that just ended.
-	 * 
-	 * Example scenario without this:
-	 *   1. Song A is at 3:00/4:00 (progress update queued)
-	 *   2. Song B starts (state change queued)
-	 *   3. Client receives: progress(3:00/4:00), then start(Song B)
-	 *   4. Client briefly shows wrong progress for new song!
-	 * 
-	 * With this clearing, clients get consistent state updates.
-	 */
-	if (bucket == BUCKET_STATE) {
-		pthread_mutex_lock(&ctx->buckets[BUCKET_PROGRESS].mutex);
-		if (ctx->buckets[BUCKET_PROGRESS].message) {
-			BarWsMessageFree(ctx->buckets[BUCKET_PROGRESS].message);
-			ctx->buckets[BUCKET_PROGRESS].message = NULL;
-		}
-		pthread_mutex_unlock(&ctx->buckets[BUCKET_PROGRESS].mutex);
-	}
-	
-	/* Create new message */
-	BarWsMessage_t *msg = calloc(1, sizeof(BarWsMessage_t));
-	if (!msg) return;
-	
-	msg->type = type;
-	msg->next = NULL;
-	
-	/* Copy data if provided */
-	if (data && dataLen > 0) {
-		msg->data = malloc(dataLen);
-		if (msg->data) {
-			memcpy(msg->data, data, dataLen);
-			msg->dataLen = dataLen;
-		} else {
-			free(msg);
-			return;
-		}
-	}
-	
-	/* MESSAGE CONSOLIDATION & AUTOMATIC RATE LIMITING
-	 * 
-	 * This is the key feature: we REPLACE the old message instead of queuing.
-	 * Only the LATEST value is kept; older messages are automatically discarded.
-	 * 
-	 * Benefits:
-	 *   - If BarWsBroadcastProgress() is called 10 times in quick succession,
-	 *     only the final value gets sent to clients (the other 9 are dropped)
-	 *   - No explicit rate limiting code needed
-	 *   - Clients always get the most current data
-	 *   - No memory buildup from queued messages
-	 * 
-	 * Example: Progress updates called every 100ms
-	 *   - 10 calls/second from playback thread
-	 *   - Bucket stores only latest value
-	 *   - WebSocket thread polls ~20 times/second (50ms intervals)
-	 *   - Actual network sends: ~1-2 per second
-	 *   - Result: Automatic 5-10x rate reduction
-	 */
-	pthread_mutex_lock(&ctx->buckets[bucket].mutex);
-	if (ctx->buckets[bucket].message) {
-		BarWsMessageFree(ctx->buckets[bucket].message);  /* Discard old message */
-	}
-	ctx->buckets[bucket].message = msg;  /* Store only latest */
-	pthread_mutex_unlock(&ctx->buckets[bucket].mutex);
-	
-	/* Wake WebSocket thread immediately */
-	if (ctx->context) {
-		lws_cancel_service((struct lws_context *)ctx->context);
 	}
 }
 
@@ -533,8 +443,8 @@ static void* BarWebsocketThread(void *arg) {
 		 * 
 		 * This polling frequency provides natural rate limiting:
 		 *   - Even if progress is updated 100 times/second, we only send ~20/second max
-		 *   - Combined with message consolidation in BarWsBucketPut(), actual sends
-		 *     are further reduced (only when values change)
+		 *   - Combined with message consolidation in BarWebsocketBroadcastSocketIoMessage(),
+		 *     actual sends are further reduced (only when values change)
 		 * 
 		 * Example: High-frequency progress updates
 		 *   - BarWsBroadcastProgress() called every 100ms (10/second)
