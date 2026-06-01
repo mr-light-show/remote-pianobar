@@ -455,6 +455,41 @@ npm run test:e2e
 
 **GitHub Releases (immutable releases):** If the repository uses GitHub’s immutable releases, create a **draft** release for the tag first so `.github/workflows/release.yml` can upload `.deb` / `.dmg` assets. When CI finishes, publish the draft. Publishing before uploads complete causes `HTTP 422: Cannot upload assets to an immutable release`. Alternatively run the workflow manually (**Actions → Build and Release → Run workflow**) and enter the tag.
 
+### ARM64 builder image caching
+
+The three ARM64 release packages (`bookworm`, `trixie`, `noble`) build from prebuilt GHCR images instead of running `apt-get` inside an emulated container on every release.
+
+- **Images:** `ghcr.io/mr-light-show/remote-pianobar-build:<distro>-arm64`, built by `.github/workflows/builder-images.yml` from the shared dependency list `.github/docker/arm64-build-deps.txt`.
+- **Adding a build dependency:** edit `.github/docker/arm64-build-deps.txt`. Pushing that change to `main` retriggers `builder-images.yml`, which rebuilds and republishes the images. The image is **not** rebuilt automatically from a `Makefile`/code change alone — if a new `-dev` package is needed, add it to the deps file in the same change.
+- **Fallback:** if the GHCR image can't be pulled (e.g. not yet published), `release.yml` builds it locally from the Dockerfile so a release is never blocked (just slower).
+
+**Verify the image-layer cache works:**
+
+```bash
+# First dispatch builds all 3 under QEMU (one-time cost)
+gh workflow run builder-images.yml
+# Dispatch again with no dep changes — should be much faster (GHA layer cache hit)
+gh workflow run builder-images.yml
+```
+
+**Confirm the images exist and contain the deps:**
+
+```bash
+# Use 'noglob' so zsh does not try to "correct" the API path
+noglob gh api /user/packages/container/remote-pianobar-build/versions \
+  -q '.[].metadata.container.tags'
+
+docker run --rm --platform linux/arm64 \
+  ghcr.io/mr-light-show/remote-pianobar-build:bookworm-arm64 \
+  bash -c 'node --version && pkg-config --exists json-c && echo json-c-ok'
+```
+
+**Confirm a release uses the cache:** dispatch `release.yml` for a draft `*.dev.*` tag and check the `build-arm64` logs — the prepare step should print **“Using prebuilt builder image from GHCR.”** and the build step should run only `make` + `npm` (no `apt-get`). Compare job duration against an earlier release to see the speedup.
+
+```bash
+gh workflow run release.yml -f tag=v2.6.8.dev.2
+```
+
 ---
 
 ## Project Structure
