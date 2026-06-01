@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+#
+# ARM64 builder image for remote-pianobar release packaging.
+#
+# Bakes all build/test dependencies into the image so release.yml's build-arm64
+# job can skip the slow, emulated `apt-get install` on every tag. Rebuilt by
+# .github/workflows/builder-images.yml whenever the dependency list changes.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install deps from the shared list (single source of truth). Comments and blank
+# lines are stripped before being handed to apt-get.
+COPY arm64-build-deps.txt /tmp/arm64-build-deps.txt
+RUN apt-get update \
+    && grep -vE '^\s*(#|$)' /tmp/arm64-build-deps.txt \
+       | xargs apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* /tmp/arm64-build-deps.txt
+
+WORKDIR /workspace
