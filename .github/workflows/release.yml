@@ -232,17 +232,23 @@ jobs:
     name: Build ARM64 Package (${{ matrix.pkg_name }})
     runs-on: ubuntu-24.04
     needs: prepare
+    permissions:
+      contents: write
+      packages: read
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
     strategy:
       matrix:
         include:
-          - image: "debian:bookworm"
+          - image: "ghcr.io/mr-light-show/remote-pianobar-build:bookworm-arm64"
+            base: "debian:bookworm"
             pkg_name: "bookworm"
-          - image: "debian:trixie"
+          - image: "ghcr.io/mr-light-show/remote-pianobar-build:trixie-arm64"
+            base: "debian:trixie"
             pkg_name: "trixie"
-          - image: "ubuntu:noble"
+          - image: "ghcr.io/mr-light-show/remote-pianobar-build:noble-arm64"
+            base: "ubuntu:noble"
             pkg_name: "noble"
     
     steps:
@@ -261,7 +267,34 @@ jobs:
         uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
-      
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare ARM64 builder image (pull or build)
+        run: |
+          # Prefer the prebuilt image from GHCR (built by builder-images.yml).
+          # Fall back to building it locally so a release is never blocked by a
+          # missing/not-yet-published image. Either way the image is tagged
+          # ${{ matrix.image }} locally for the build and ldd steps below.
+          if docker pull --platform linux/arm64 "${{ matrix.image }}"; then
+            echo "Using prebuilt builder image from GHCR."
+          else
+            echo "::warning::Builder image ${{ matrix.image }} unavailable; building it locally (slower)."
+            docker buildx build --platform linux/arm64 \
+              --build-arg BASE_IMAGE="${{ matrix.base }}" \
+              -t "${{ matrix.image }}" \
+              --load \
+              .github/docker
+          fi
+
       - name: Build pianobar and Web UI
         run: |
           # Enable debug logging for pre-release builds
@@ -270,40 +303,21 @@ jobs:
             echo "Pre-release build detected, enabling debug logging"
             DEBUG_FLAGS="-DHAVE_DEBUGLOG"
           fi
-          
+
+          # Builder image (built by builder-images.yml) ships all deps preinstalled,
+          # so no apt-get here — just compile the C binary and the Web UI.
           docker run --platform linux/arm64 --rm \
             -v $(pwd):/workspace \
             -w /workspace \
             -e DEBUG_FLAGS="$DEBUG_FLAGS" \
             ${{ matrix.image }} \
-            bash -c "
-              apt-get update && \
-              apt-get install -y \
-                build-essential \
-                pkg-config \
-                libao-dev \
-                libcurl4-openssl-dev \
-                libgcrypt20-dev \
-                libjson-c-dev \
-                libavcodec-dev \
-                libavformat-dev \
-                libavfilter-dev \
-                libavutil-dev \
-                libswresample-dev \
-                libwebsockets-dev \
-                libasound2-dev \
-                libblas-dev \
-                liblapack-dev \
-                check \
-                python3-yaml \
-                nodejs \
-                npm && \
-              make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" clean && \
-              make WEBSOCKET=1 CFLAGS=\"\$DEBUG_FLAGS\" && \
+            bash -c '
+              make WEBSOCKET=1 CFLAGS="$DEBUG_FLAGS" clean && \
+              make WEBSOCKET=1 CFLAGS="$DEBUG_FLAGS" && \
               cd webui && \
               npm ci && \
               npm run build
-            "
+            '
       
       - name: Create package structure
         run: |

@@ -1,0 +1,26 @@
+# Build + test dependencies for the ARM64 release builder images.
+#
+# SINGLE SOURCE OF TRUTH: edit this file to add/remove a build dependency.
+# Editing it triggers .github/workflows/builder-images.yml, which rebuilds and
+# republishes the GHCR builder images consumed by release.yml's build-arm64 job.
+#
+# One package per line. Blank lines and lines starting with '#' are ignored.
+build-essential
+pkg-config
+libao-dev
+libcurl4-openssl-dev
+libgcrypt20-dev
+libjson-c-dev
+libavcodec-dev
+libavformat-dev
+libavfilter-dev
+libavutil-dev
+libswresample-dev
+libwebsockets-dev
+libasound2-dev
+libblas-dev
+liblapack-dev
+check
+python3-yaml
+nodejs
+npm
