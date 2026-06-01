@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v1.2.3). Prefer a draft release for that tag so uploads succeed with immutable releases; or run after creating the tag.'
+        description: 'Tag to build (e.g. v1.2.3). Created at the dispatched branch HEAD if missing; a draft release is created automatically.'
         required: true
         type: string
 
@@ -39,6 +39,32 @@ jobs:
           VERSION="${RELEASE_TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+
+      # Build jobs checkout ref: ${{ needs.prepare.outputs.release_tag }}. A draft
+      # release alone does not create refs/tags/<tag> until publish — ensure the tag
+      # exists before any build job runs.
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.release.target_commitish || github.ref }}
+
+      - name: Ensure git tag exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="${{ steps.set.outputs.release_tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${RELEASE_TAG} already exists on origin"
+            exit 0
+          fi
+          COMMIT="$(git rev-parse HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "Release ${RELEASE_TAG}" "$COMMIT"
+          git push origin "refs/tags/${RELEASE_TAG}"
+          echo "Created and pushed tag ${RELEASE_TAG} at ${COMMIT}"
 
       - name: Ensure GitHub release exists
         if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'

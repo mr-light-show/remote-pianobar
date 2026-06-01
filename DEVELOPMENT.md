@@ -453,7 +453,7 @@ npm run test:e2e
 # Web UI is served from dist/webui/
 ```
 
-**GitHub Releases (immutable releases):** If the repository uses GitHub’s immutable releases, create a **draft** release for the tag first so `.github/workflows/release.yml` can upload `.deb` / `.dmg` assets. When CI finishes, publish the draft. Publishing before uploads complete causes `HTTP 422: Cannot upload assets to an immutable release`. Alternatively run the workflow manually (**Actions → Build and Release → Run workflow**) and enter the tag.
+**GitHub Releases (immutable releases):** Published releases are immutable — assets cannot be added after publish (`HTTP 422`). The release workflow therefore creates a **draft** release, uploads `.deb` / `.dmg`, then you publish the draft when CI finishes. For manual runs (**Actions → Build and Release → Run workflow**), enter a new tag name; the `prepare` job creates the git tag at the dispatched branch HEAD and a draft release if either is missing (no need to push the tag yourself first).
 
 ### ARM64 builder image caching
 
@@ -484,10 +484,10 @@ docker run --rm --platform linux/arm64 \
   bash -c 'node --version && pkg-config --exists json-c && echo json-c-ok'
 ```
 
-**Confirm a release uses the cache:** dispatch `release.yml` for a draft `*.dev.*` tag and check the `build-arm64` logs — the prepare step should print **“Using prebuilt builder image from GHCR.”** and the build step should run only `make` + `npm` (no `apt-get`). Compare job duration against an earlier release to see the speedup.
+**Confirm a release uses the cache:** dispatch `release.yml` with a new `*.dev.*` tag (the workflow creates the tag and draft release automatically) and check the `build-arm64` logs — the prepare step should print **“Using prebuilt builder image from GHCR.”** and the build step should run only `make` + `npm` (no `apt-get`). Compare job duration against an earlier release to see the speedup.
 
 ```bash
-gh workflow run release.yml -f tag=v2.6.8.dev.2
+gh workflow run release.yml -f tag=v2.6.8.dev.3 --ref main
 ```
 
 ---
