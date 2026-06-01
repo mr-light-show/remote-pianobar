@@ -68,23 +68,16 @@ static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song,
 	songObj = json_object_new_object();
 	
 	/* Core song fields - use empty string as fallback for safety */
-	json_object_object_add(songObj, "title", 
-	                       BarJsonStringOrEmpty (song->title));
-	json_object_object_add(songObj, "artist", 
-	                       BarJsonStringOrEmpty (song->artist));
-	json_object_object_add(songObj, "album", 
-	                       BarJsonStringOrEmpty (song->album));
-	json_object_object_add(songObj, "coverArt", 
-	                       BarJsonStringOrEmpty (song->coverArt));
-	json_object_object_add(songObj, "rating", 
-	                       json_object_new_int(song->rating));
-	json_object_object_add(songObj, "duration", 
-	                       json_object_new_int(song->length));
+	json_object_object_add(songObj, "title",    BarJsonStringOrEmpty(song->title));
+	json_object_object_add(songObj, "artist",   BarJsonStringOrEmpty(song->artist));
+	json_object_object_add(songObj, "album",    BarJsonStringOrEmpty(song->album));
+	json_object_object_add(songObj, "coverArt", BarJsonStringOrEmpty(song->coverArt));
+	json_object_object_add(songObj, "rating",   json_object_new_int(song->rating));
+	json_object_object_add(songObj, "duration", json_object_new_int(song->length));
 	
 	/* Optional: track token */
 	if (includeTrackToken) {
-		json_object_object_add(songObj, "trackToken", 
-		                       BarJsonStringOrEmpty (song->trackToken));
+		json_object_object_add(songObj, "trackToken", BarJsonStringOrEmpty(song->trackToken));
 	}
 	
 	/* Optional: station name the song came from */
@@ -92,8 +85,7 @@ static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song,
 		songStation = BarStateFindStationById(app, song->stationId);
 		if (songStation) {
 			const char *displayName = songStation->displayName ? songStation->displayName : songStation->name;
-			json_object_object_add(songObj, stationFieldName,
-			                       BarJsonStringOrEmpty(displayName));
+			json_object_object_add(songObj, stationFieldName, BarJsonStringOrEmpty(displayName));
 		}
 	}
 	
@@ -546,8 +538,8 @@ void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
 	}
 	
 	data = json_object_new_object();
-	json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
-	json_object_object_add(data, "duration", json_object_new_int(duration));
+	json_object_object_add(data, "elapsed",    json_object_new_int(elapsed));
+	json_object_object_add(data, "duration",   json_object_new_int(duration));
 	json_object_object_add(data, "percentage", json_object_new_double(percentage));
 	
 	BarSocketIoEmit("progress", data);
@@ -590,14 +582,10 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
 		
 		station = json_object_new_object();
-		json_object_object_add(station, "id", 
-		                       BarJsonStringOrEmpty(curStation->id));
-		json_object_object_add(station, "name", 
-		                       BarJsonStringOrEmpty(displayName));
-		json_object_object_add(station, "isQuickMix", 
-		                       json_object_new_boolean(curStation->isQuickMix));
-		json_object_object_add(station, "isQuickMixed", 
-		                       json_object_new_boolean(curStation->useQuickMix));
+		json_object_object_add(station, "id",           BarJsonStringOrEmpty(curStation->id));
+		json_object_object_add(station, "name",         BarJsonStringOrEmpty(displayName));
+		json_object_object_add(station, "isQuickMix",   json_object_new_boolean(curStation->isQuickMix));
+		json_object_object_add(station, "isQuickMixed", json_object_new_boolean(curStation->useQuickMix));
 		
 		json_object_array_add(stations, station);
 	}
@@ -649,22 +637,21 @@ struct json_object *BarSocketIoBuildStartPayload (BarApp_t *app) {
 	}
 
 	struct json_object *data = json_object_new_object ();
-	json_object_object_add (data, "title",      BarJsonStringOrEmpty (snap.songTitle    ? snap.songTitle    : ""));
-	json_object_object_add (data, "artist",     BarJsonStringOrEmpty (snap.songArtist   ? snap.songArtist   : ""));
-	json_object_object_add (data, "album",      BarJsonStringOrEmpty (snap.songAlbum    ? snap.songAlbum    : ""));
-	json_object_object_add (data, "coverArt",   BarJsonStringOrEmpty (snap.songCoverArt ? snap.songCoverArt : ""));
-	json_object_object_add (data, "trackToken", BarJsonStringOrEmpty (snap.trackToken   ? snap.trackToken   : ""));
-	json_object_object_add (data, "rating",     json_object_new_int    (snap.rating));
-	json_object_object_add (data, "duration",   json_object_new_int    ((int) snap.duration));
+	json_object_object_add(data, "title",      BarJsonStringOrEmpty (snap.songTitle));
+	json_object_object_add(data, "artist",     BarJsonStringOrEmpty (snap.songArtist));
+	json_object_object_add(data, "album",      BarJsonStringOrEmpty (snap.songAlbum));
+	json_object_object_add(data, "coverArt",   BarJsonStringOrEmpty (snap.songCoverArt));
+	json_object_object_add(data, "trackToken", BarJsonStringOrEmpty (snap.trackToken));
+	json_object_object_add(data, "rating",     json_object_new_int    (snap.rating));
+	json_object_object_add(data, "duration",   json_object_new_int    ((int) snap.duration));
 
 	if (snap.songStationName) {
-		json_object_object_add (data, "songStationName",
-				BarJsonStringOrEmpty (snap.songStationName));
+		json_object_object_add(data, "songStationName", BarJsonStringOrEmpty(snap.songStationName));
 	}
 
 	if (snap.hasStation) {
-		json_object_object_add (data, "station",   BarJsonStringOrEmpty (snap.stationName ? snap.stationName : ""));
-		json_object_object_add (data, "stationId", BarJsonStringOrEmpty (snap.stationId   ? snap.stationId   : ""));
+		json_object_object_add(data, "station",   BarJsonStringOrEmpty (snap.stationName));
+		json_object_object_add(data, "stationId", BarJsonStringOrEmpty (snap.stationId));
 	}
 	BarStateFreePlaybackSnapshot (&snap);
 	return data;
@@ -685,10 +672,10 @@ struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app) {
 		const BarStationSnapshot_t *st = &snap.items[i];
 		const char *displayName = st->displayName ? st->displayName : (st->name ? st->name : "");
 		struct json_object *station = json_object_new_object ();
-		json_object_object_add (station, "id",           BarJsonStringOrEmpty (st->id));
-		json_object_object_add (station, "name",         BarJsonStringOrEmpty (displayName));
-		json_object_object_add (station, "isQuickMix",   json_object_new_boolean (st->isQuickMix));
-		json_object_object_add (station, "isQuickMixed", json_object_new_boolean (st->isQuickMixed));
+		json_object_object_add(station, "id",           BarJsonStringOrEmpty (st->id));
+		json_object_object_add(station, "name",         BarJsonStringOrEmpty (displayName));
+		json_object_object_add(station, "isQuickMix",   json_object_new_boolean (st->isQuickMix));
+		json_object_object_add(station, "isQuickMixed", json_object_new_boolean (st->isQuickMixed));
 		json_object_array_add (stations, station);
 	}
 	BarStateFreeStationSnapshot (&snap);
@@ -717,27 +704,23 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 	}
 	json_object_object_add (data, "volume", json_object_new_int (volumePercent));
 
-	json_object_object_add (data, "station",
-	        BarJsonStringOrEmpty (pbSnap.stationName ? pbSnap.stationName : ""));
-	json_object_object_add (data, "stationId",
-	        BarJsonStringOrEmpty (pbSnap.stationId   ? pbSnap.stationId   : ""));
+	json_object_object_add(data, "station",   BarJsonStringOrEmpty(pbSnap.stationName));
+	json_object_object_add(data, "stationId", BarJsonStringOrEmpty(pbSnap.stationId));
 
 	if (pbSnap.hasSong) {
 		struct json_object *song = json_object_new_object ();
-		json_object_object_add (song, "title",      BarJsonStringOrEmpty (pbSnap.songTitle    ? pbSnap.songTitle    : ""));
-		json_object_object_add (song, "artist",     BarJsonStringOrEmpty (pbSnap.songArtist   ? pbSnap.songArtist   : ""));
-		json_object_object_add (song, "album",      BarJsonStringOrEmpty (pbSnap.songAlbum    ? pbSnap.songAlbum    : ""));
-		json_object_object_add (song, "coverArt",   BarJsonStringOrEmpty (pbSnap.songCoverArt ? pbSnap.songCoverArt : ""));
-		json_object_object_add (song, "trackToken", BarJsonStringOrEmpty (pbSnap.trackToken   ? pbSnap.trackToken   : ""));
-		json_object_object_add (song, "rating",     json_object_new_int    (pbSnap.rating));
-		json_object_object_add (song, "duration",   json_object_new_int    ((int) pbSnap.duration));
+		json_object_object_add(song, "title",      BarJsonStringOrEmpty (pbSnap.songTitle));
+		json_object_object_add(song, "artist",     BarJsonStringOrEmpty (pbSnap.songArtist));
+		json_object_object_add(song, "album",      BarJsonStringOrEmpty (pbSnap.songAlbum));
+		json_object_object_add(song, "coverArt",   BarJsonStringOrEmpty (pbSnap.songCoverArt));
+		json_object_object_add(song, "trackToken", BarJsonStringOrEmpty (pbSnap.trackToken));
+		json_object_object_add(song, "rating",     json_object_new_int    (pbSnap.rating));
+		json_object_object_add(song, "duration",   json_object_new_int    ((int) pbSnap.duration));
 		if (pbSnap.songStationName) {
-			json_object_object_add (song, "songStationName",
-					BarJsonStringOrEmpty (pbSnap.songStationName));
+			json_object_object_add(song, "songStationName", BarJsonStringOrEmpty(pbSnap.songStationName));
 		}
-		json_object_object_add (data, "song", song);
-		json_object_object_add (data, "elapsed",
-		                        json_object_new_int ((int) BarWebsocketGetElapsed (app)));
+		json_object_object_add(data, "song",    song);
+		json_object_object_add(data, "elapsed", json_object_new_int((int) BarWebsocketGetElapsed(app)));
 	}
 
 	BarStateFreePlaybackSnapshot (&pbSnap);
@@ -746,21 +729,15 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 		const BarAccount_t *active = BarSettingsGetActiveAccount (&app->settings);
 		if (active) {
 			struct json_object *currentAcct = json_object_new_object ();
-			json_object_object_add (currentAcct, "id",    BarJsonStringOrEmpty (active->id));
-			json_object_object_add (currentAcct, "label",
-			        BarJsonStringOrEmpty (active->label ? active->label : active->id));
+			json_object_object_add(currentAcct, "id",    BarJsonStringOrEmpty(active->id));
+			json_object_object_add(currentAcct, "label", BarJsonStringOrEmpty(active->label ? active->label : active->id));
 			json_object_object_add (data, "current_account", currentAcct);
 		}
 		struct json_object *accountsArr = json_object_new_array ();
 		for (size_t i = 0; i < app->settings.accountCount; i++) {
 			struct json_object *acctObj = json_object_new_object ();
-			json_object_object_add (acctObj, "id",
-			        BarJsonStringOrEmpty (app->settings.accounts[i].id));
-			json_object_object_add (acctObj, "label",
-			        BarJsonStringOrEmpty (
-			            app->settings.accounts[i].label ?
-			            app->settings.accounts[i].label :
-			            app->settings.accounts[i].id));
+			json_object_object_add(acctObj, "id",    BarJsonStringOrEmpty(app->settings.accounts[i].id));
+			json_object_object_add(acctObj, "label", BarJsonStringOrEmpty(app->settings.accounts[i].label ? app->settings.accounts[i].label : app->settings.accounts[i].id));
 			json_object_array_add (accountsArr, acctObj);
 		}
 		json_object_object_add (data, "accounts", accountsArr);
@@ -793,8 +770,7 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 	}
 	
 	data = json_object_new_object();
-	json_object_object_add(data, "explanation", 
-	                       BarJsonStringOrEmpty(explanation_copy));
+	json_object_object_add(data, "explanation", BarJsonStringOrEmpty(explanation_copy));
 	
 	BarSocketIoEmit("song.explanation", data);
 	json_object_put(data);
@@ -819,10 +795,8 @@ void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *me
 	friendlyMessage = BarWsGetFriendlyErrorMessage(l10n, operation, message);
 	
 	data = json_object_new_object();
-	json_object_object_add(data, "operation", 
-	                       BarJsonStringOrEmpty(operation));
-	json_object_object_add(data, "message", 
-	                       BarJsonStringOrEmpty(friendlyMessage));
+	json_object_object_add(data, "operation", BarJsonStringOrEmpty(operation));
+	json_object_object_add(data, "message",   BarJsonStringOrEmpty(friendlyMessage));
 	if (stationId && *stationId) {
 		json_object_object_add(data, "stationId", BarJsonStringOrEmpty(stationId));
 	}
@@ -886,8 +860,7 @@ void BarSocketIoEmitPlayState(BarApp_t *app) {
 	json_object *data = json_object_new_object();
 	
 	pthread_mutex_lock(&app->player.lock);
-	json_object_object_add(data, "paused", 
-	                       json_object_new_boolean(app->player.doPause));
+	json_object_object_add(data, "paused", json_object_new_boolean(app->player.doPause));
 	pthread_mutex_unlock(&app->player.lock);
 	
 	BarSocketIoEmit("playState", data);
@@ -941,8 +914,7 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 	while (category != NULL) {
 		categoryObj = json_object_new_object();
 		
-		json_object_object_add(categoryObj, "name",
-		                       BarJsonStringOrEmpty (category->name));
+		json_object_object_add(categoryObj, "name", BarJsonStringOrEmpty(category->name));
 		
 		/* Create genres array for this category */
 		genresArray = json_object_new_array();
@@ -951,10 +923,8 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 		while (genre != NULL) {
 			genreObj = json_object_new_object();
 			
-			json_object_object_add(genreObj, "name",
-			                       BarJsonStringOrEmpty (genre->name));
-			json_object_object_add(genreObj, "musicId",
-			                       BarJsonStringOrEmpty (genre->musicId));
+			json_object_object_add(genreObj, "name",    BarJsonStringOrEmpty(genre->name));
+			json_object_object_add(genreObj, "musicId", BarJsonStringOrEmpty(genre->musicId));
 			
 			json_object_array_add(genresArray, genreObj);
 			
@@ -1261,10 +1231,10 @@ void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_
 	mode = reqData->retModes;
 	PianoListForeachP(mode) {
 		modeObj = json_object_new_object();
-		json_object_object_add(modeObj, "id", json_object_new_int(i));
-		json_object_object_add(modeObj, "name", BarJsonStringOrEmpty (mode->name));
+		json_object_object_add(modeObj, "id",          json_object_new_int(i));
+		json_object_object_add(modeObj, "name",        BarJsonStringOrEmpty (mode->name));
 		json_object_object_add(modeObj, "description", BarJsonStringOrEmpty (mode->description));
-		json_object_object_add(modeObj, "active", json_object_new_boolean(mode->active));
+		json_object_object_add(modeObj, "active",      json_object_new_boolean(mode->active));
 		json_object_array_add(modesArray, modeObj);
 		i++;
 	}
@@ -1378,7 +1348,7 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	PianoListForeachP(artist) {
 		itemObj = json_object_new_object();
 		json_object_object_add(itemObj, "seedId", BarJsonStringOrEmpty (artist->seedId));
-		json_object_object_add(itemObj, "name", BarJsonStringOrEmpty (artist->name));
+		json_object_object_add(itemObj, "name",   BarJsonStringOrEmpty (artist->name));
 		json_object_array_add(artistsArray, itemObj);
 	}
 	json_object_object_add(data, "artistSeeds", artistsArray);
@@ -1389,7 +1359,7 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	PianoListForeachP(song) {
 		itemObj = json_object_new_object();
 		json_object_object_add(itemObj, "seedId", BarJsonStringOrEmpty (song->seedId));
-		json_object_object_add(itemObj, "title", BarJsonStringOrEmpty (song->title));
+		json_object_object_add(itemObj, "title",  BarJsonStringOrEmpty (song->title));
 		json_object_object_add(itemObj, "artist", BarJsonStringOrEmpty (song->artist));
 		json_object_array_add(songsArray, itemObj);
 	}
@@ -1401,7 +1371,7 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	PianoListForeachP(station) {
 		itemObj = json_object_new_object();
 		json_object_object_add(itemObj, "seedId", BarJsonStringOrEmpty (station->seedId));
-		json_object_object_add(itemObj, "name", BarJsonStringOrEmpty (station->name));
+		json_object_object_add(itemObj, "name",   BarJsonStringOrEmpty (station->name));
 		json_object_array_add(stationsArray, itemObj);
 	}
 	json_object_object_add(data, "stationSeeds", stationsArray);
@@ -1412,9 +1382,9 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	PianoListForeachP(song) {
 		itemObj = json_object_new_object();
 		json_object_object_add(itemObj, "feedbackId", BarJsonStringOrEmpty (song->feedbackId));
-		json_object_object_add(itemObj, "title", BarJsonStringOrEmpty (song->title));
-		json_object_object_add(itemObj, "artist", BarJsonStringOrEmpty (song->artist));
-		json_object_object_add(itemObj, "rating", json_object_new_int(song->rating));
+		json_object_object_add(itemObj, "title",      BarJsonStringOrEmpty (song->title));
+		json_object_object_add(itemObj, "artist",     BarJsonStringOrEmpty (song->artist));
+		json_object_object_add(itemObj, "rating",     json_object_new_int(song->rating));
 		json_object_array_add(feedbackArray, itemObj);
 	}
 	json_object_object_add(data, "feedback", feedbackArray);
@@ -1596,10 +1566,8 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 		while (artist != NULL) {
 			resultObj = json_object_new_object();
 			
-			json_object_object_add(resultObj, "name",
-			                       BarJsonStringOrEmpty (artist->name));
-			json_object_object_add(resultObj, "musicId",
-			                       BarJsonStringOrEmpty (artist->musicId));
+			json_object_object_add(resultObj, "name",    BarJsonStringOrEmpty(artist->name));
+			json_object_object_add(resultObj, "musicId", BarJsonStringOrEmpty(artist->musicId));
 			
 			json_object_array_add(resultsArray, resultObj);
 			
@@ -1621,12 +1589,9 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 		while (song != NULL) {
 			resultObj = json_object_new_object();
 			
-			json_object_object_add(resultObj, "title",
-			                       BarJsonStringOrEmpty (song->title));
-			json_object_object_add(resultObj, "artist",
-			                       BarJsonStringOrEmpty (song->artist));
-			json_object_object_add(resultObj, "musicId",
-			                       BarJsonStringOrEmpty (song->musicId));
+			json_object_object_add(resultObj, "title",   BarJsonStringOrEmpty(song->title));
+			json_object_object_add(resultObj, "artist",  BarJsonStringOrEmpty(song->artist));
+			json_object_object_add(resultObj, "musicId", BarJsonStringOrEmpty(song->musicId));
 			
 			json_object_array_add(resultsArray, resultObj);
 			
