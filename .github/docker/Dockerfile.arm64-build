@@ -8,6 +8,10 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+# Links the GHCR package to the repository (shows a Repository link on the
+# package page and lets same-repo Actions inherit read access).
+LABEL org.opencontainers.image.source="https://github.com/mr-light-show/remote-pianobar"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install deps from the shared list (single source of truth). Comments and blank
