@@ -52,6 +52,10 @@ bool log_is_debug_cli_enabled(void);
 void log_write(logKind kind, const char *format, ...)
 	__attribute__((format(printf, 2, 3)));
 
+/* DEBUG_NETWORK request/response lines (Pandora API + CDN audio). */
+void log_network_request(const char *url);
+void log_network_response(const char *summary);
+
 /* Atomically set or get the debug mask (normally set once by log_init). */
 void         log_set_debug_mask (unsigned int mask);
 unsigned int log_get_debug_mask (void);

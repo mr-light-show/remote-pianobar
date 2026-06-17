@@ -127,6 +127,60 @@ START_TEST(test_log_write_unknown_kind) {
 }
 END_TEST
 
+static void capture_stderr_to_pipe(int pipefd[2], int *saved_stderr)
+{
+	ck_assert_int_eq(pipe(pipefd), 0);
+	*saved_stderr = dup(STDERR_FILENO);
+	ck_assert(*saved_stderr >= 0);
+	ck_assert(dup2(pipefd[1], STDERR_FILENO) >= 0);
+	close(pipefd[1]);
+}
+
+START_TEST(test_log_network_request_and_response) {
+	int pipefd[2];
+	int saved_stderr;
+	char buf[4096];
+	ssize_t n;
+
+	capture_stderr_to_pipe(pipefd, &saved_stderr);
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "1", 1), 0);
+	log_init();
+	log_network_request("http://cdn.example/track.mp3");
+	log_network_response("ok");
+	fflush(stderr);
+	dup2(saved_stderr, STDERR_FILENO);
+	close(saved_stderr);
+	n = read(pipefd[0], buf, sizeof(buf) - 1);
+	close(pipefd[0]);
+	ck_assert(n > 0);
+	buf[n] = '\0';
+	ck_assert(strstr(buf, "Network") != NULL);
+	ck_assert(strstr(buf, "← http://cdn.example/track.mp3") != NULL);
+	ck_assert(strstr(buf, "→ ok") != NULL);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+
+START_TEST(test_log_network_respects_mask) {
+	int pipefd[2];
+	int saved_stderr;
+	char buf[256];
+	ssize_t n;
+
+	capture_stderr_to_pipe(pipefd, &saved_stderr);
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "2", 1), 0);
+	log_init();
+	log_network_request("http://cdn.example/track.mp3");
+	fflush(stderr);
+	dup2(saved_stderr, STDERR_FILENO);
+	close(saved_stderr);
+	n = read(pipefd[0], buf, sizeof(buf));
+	close(pipefd[0]);
+	ck_assert_int_eq(n, 0);
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+
 #endif /* HAVE_DEBUGLOG */
 
 Suite *log_suite (void) {
@@ -144,6 +198,8 @@ Suite *log_suite (void) {
 	tcase_add_test (tc_debug, test_log_init_debug_ui_without_state);
 	tcase_add_test (tc_debug, test_log_write_debug_state);
 	tcase_add_test (tc_debug, test_log_write_unknown_kind);
+	tcase_add_test (tc_debug, test_log_network_request_and_response);
+	tcase_add_test (tc_debug, test_log_network_respects_mask);
 #endif
 #ifndef HAVE_DEBUGLOG
 	tcase_add_test (tc_debug, test_log_stub_no_debuglog);

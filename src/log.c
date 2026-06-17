@@ -201,3 +201,19 @@ void log_write(logKind kind, const char *format, ...)
 
 	va_end(args);
 }
+
+void log_network_request(const char *url)
+{
+	if (url == NULL) {
+		return;
+	}
+	log_write(DEBUG_NETWORK, "← %s\n", url);
+}
+
+void log_network_response(const char *summary)
+{
+	if (summary == NULL) {
+		return;
+	}
+	log_write(DEBUG_NETWORK, "→ %s\n", summary);
+}

@@ -241,7 +241,7 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 		req->secure ? settings->rpcTlsPort : "80",
 		req->urlPath);
 	assert (ret >= 0 && ret <= (int) sizeof (url));
-	log_write(DEBUG_NETWORK, "← %s\n", url);
+	log_network_request(url);
 
 	/* redirect interrupts to local lint during HTTP so a SIGINT doesn't
 	 * stomp on doQuit or player.interrupted mid-request */
@@ -315,7 +315,7 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	curl_slist_free_all (list);
 
 	req->responseData = buffer.data;
-	log_write(DEBUG_NETWORK, "→ %s\n", req->responseData);
+	log_network_response(req->responseData != NULL ? req->responseData : "(null)");
 
 	BarInterruptSetTarget (prevint);
 
