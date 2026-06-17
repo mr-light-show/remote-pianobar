@@ -193,6 +193,55 @@ START_TEST(test_manager_thread_one_loop_iteration) {
 }
 END_TEST
 
+START_TEST(test_should_park_idle_when_dead_and_empty) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	app.player.mode = PLAYER_DEAD;
+	ck_assert(BarPlaybackShouldParkIdle(&app));
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+START_TEST(test_should_not_park_when_next_station_set) {
+	BarApp_t app;
+	PianoStation_t st = { .id = "1", .name = "Test" };
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	app.player.mode = PLAYER_DEAD;
+	BarStateSetNextStation(&app, &st);
+	ck_assert(!BarPlaybackShouldParkIdle(&app));
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+START_TEST(test_manager_wakes_on_state_signal) {
+	BarApp_t app;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert(BarPlaybackManagerStart(&app));
+	usleep(50000);
+	BarStateSignalPlaybackManager(&app);
+	BarPlaybackManagerStop(&app);
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
@@ -203,6 +252,9 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_complete_song_cleanup_interrupt_on_quit);
 	tcase_add_test(tc, test_complete_song_cleanup_no_interrupt_log_when_not_quitting);
 	tcase_add_test(tc, test_manager_thread_one_loop_iteration);
+	tcase_add_test(tc, test_should_park_idle_when_dead_and_empty);
+	tcase_add_test(tc, test_should_not_park_when_next_station_set);
+	tcase_add_test(tc, test_manager_wakes_on_state_signal);
 	suite_add_tcase(s, tc);
 	return s;
 }

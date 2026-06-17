@@ -50,3 +50,6 @@ bool BarPlaybackManagerStart(BarApp_t *app);
  */
 void BarPlaybackManagerStop(BarApp_t *app);
 
+/* True when playback manager should block on cond_wait (no 1 Hz poll). */
+bool BarPlaybackShouldParkIdle(const BarApp_t *app);
+

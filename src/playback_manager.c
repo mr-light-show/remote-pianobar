@@ -53,6 +53,17 @@ extern void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 static pthread_t g_playbackThread;
 static _Atomic bool g_running = false;
 static _Atomic bool g_idleLogged = false;
+static _Atomic bool g_parkedLogged = false;
+
+bool BarPlaybackShouldParkIdle(const BarApp_t *app)
+{
+	BarPlayerMode mode = BarPlayerGetMode((player_t *)&app->player);
+	if (mode != PLAYER_DEAD) {
+		return false;
+	}
+	return BarStateGetPlaylist(app) == NULL
+	    && BarStateGetNextStation(app) == NULL;
+}
 
 /*	Join thread with timeout - prevents deadlock if player hangs on network
  *	Returns true if thread joined successfully, false if timeout expired
@@ -203,14 +214,22 @@ static void *BarPlaybackManagerThread(void *data) {
 	log_write(DEBUG_UI, "PlaybackMgr: Thread started\n");
 	
 	while (!app->doQuit && g_running) {
-		/* Use timed wait instead of polling - wake up on mode changes or after 1 second */
-		struct timespec timeout;
-		clock_gettime(CLOCK_REALTIME, &timeout);
-		timeout.tv_sec += PROGRESS_BROADCAST_INTERVAL_SECS;
-		
+		const bool park_idle = BarPlaybackShouldParkIdle(app);
+
 		pthread_mutex_lock(&app->player.lock);
-		/* Wait for mode change or timeout (whichever comes first) */
-		pthread_cond_timedwait(&app->player.cond, &app->player.lock, &timeout);
+		if (park_idle) {
+			if (!atomic_load(&g_parkedLogged)) {
+				atomic_store(&g_parkedLogged, true);
+				log_write(DEBUG_UI, "PlaybackMgr: Parked (waiting for station)\n");
+			}
+			pthread_cond_wait(&app->player.cond, &app->player.lock);
+		} else {
+			atomic_store(&g_parkedLogged, false);
+			struct timespec timeout;
+			clock_gettime(CLOCK_REALTIME, &timeout);
+			timeout.tv_sec += PROGRESS_BROADCAST_INTERVAL_SECS;
+			pthread_cond_timedwait(&app->player.cond, &app->player.lock, &timeout);
+		}
 		/* Cache mode, pause state, and pause start time while holding lock */
 		BarPlayerMode mode = app->player.mode;
 		bool isPaused = app->player.doPause;
