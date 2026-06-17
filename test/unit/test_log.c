@@ -168,8 +168,9 @@ START_TEST(test_log_network_respects_mask) {
 	ssize_t n;
 
 	capture_stderr_to_pipe(pipefd, &saved_stderr);
-	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "2", 1), 0);
-	log_init();
+	/* Use log_set_debug_mask (not log_init) so stderr is not polluted by the
+	 * PIANOBAR_DEBUG startup banner when only non-Network bits are enabled. */
+	log_set_debug_mask(DEBUG_AUDIO);
 	log_network_request("http://cdn.example/track.mp3");
 	fflush(stderr);
 	dup2(saved_stderr, STDERR_FILENO);
@@ -177,7 +178,7 @@ START_TEST(test_log_network_respects_mask) {
 	n = read(pipefd[0], buf, sizeof(buf));
 	close(pipefd[0]);
 	ck_assert_int_eq(n, 0);
-	unsetenv("PIANOBAR_DEBUG");
+	log_set_debug_mask(0);
 }
 END_TEST
 

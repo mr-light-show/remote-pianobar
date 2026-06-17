@@ -1125,7 +1125,7 @@ START_TEST (test_ui_act_delete_station_confirmed)
 	doomed.id = "S2";
 	doomed.name = "Delete Me";
 	doomed.isCreator = true;
-	PianoListAppend (&current.head, &doomed.head);
+	ck_assert_ptr_nonnull (PianoListAppend (&current.head, &doomed.head));
 	app.ph.stations = &current;
 	BarStateSetCurrentStation (&app, &current);
 
