@@ -22,6 +22,7 @@ THE SOFTWARE.
 */
 
 #include "config.h"
+#include "bar_constants.h"
 
 /* system includes */
 #include <stdlib.h>
@@ -64,6 +65,8 @@ THE SOFTWARE.
 #include <piano.h>
 
 #include "main.h"
+#include "interrupt.h"
+#include "playback_lifecycle.h"
 #include "log.h"
 #include "terminal.h"
 #include "ui.h"
@@ -202,15 +205,13 @@ static bool BarMainGetLoginCredentials (BarApp_t *app, BarReadlineFds_t *input) 
 	BarAccount_t *acct = (BarAccount_t *)BarSettingsGetActiveAccount (settings);
 	if (acct != NULL) {
 		if (acct->username == NULL) {
-			#ifdef WEBSOCKET_ENABLED
-			if (settings->uiMode == BAR_UI_MODE_WEB) {
+			if (BarIsWebOnlyMode (app)) {
 				char eb[256];
 				BarL10nFormat (&app->l10n, eb, sizeof (eb), "cli.account_no_username_web",
 						acct->id);
 				BarUiMsg (settings, MSG_ERR, "%s", eb);
 				return false;
 			}
-			#endif
 			char nameBuf[BAR_INPUT_MAX];
 			char eq[256];
 			BarL10nFormat (&app->l10n, eq, sizeof (eq), "cli.email_for_account",
@@ -222,15 +223,13 @@ static bool BarMainGetLoginCredentials (BarApp_t *app, BarReadlineFds_t *input) 
 		}
 		if (acct->password == NULL) {
 			if (!BarResolveAccountPassword (app, acct)) {
-				#ifdef WEBSOCKET_ENABLED
-				if (settings->uiMode == BAR_UI_MODE_WEB) {
+				if (BarIsWebOnlyMode (app)) {
 					char eb[256];
 					BarL10nFormat (&app->l10n, eb, sizeof (eb),
 							"cli.account_no_password_web", acct->id);
 					BarUiMsg (settings, MSG_ERR, "%s", eb);
 					return false;
 				}
-				#endif
 				char passBuf[BAR_INPUT_MAX];
 				char pq[256];
 				BarL10nFormat (&app->l10n, pq, sizeof (pq), "cli.password_for_account",
@@ -254,13 +253,11 @@ static bool BarMainGetLoginCredentials (BarApp_t *app, BarReadlineFds_t *input) 
 
 	/* Legacy single-account path (no accounts array) */
 	if (settings->username == NULL) {
-		#ifdef WEBSOCKET_ENABLED
-		if (settings->uiMode == BAR_UI_MODE_WEB) {
+		if (BarIsWebOnlyMode (app)) {
 			BarUiMsg (settings, MSG_ERR, "%s",
 					BarL10nGet (&app->l10n, "cli.username_missing_web"));
 			return false;
 		}
-		#endif
 
 		char nameBuf[BAR_INPUT_MAX];
 
@@ -274,13 +271,11 @@ static bool BarMainGetLoginCredentials (BarApp_t *app, BarReadlineFds_t *input) 
 	}
 
 	if (settings->password == NULL) {
-		#ifdef WEBSOCKET_ENABLED
-		if (settings->uiMode == BAR_UI_MODE_WEB) {
+		if (BarIsWebOnlyMode (app)) {
 			BarUiMsg (settings, MSG_ERR, "%s",
 					BarL10nGet (&app->l10n, "cli.password_missing_web"));
 			return false;
 		}
-		#endif
 
 		char passBuf[BAR_INPUT_MAX];
 
@@ -380,88 +375,6 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 	}
 }
 
-/*	fetch new playlist
- */
-void BarMainGetPlaylist (BarApp_t *app) {
-	PianoReturn_t pRet;
-	CURLcode wRet;
-	PianoRequestDataGetPlaylist_t reqData;
-	reqData.station = BarStateGetNextStation(app);
-	reqData.quality = app->settings.audioQuality;
-
-	BarUiMsg (&app->settings, MSG_INFO, "%s",
-			BarL10nGet (&app->l10n, "cli.receiving_playlist"));
-	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
-			&reqData, &pRet, &wRet)) {
-		if (pRet == PIANO_RET_P_INTERNAL) {
-			const char *resumeId = NULL;
-			if (reqData.station != NULL && reqData.station->id != NULL) {
-				resumeId = reqData.station->id;
-			}
-			BarUiDoPandoraDisconnect(app, "playlist_session_error", resumeId);
-		} else {
-			BarStateSetNextStation(app, NULL);
-		}
-	} else {
-		BarStateSetPlaylist(app, reqData.retPlaylist);
-		if (BarStateGetPlaylist(app) == NULL) {
-			BarUiMsg (&app->settings, MSG_INFO, "%s",
-					BarL10nGet (&app->l10n, "cli.no_tracks_left"));
-			BarStateSetNextStation(app, NULL);
-		}
-	}
-	PianoStation_t *nextStation = BarStateGetNextStation(app);
-	BarStateSetCurrentStation(app, nextStation);
-	BarUiStartEventCmd (&app->settings, "stationfetchplaylist",
-			BarStateGetCurrentStation(app), BarStateGetPlaylist(app), &app->player, 
-			BarStateGetStationList(app), pRet, wRet);
-}
-
-/*	start new player thread
- */
-void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
-	assert (app != NULL);
-	assert (playerThread != NULL);
-
-	const PianoSong_t * const curSong = BarStateGetPlaylist(app);
-	assert (curSong != NULL);
-
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	BarUiPrintSong (&app->settings, curSong, curStation->isQuickMix ?
-			BarStateFindStationById(app, curSong->stationId) : NULL);
-
-	static const char httpPrefix[] = "http://";
-	/* avoid playing local files */
-	if (curSong->audioUrl == NULL ||
-			strncmp (curSong->audioUrl, httpPrefix, strlen (httpPrefix)) != 0) {
-		BarUiMsg (&app->settings, MSG_ERR, "%s",
-				BarL10nGet (&app->l10n, "cli.invalid_song_url"));
-	} else {
-		player_t * const player = &app->player;
-		BarPlayerReset (player);
-
-		app->player.url = curSong->audioUrl;
-		app->player.gain = curSong->fileGain;
-		app->player.songDuration = curSong->length;
-
-		assert (interrupted == &app->doQuit);
-		interrupted = &app->player.interrupted;
-
-	/* throw event */
-	BarUiStartEventCmd (&app->settings, "songstart",
-			curStation, curSong, &app->player, BarStateGetStationList(app),
-			PIANO_RET_OK, CURLE_OK);
-
-	BarWsBroadcastSongStart(app);
-
-	/* prevent race condition, mode must _not_ be DEAD if
-		 * thread has been started */
-		app->player.mode = PLAYER_WAITING;
-		/* start player */
-		pthread_create (playerThread, NULL, BarPlayerThread,
-				&app->player);
-	}
-}
 
 /*	player is done, clean up
  */
@@ -484,7 +397,7 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 			threadExited = true;
 			break;
 		}
-		usleep(100000);  /* 100ms */
+		usleep ((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
 	}
 
 	if (!threadExited) {
@@ -509,10 +422,9 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 		BarStateSetNextStation(app, NULL);
 	}
 
-	assert (interrupted == &app->player.interrupted);
-	interrupted = &app->doQuit;
+	BarInterruptSetTarget (&app->doQuit);
 
-	app->player.mode = PLAYER_DEAD;
+	BarPlayerSetMode (&app->player, PLAYER_DEAD);
 }
 
 /*	print song duration
@@ -576,14 +488,9 @@ static void BarMainLoop (BarApp_t *app) {
 		return;
 	}
 
-	#ifdef WEBSOCKET_ENABLED
-	/* Start playback manager for WebSocket modes */
-	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
-		if (!BarPlaybackManagerStart(app)) {
-			return;
-		}
+	if (!BarWsStartPlaybackManager(app)) {
+		return;
 	}
-	#endif
 
 	player_t * const player = &app->player;
 	bool promptedForStation = false;
@@ -593,17 +500,13 @@ static void BarMainLoop (BarApp_t *app) {
 		/* One-time prompt if no station selected */
 		if (!promptedForStation && BarStateGetNextStation(app) == NULL && 
 		    BarStateGetCurrentStation(app) == NULL) {
-			#ifdef WEBSOCKET_ENABLED
-			if (app->settings.uiMode == BAR_UI_MODE_WEB) {
+			if (BarIsWebOnlyMode (app)) {
 				BarUiMsg(&app->settings, MSG_INFO, "%s",
 				         BarL10nGet (&app->l10n, "cli.wait_station_web_alt"));
 			} else {
-			#endif
 				BarUiMsg(&app->settings, MSG_INFO, "%s",
 				         BarL10nGet (&app->l10n, "cli.no_station_press_s"));
-			#ifdef WEBSOCKET_ENABLED
 			}
-			#endif
 			promptedForStation = true;
 		}
 
@@ -635,19 +538,19 @@ static void BarMainLoop (BarApp_t *app) {
 				if (nextStation != curStation) {
 					BarUiPrintStation (&app->settings, nextStation);
 				}
-				BarMainGetPlaylist (app);
+				BarPlaybackFetchPlaylist (app);
 			}
 			/* song ready to play */
 			playlist = BarStateGetPlaylist(app);
 			if (playlist != NULL) {
-				BarMainStartPlayback (app, &playerThread);
+				BarPlaybackStartSong (app, &playerThread);
 			}
 		}
 		#else
 		/* WebSocket enabled: playback manager handles state machine */
 		/* Web-only mode: just sleep, no CLI needed */
 		if (app->settings.uiMode == BAR_UI_MODE_WEB) {
-			sleep(1);
+			sleep(BAR_WEBONLY_IDLE_LOOP_S);
 			continue;
 		}
 		/* In BOTH mode: CLI just handles input, playback manager runs independently */
@@ -668,12 +571,7 @@ static void BarMainLoop (BarApp_t *app) {
 	 */
 }
 
-#ifdef WEBSOCKET_ENABLED
-/* Stop playback manager */
-	if (app->settings.uiMode != BAR_UI_MODE_CLI) {
-		BarPlaybackManagerStop(app);
-	}
-	#endif
+	BarWsStopPlaybackManager(app);
 
 	#ifndef WEBSOCKET_ENABLED
 	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
@@ -682,13 +580,10 @@ static void BarMainLoop (BarApp_t *app) {
 	#endif
 }
 
-sig_atomic_t *interrupted = NULL;
-
 static void intHandler (int signal) {
-	if (interrupted != NULL) {
-		log_write(DEBUG_UI, "Received ^C\n");
-		*interrupted += 1;
-	}
+	(void) signal;
+	log_write(DEBUG_UI, "Received ^C\n");
+	BarInterruptIncrement ();
 }
 
 /* Crash handler - re-raise signal to get default behavior (core dump, crash report) */
@@ -858,63 +753,23 @@ int main (int argc, char **argv) {
 	/* On macOS with ui_mode=web, relaunch using fork+exec to avoid CoreAudio XPC issues.
 	 * Do this BEFORE acquiring lock so the daemon process is the one that holds the lock. */
 #ifdef __APPLE__
-	#ifdef WEBSOCKET_ENABLED
-	if (!launched_as_daemon && app.settings.uiMode == BAR_UI_MODE_WEB) {
+	if (!launched_as_daemon && BarIsWebOnlyMode (&app)) {
 		BarMainRelaunchAsDaemon(argc, argv);
 		/* If we get here, relaunch failed - continue anyway */
 	}
-	#endif
 #endif
 
 	/* Check for and kill any existing pianobar instance using flock.
 	 * This happens AFTER relaunch so the daemon process holds the lock. */
-#ifdef WEBSOCKET_ENABLED
-	app.lockFd = -1;
-	if (app.settings.uiMode != BAR_UI_MODE_CLI) {
-		/* Try to acquire the lock */
-		app.lockFd = BarDaemonAcquireLock();
-		if (app.lockFd < 0) {
-			/* Lock held by another instance - kill it and retry */
-			BarDaemonKillExistingInstance();
-			
-			/* Wait for lock to be released, retry multiple times */
-			for (int i = 0; i < 10 && app.lockFd < 0; i++) {
-				usleep(500000); /* 0.5 seconds */
-				app.lockFd = BarDaemonAcquireLock();
-			}
-			
-			if (app.lockFd < 0) {
-				log_write(LOG_ERROR, "Could not acquire lock. Another instance may still be running.\n");
-				BarL10nDestroy (&app.l10n);
-				BarSettingsDestroy (&app.settings);
-				return 1;
-			}
-		}
-		
-		/* Write our PID to the lock file */
-		BarDaemonWriteLockPid(app.lockFd);
+	if (!BarWsAcquireSingletonLock (&app)) {
+		BarL10nDestroy (&app.l10n);
+		BarSettingsDestroy (&app.settings);
+		return 1;
 	}
-#endif
 
 	/* Output UI path and URL before starting in web or both mode
 	 * Do this AFTER relaunch check so it only prints once (in the final process) */
-#ifdef WEBSOCKET_ENABLED
-	if (app.settings.uiMode == BAR_UI_MODE_WEB || app.settings.uiMode == BAR_UI_MODE_BOTH) {
-		log_write(LOG_ERROR, "Starting pianobar\n");
-		
-		/* Get IPv4 address */
-		char ipv4_addr[INET_ADDRSTRLEN];
-		BarMainGetIPv4Address(ipv4_addr, sizeof(ipv4_addr));
-		
-		/* Print startup info to terminal */
-		BarPrintStartupInfo(&app, getpid(), false, stderr);
-		
-		/* Also print the IPv4 URL variant (more useful than 127.0.0.1) */
-		if (app.settings.websocketPort > 0) {
-			log_write(LOG_ERROR, "Web interface: http://%s:%d/\n", ipv4_addr, app.settings.websocketPort);
-		}
-	}
-#endif
+	BarWsPrintStartupInfo(&app);
 
 	/* NOW do other initialization (after relaunch check, if any) */
 	log_init();
@@ -931,7 +786,7 @@ int main (int argc, char **argv) {
 	/* signals */
 	signal (SIGPIPE, SIG_IGN);
 	BarMainSetupSigaction ();
-	interrupted = &app.doQuit;
+	BarInterruptSetTarget (&app.doQuit);
 
 	/* init some things */
 	gcry_check_version (NULL);
@@ -977,7 +832,8 @@ int main (int argc, char **argv) {
 	/* Daemonize if running in web-only mode - BEFORE player init
 	 * On macOS with --launched-as-daemon flag, we've already been relaunched via exec,
 	 * so we just need to perform daemonization steps without forking again. */
-	if (app.settings.uiMode == BAR_UI_MODE_WEB) {
+#ifdef WEBSOCKET_ENABLED
+	if (BarIsWebOnlyMode (&app)) {
 #ifdef __APPLE__
 		if (launched_as_daemon) {
 			
@@ -1000,7 +856,6 @@ int main (int argc, char **argv) {
 			return 1;
 		}
 #else
-		
 		/* Normal daemonization on non-macOS platforms */
 		if (!BarWsDaemonize(&app)) {
 			log_write(LOG_ERROR, "Failed to daemonize\n");
@@ -1008,11 +863,9 @@ int main (int argc, char **argv) {
 			BarSettingsDestroy (&app.settings);
 			return 1;
 		}
-
 #endif
-
-	} else {
 	}
+#endif
 
 
 	/* Initialize player AFTER daemonization */
@@ -1064,9 +917,7 @@ int main (int argc, char **argv) {
 	FD_ZERO(&app.input.set);
 	
 
-	#ifdef WEBSOCKET_ENABLED
-	if (app.settings.uiMode != BAR_UI_MODE_WEB) {
-	#endif
+	if (!BarIsWebOnlyMode (&app)) {
 		app.input.fds[0] = STDIN_FILENO;
 		FD_SET(app.input.fds[0], &app.input.set);
 		
@@ -1095,21 +946,15 @@ int main (int argc, char **argv) {
 		app.input.maxfd = app.input.fds[0] > app.input.fds[1] ? app.input.fds[0] :
 				app.input.fds[1];
 		++app.input.maxfd;
-	#ifdef WEBSOCKET_ENABLED
 	} else {
-		/* Web-only mode: no stdin/FIFO needed */
-		app.input.fds[0] = -1;
-		app.input.fds[1] = -1;
-		app.input.maxfd = 0;
+		BarWsConfigureWebOnlyInput (&app);
 	}
-	#endif
 
 
 	/* Initialize WebSocket server if enabled */
 	if (!BarWsInit(&app)) {
 		BarUiMsg (&app.settings, MSG_ERR, "%s",
 				BarL10nGet (&app.l10n, "cli.ws_start_failed"));
-	} else {
 	}
 
 
@@ -1141,10 +986,7 @@ int main (int argc, char **argv) {
 	BarWsDestroy(&app);
 	
 	/* Release lock file (closes fd which releases flock) */
-	if (app.lockFd >= 0) {
-		close(app.lockFd);
-		app.lockFd = -1;
-	}
+	BarWsReleaseSingletonLock(&app);
 	
 	/* Remove PID file if we created one (user-configured pid_file only) */
 	BarWsRemovePidFile(&app);

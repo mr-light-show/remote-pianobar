@@ -40,43 +40,71 @@ void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
 	(void)playerThread;
 }
 
-/* Test suite declarations */
-Suite *websocket_suite(void);
-Suite *http_server_suite(void);
-Suite *daemon_suite(void);
-Suite *socketio_suite(void);
+/* Test suite declarations — base (run in all configurations) */
 Suite *settings_suite(void);
 Suite *player_suite(void);
 Suite *bar_state_suite(void);
 Suite *playback_manager_suite(void);
 Suite *log_suite(void);
 Suite *l10n_suite(void);
+Suite *playback_lifecycle_suite(void);
+Suite *system_volume_suite(void);
+Suite *ui_readline_suite(void);
+Suite *ui_suite(void);
+Suite *interrupt_suite(void);
+Suite *libpiano_response_suite(void);
+
+/* Test suite declarations — WebSocket-only */
+#ifdef WEBSOCKET_ENABLED
+Suite *websocket_suite(void);
+Suite *http_server_suite(void);
+Suite *daemon_suite(void);
+Suite *socketio_suite(void);
 Suite *error_messages_suite(void);
 Suite *ui_act_suite(void);
+Suite *ui_act_station_suite(void);
+Suite *playback_integration_suite(void);
+#endif
 
 int main(void) {
 	int number_failed;
 	SRunner *sr;
-	
-	/* Create test runner */
+
+#ifdef WEBSOCKET_ENABLED
+	/* Start with WebSocket suite; add remaining WebSocket suites */
 	sr = srunner_create(websocket_suite());
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
 	srunner_add_suite(sr, socketio_suite());
+	srunner_add_suite(sr, error_messages_suite());
+	srunner_add_suite(sr, ui_act_suite());
+	srunner_add_suite(sr, ui_act_station_suite());
+	srunner_add_suite(sr, playback_integration_suite());
+#else
+	/* NOWEBSOCKET=1: no WebSocket suites — start with a base suite */
+	sr = srunner_create(settings_suite());
+#endif
+
+	/* Base suites always run */
+#ifdef WEBSOCKET_ENABLED
 	srunner_add_suite(sr, settings_suite());
+#endif
 	srunner_add_suite(sr, player_suite());
 	srunner_add_suite(sr, bar_state_suite());
 	srunner_add_suite(sr, playback_manager_suite());
-	srunner_add_suite(sr, log_suite());
 	srunner_add_suite(sr, l10n_suite());
-	srunner_add_suite(sr, error_messages_suite());
-	srunner_add_suite(sr, ui_act_suite());
-	
+	srunner_add_suite(sr, log_suite());
+	srunner_add_suite(sr, playback_lifecycle_suite());
+	srunner_add_suite(sr, system_volume_suite());
+	srunner_add_suite(sr, ui_readline_suite());
+	srunner_add_suite(sr, ui_suite());
+	srunner_add_suite(sr, interrupt_suite());
+	srunner_add_suite(sr, libpiano_response_suite());
+
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);
 	number_failed = srunner_ntests_failed(sr);
 	srunner_free(sr);
-	
+
 	return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
-

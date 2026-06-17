@@ -54,6 +54,11 @@ void BarUiStartEventCmd (const BarSettings_t *, const char *,
 		PianoStation_t *, PianoReturn_t, CURLcode);
 void BarUiPianoHttpMutexInit (BarApp_t *app);
 void BarUiPianoHttpMutexDestroy (BarApp_t *app);
+typedef bool (*BarUiPianoCallTestHook_fn) (BarApp_t * const app,
+		const PianoRequestType_t type, void * const data,
+		PianoReturn_t * const pRet, CURLcode * const wRet);
+void BarUiPianoCallSetTestHook (BarUiPianoCallTestHook_fn hook);
+void BarUiPianoCallClearTestHook (void);
 bool BarUiPianoCall (BarApp_t * const, const PianoRequestType_t,
 		void *, PianoReturn_t *, CURLcode *);
 bool BarUiPianoCallLogged (BarApp_t * const, const PianoRequestType_t,

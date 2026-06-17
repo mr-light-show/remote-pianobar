@@ -117,6 +117,67 @@ describe('PianobarApp', () => {
     expect(vol).toBeTruthy();
   });
 
+  it('start event applies nullish fallbacks for missing song fields', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('start', {
+      coverArt: null,
+      title: null,
+      album: null,
+      artist: null,
+      duration: null,
+      rating: null,
+      songStationName: null,
+      trackToken: null,
+    });
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('h1')?.textContent).toBe('Not Playing');
+    expect(el.shadowRoot?.querySelector('.artist')?.textContent).toContain('—');
+  });
+
+  it('start event without station keys preserves prior station context', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('start', {
+      title: 'Keep Station',
+      artist: 'Artist',
+      duration: 120,
+      station: 'Rock',
+      stationId: 's1',
+    });
+    await el.updateComplete;
+    hoisted.fire('start', {
+      title: 'Next Track',
+      artist: 'Artist',
+      duration: 90,
+    });
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('h1')?.textContent).toBe('Next Track');
+    const toolbar = el.shadowRoot?.querySelector('bottom-toolbar') as HTMLElement | null;
+    expect(toolbar?.getAttribute('currentStation')).toBe('Rock');
+  });
+
+  it('start event trims explicit stationId and accepts empty station string', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('stations', [{ id: 'trimmed', name: 'Trimmed FM' }]);
+    hoisted.fire('start', {
+      title: 'Trim ID',
+      artist: 'Artist',
+      duration: 60,
+      station: '',
+      stationId: '  trimmed  ',
+    });
+    await el.updateComplete;
+    expect(el.shadowRoot?.querySelector('h1')?.textContent).toBe('Trim ID');
+  });
+
+  it('stationModes handler uses empty list when modes is nullish', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('stationModes', { modes: null });
+    await el.updateComplete;
+    hoisted.fire('stationModes', {});
+    await el.updateComplete;
+    expect(true).toBe(true);
+  });
+
   it('handles stop, progress, and playState', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('start', {

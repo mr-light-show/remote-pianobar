@@ -405,6 +405,208 @@ START_TEST(test_bar_state_is_pandora_connected) {
 }
 END_TEST
 
+/* stateRwlock must be acquired and released in BAR_UI_MODE_WEB, not only BOTH.
+   After BarStateSetCurrentStation returns, the lock must be acquirable again. */
+START_TEST(test_bar_state_lock_taken_in_web_mode) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+
+	PianoStation_t st;
+	memset(&st, 0, sizeof(st));
+	st.id = (char *)"web-station";
+
+	BarStateSetCurrentStation(&app, &st);
+
+	/* Lock must have been released — trywrlock must succeed */
+	int rc = pthread_rwlock_trywrlock(&app.stateRwlock);
+	ck_assert_int_eq(rc, 0);
+	pthread_rwlock_unlock(&app.stateRwlock);
+
+	BarStateDestroy(&app);
+}
+END_TEST
+
+/* --- Snapshot tests --- */
+
+START_TEST(test_bar_state_snapshot_stations_copies_fields)
+{
+	BarApp_t app;
+	PianoStation_t s1, s2;
+	memset (&app, 0, sizeof (app));
+	memset (&s1,  0, sizeof (s1));
+	memset (&s2,  0, sizeof (s2));
+	BarStateInit (&app);
+
+	s1.id = "aaa"; s1.name = "Station A"; s1.isQuickMix  = 0;
+	s2.id = "bbb"; s2.name = "Station B"; s2.isQuickMix  = 1;
+	s1.head.next = (PianoListHead_t *)&s2;
+	app.ph.stations = &s1;
+
+	BarStationSnapshotList_t snap;
+	ck_assert (BarStateSnapshotStations (&app, &snap));
+	ck_assert_uint_eq (snap.count, 2);
+	ck_assert_str_eq (snap.items[0].id,   "aaa");
+	ck_assert_str_eq (snap.items[0].name, "Station A");
+	ck_assert_str_eq (snap.items[1].id,   "bbb");
+	ck_assert_str_eq (snap.items[1].name, "Station B");
+	ck_assert (snap.items[1].isQuickMix);
+
+	BarStateFreeStationSnapshot (&snap);
+	ck_assert_ptr_null (snap.items);
+	ck_assert_uint_eq  (snap.count, 0);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_snapshot_stations_empty)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarStateInit (&app);
+	app.ph.stations = NULL;
+
+	BarStationSnapshotList_t snap;
+	ck_assert (BarStateSnapshotStations (&app, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert_ptr_null (snap.items);
+
+	BarStateFreeStationSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_snapshot_playback_no_song)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarStateInit (&app);
+
+	BarPlaybackSnapshot_t snap;
+	BarStateSnapshotPlayback (&app, &snap);
+	ck_assert (!snap.hasSong);
+	ck_assert (!snap.hasStation);
+
+	BarStateFreePlaybackSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_snapshot_playback_with_song)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t    song;
+	memset (&app,     0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&song,    0, sizeof (song));
+	BarStateInit (&app);
+
+	station.id   = "sid";
+	station.name = "My Station";
+	station.displayName = "Display Station";
+	app.ph.stations = &station;
+	song.title   = "Cool Track";
+	song.artist  = "Cool Artist";
+	song.stationId = "sid";
+
+	app.curStation = &station;
+	app.playlist   = &song;
+
+	BarPlaybackSnapshot_t snap;
+	BarStateSnapshotPlayback (&app, &snap);
+	ck_assert (snap.hasStation);
+	ck_assert (snap.hasSong);
+	ck_assert_str_eq (snap.stationId,   "sid");
+	ck_assert_str_eq (snap.stationName, "Display Station");
+	ck_assert_str_eq (snap.songTitle,   "Cool Track");
+	ck_assert_str_eq (snap.songArtist,  "Cool Artist");
+	ck_assert_str_eq (snap.songStationName, "Display Station");
+
+	BarStateFreePlaybackSnapshot (&snap);
+	ck_assert_ptr_null (snap.stationId);
+	ck_assert_ptr_null (snap.songTitle);
+	ck_assert_ptr_null (snap.songStationName);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_snapshot_playback_unknown_song_station_id)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	memset (&app, 0, sizeof (app));
+	memset (&song, 0, sizeof (song));
+	BarStateInit (&app);
+
+	song.title = "Orphan Track";
+	song.stationId = "missing-station";
+	app.playlist = &song;
+
+	BarPlaybackSnapshot_t snap;
+	BarStateSnapshotPlayback (&app, &snap);
+	ck_assert (snap.hasSong);
+	ck_assert_str_eq (snap.songTitle, "Orphan Track");
+	ck_assert_ptr_null (snap.songStationName);
+
+	BarStateFreePlaybackSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_snapshot_stations_uses_display_name)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarStateInit (&app);
+
+	station.id = "sid";
+	station.name = "Raw Name";
+	station.displayName = "Pretty Name";
+	app.ph.stations = &station;
+
+	BarStationSnapshotList_t snap;
+	ck_assert (BarStateSnapshotStations (&app, &snap));
+	ck_assert_uint_eq (snap.count, 1);
+	ck_assert_str_eq (snap.items[0].displayName, "Pretty Name");
+
+	BarStateFreeStationSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_snapshot_playback_uses_station_name_when_no_display_name)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&song, 0, sizeof (song));
+	BarStateInit (&app);
+
+	station.id = "sid";
+	station.name = "Plain Name";
+	station.displayName = NULL;
+	app.ph.stations = &station;
+	song.title = "Track";
+	song.stationId = "sid";
+	app.curStation = &station;
+	app.playlist = &song;
+
+	BarPlaybackSnapshot_t snap;
+	BarStateSnapshotPlayback (&app, &snap);
+	ck_assert_str_eq (snap.stationName, "Plain Name");
+	ck_assert_str_eq (snap.songStationName, "Plain Name");
+
+	BarStateFreePlaybackSnapshot (&snap);
+	BarStateDestroy (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -441,6 +643,20 @@ Suite *bar_state_suite(void) {
 	TCase *tc_misc = tcase_create("Misc");
 	tcase_add_test(tc_misc, test_bar_state_is_pandora_connected);
 	suite_add_tcase(s, tc_misc);
+
+	TCase *tc_web = tcase_create("WEB mode locking");
+	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
+	suite_add_tcase(s, tc_web);
+
+	TCase *tc_snap = tcase_create("Snapshot");
+	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_copies_fields);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_empty);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_no_song);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_with_song);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_unknown_song_station_id);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_uses_display_name);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_uses_station_name_when_no_display_name);
+	suite_add_tcase(s, tc_snap);
 
 	return s;
 }

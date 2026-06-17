@@ -64,6 +64,4 @@ typedef struct {
 	BarL10nContext_t l10n;
 } BarApp_t;
 
-#include <signal.h>
-extern sig_atomic_t *interrupted;
 

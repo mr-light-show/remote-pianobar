@@ -1,8 +1,29 @@
 # https://docs.codecov.com/docs/codecovyml-reference
+# Patch status: changed lines must meet target (see AGENTS.md).
 coverage:
   status:
     project: off
-    patch: off
+    patch:
+      default:
+        target: 90%
+        informational: false
+        paths:
+          - "src/**/*.c"
+          - "webui/src/**"
+      c-tests:
+        target: 90%
+        informational: false
+        paths:
+          - "src/**/*.c"
+      web-tests:
+        target: 90%
+        informational: false
+        paths:
+          - "webui/src/**"
 
 ignore:
   - "src/l10n_defaults_gen.c"
+  - "src/**/*.h"
+  - "src/**/*.md"
+  - "test/**"
+  - "webui/test/**"

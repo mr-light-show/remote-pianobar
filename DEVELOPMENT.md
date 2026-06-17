@@ -162,8 +162,11 @@ make
 ### Remote Pianobar Build
 
 ```bash
-# Clean previous builds
+# Clean previous builds (removes compiled objects and binaries)
 make clean
+
+# Remove all build AND coverage artifacts (*.gcda, *.gcno, *.gcov) in one step
+make distclean
 
 # Build Remote Pianobar with debug symbols (WebSocket enabled by default)
 make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
@@ -594,7 +597,7 @@ Enable debug output for specific subsystems using the `PIANOBAR_DEBUG` environme
 
 Debug flags are bitfield values that can be combined:
 
-- `1` - `DEBUG_NETWORK` - Network/API calls (cyan)
+- `1` - `DEBUG_NETWORK` - Network/API calls (cyan), including Pandora API calls (`tuner.pandora.com` via curl) and CDN audio stream opens (FFmpeg `avformat_open_input` on track `audioUrl`).
 - `2` - `DEBUG_AUDIO` - Audio playback (yellow)
 - `4` - `DEBUG_UI` - User interface and playback manager (green)
 - `8` - `DEBUG_WEBSOCKET` - WebSocket events, excluding progress (bold magenta)

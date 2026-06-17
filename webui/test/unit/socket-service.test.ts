@@ -203,6 +203,42 @@ describe('SocketService', () => {
       expect(consoleSpy).toHaveBeenCalled();
       consoleSpy.mockRestore();
     });
+
+    it('ignores frames where payload is not an array', async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let called = false;
+      service.on('bad', () => { called = true; });
+
+      // Send a frame that decodes to a non-array
+      (service as any).ws.simulateMessage('2{"event":"bad"}');
+
+      expect(called).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('malformed frame'),
+        expect.anything()
+      );
+      errorSpy.mockRestore();
+    });
+
+    it('ignores frames where event name is not a string', async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let called = false;
+      service.on('42', () => { called = true; });
+
+      // Send a frame where event name is a number
+      (service as any).ws.simulateMessage('2[42,{"foo":"bar"}]');
+
+      expect(called).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('malformed frame'),
+        expect.anything()
+      );
+      errorSpy.mockRestore();
+    });
   });
 });
 

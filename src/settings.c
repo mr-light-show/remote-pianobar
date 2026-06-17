@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include "config.h"
 #include "bar_constants.h"
 #include "log.h"
+#include "parse_utils.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -77,6 +78,9 @@ static char *BarGetXdgConfigDir (const char * const filename) {
 		const size_t len = (strlen (xdgConfigDir) + 1 +
 				strlen (filename) + 1);
 		char * const concat = malloc (len * sizeof (*concat));
+		if (concat == NULL) {
+			return NULL;
+		}
 		snprintf (concat, len, "%s/%s", xdgConfigDir, filename);
 		return concat;
 	}
@@ -88,16 +92,248 @@ static char *BarGetXdgConfigDir (const char * const filename) {
  */
 char *BarSettingsExpandTilde (const char * const path, const char * const home) {
 	assert (path != NULL);
-	assert (home != NULL);
 
-	if (strncmp (path, "~/", 2) == 0) {
-		char * const expanded = malloc ((strlen (home) + 1 + strlen (path)-2 + 1) *
-				sizeof (*expanded));
-		sprintf (expanded, "%s/%s", home, &path[2]);
+	if (home != NULL && strncmp (path, "~/", 2) == 0) {
+		const size_t expandedLen = strlen (home) + 1 + strlen (path) - 2 + 1;
+		char * const expanded = malloc (expandedLen * sizeof (*expanded));
+		if (expanded == NULL) {
+			return strdup (path);
+		}
+		snprintf (expanded, expandedLen, "%s/%s", home, &path[2]);
 		return expanded;
 	}
 
 	return strdup (path);
+}
+
+/*
+ * ============================================================================
+ * Key descriptor table — table-driven dispatch for BarSettingsRead
+ * ============================================================================
+ */
+
+typedef enum {
+	CFG_STR,    /* free(*field); *field = strdup(val) */
+	CFG_TILDE,  /* free(*field); *field = BarSettingsExpandTilde(val, home) */
+	CFG_INT,    /* BarParseIntInRange(val, min, max, (int*)field) */
+	CFG_UINT,   /* BarParseIntInRange with unsigned cast */
+	CFG_FLOAT,  /* *(float*)field = (float)atof(val) */
+	CFG_CUSTOM, /* k->custom(settings, val, home) */
+} BarConfigKeyKind_t;
+
+typedef struct {
+	const char         *key;
+	BarConfigKeyKind_t  kind;
+	size_t              offset; /* offsetof into BarSettings_t; 0 for CFG_CUSTOM */
+	int                 min, max; /* for CFG_INT / CFG_UINT */
+	void (*custom) (BarSettings_t *, const char *val, const char *home);
+} BarConfigKey_t;
+
+/* Custom parsers for keys with enum/complex value dispatch */
+static void cfgAudioQuality (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	if (streq (v, "low")) { s->audioQuality = PIANO_AQ_LOW; }
+	else if (streq (v, "medium")) { s->audioQuality = PIANO_AQ_MEDIUM; }
+	else { s->audioQuality = PIANO_AQ_HIGH; }
+}
+static void cfgSortOrder (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	static const char *mapping[] = {
+		"name_az", "name_za",
+		"quickmix_01_name_az", "quickmix_01_name_za",
+		"quickmix_10_name_az", "quickmix_10_name_za",
+	};
+	for (size_t i = 0; i < BAR_SORT_COUNT; i++) {
+		if (streq (mapping[i], v)) { s->sortOrder = i; break; }
+	}
+}
+static void cfgVolumeMode (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	s->volumeMode = streq (v, "system") ? BAR_VOLUME_MODE_SYSTEM : BAR_VOLUME_MODE_PLAYER;
+}
+static void cfgAudioBackend (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	if (streq (v, "pulseaudio")) { s->audioBackend = BAR_AUDIO_BACKEND_PULSEAUDIO; }
+	else if (streq (v, "alsa"))  { s->audioBackend = BAR_AUDIO_BACKEND_ALSA; }
+	else if (streq (v, "jack"))  { s->audioBackend = BAR_AUDIO_BACKEND_JACK; }
+	else if (streq (v, "coreaudio")) { s->audioBackend = BAR_AUDIO_BACKEND_COREAUDIO; }
+	else if (streq (v, "wasapi")) { s->audioBackend = BAR_AUDIO_BACKEND_WASAPI; }
+	else { s->audioBackend = BAR_AUDIO_BACKEND_AUTO; }
+}
+static void cfgAutoselect (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	int tmp = 0;
+	if (!BarParseIntInRange (v, 0, INT_MAX, &tmp)) {
+		log_write (LOG_ERROR, "settings: invalid value for autoselect: \"%s\", ignoring", v);
+	} else { s->autoselect = (tmp != 0); }
+}
+static void cfgStationDisplayName (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	if (v[0] != '/') { return; }
+	const char *p = v + 1;
+	const char *pattern_end = strchr (p, '/');
+	if (!pattern_end) { return; }
+	const char *repl_start = pattern_end + 1;
+	const char *repl_end = strchr (repl_start, '/');
+	if (!repl_end) { return; }
+
+	size_t idx = s->stationDisplayNameOverrideCount;
+	BarStationDisplayNameOverride_t *newEntries = realloc (
+		s->stationDisplayNameOverrides,
+		(idx + 1) * sizeof (BarStationDisplayNameOverride_t));
+	if (!newEntries) { return; }
+	s->stationDisplayNameOverrides = newEntries;
+
+	BarStationDisplayNameOverride_t *entry = &s->stationDisplayNameOverrides[idx];
+	entry->pattern = strndup (p, (size_t)(pattern_end - p));
+	if (!entry->pattern) { return; }
+	entry->replacement = strndup (repl_start, (size_t)(repl_end - repl_start));
+	if (!entry->replacement) { free (entry->pattern); entry->pattern = NULL; return; }
+
+	int ret = regcomp (&entry->compiled, entry->pattern, REG_EXTENDED);
+	entry->valid = (ret == 0);
+	s->stationDisplayNameOverrideCount++;
+	if (ret != 0) {
+		log_write (LOG_ERROR, "settings: invalid regex pattern: %s\n", entry->pattern);
+	}
+}
+
+#ifdef WEBSOCKET_ENABLED
+static void cfgUiMode (BarSettings_t *s, const char *v, const char *h) {
+	(void)h;
+	if (streq (v, "cli")) { s->uiMode = BAR_UI_MODE_CLI; }
+	else if (streq (v, "web")) { s->uiMode = BAR_UI_MODE_WEB; }
+	else { s->uiMode = BAR_UI_MODE_BOTH; }
+}
+#endif
+
+/* Apply a single key entry to settings */
+static void applyConfigKey (BarSettings_t *settings, const BarConfigKey_t *k,
+		const char *val, const char *userhome) {
+	switch (k->kind) {
+		case CFG_STR: {
+			char **f = (char **) ((char *) settings + k->offset);
+			free (*f); *f = strdup (val);
+			break;
+		}
+		case CFG_TILDE: {
+			char **f = (char **) ((char *) settings + k->offset);
+			free (*f); *f = BarSettingsExpandTilde (val, userhome);
+			break;
+		}
+		case CFG_INT: {
+			int *f = (int *) ((char *) settings + k->offset);
+			if (!BarParseIntInRange (val, k->min, k->max, f)) {
+				log_write (LOG_ERROR, "settings: invalid value for %s: \"%s\", ignoring",
+				           k->key, val);
+			}
+			break;
+		}
+		case CFG_UINT: {
+			unsigned int *f = (unsigned int *) ((char *) settings + k->offset);
+			int tmp = (int) *f;
+			if (!BarParseIntInRange (val, k->min, k->max, &tmp)) {
+				log_write (LOG_ERROR, "settings: invalid value for %s: \"%s\", ignoring",
+				           k->key, val);
+			} else { *f = (unsigned int) tmp; }
+			break;
+		}
+		case CFG_FLOAT: {
+			float *f = (float *) ((char *) settings + k->offset);
+			*f = (float) atof (val);
+			break;
+		}
+		case CFG_CUSTOM:
+			if (k->custom) { k->custom (settings, val, userhome); }
+			break;
+	}
+}
+
+/* Common (non-websocket) key table */
+static const BarConfigKey_t commonKeys[] = {
+	/* simple string fields */
+	{"control_proxy",      CFG_STR,    offsetof (BarSettings_t, controlProxy),      0, 0, NULL},
+	{"proxy",              CFG_STR,    offsetof (BarSettings_t, proxy),              0, 0, NULL},
+	{"bind_to",            CFG_STR,    offsetof (BarSettings_t, bindTo),             0, 0, NULL},
+	{"user",               CFG_STR,    offsetof (BarSettings_t, username),           0, 0, NULL},
+	{"password",           CFG_STR,    offsetof (BarSettings_t, password),           0, 0, NULL},
+	{"password_command",   CFG_STR,    offsetof (BarSettings_t, passwordCmd),        0, 0, NULL},
+	{"rpc_host",           CFG_STR,    offsetof (BarSettings_t, rpcHost),            0, 0, NULL},
+	{"rpc_tls_port",       CFG_STR,    offsetof (BarSettings_t, rpcTlsPort),         0, 0, NULL},
+	{"partner_user",       CFG_STR,    offsetof (BarSettings_t, partnerUser),        0, 0, NULL},
+	{"partner_password",   CFG_STR,    offsetof (BarSettings_t, partnerPassword),    0, 0, NULL},
+	{"device",             CFG_STR,    offsetof (BarSettings_t, device),             0, 0, NULL},
+	{"encrypt_password",   CFG_STR,    offsetof (BarSettings_t, outkey),             0, 0, NULL},
+	{"decrypt_password",   CFG_STR,    offsetof (BarSettings_t, inkey),              0, 0, NULL},
+	{"ca_bundle",          CFG_STR,    offsetof (BarSettings_t, caBundle),           0, 0, NULL},
+	{"autostart_station",  CFG_STR,    offsetof (BarSettings_t, autostartStation),   0, 0, NULL},
+	{"love_icon",          CFG_STR,    offsetof (BarSettings_t, loveIcon),           0, 0, NULL},
+	{"ban_icon",           CFG_STR,    offsetof (BarSettings_t, banIcon),            0, 0, NULL},
+	{"tired_icon",         CFG_STR,    offsetof (BarSettings_t, tiredIcon),          0, 0, NULL},
+	{"at_icon",            CFG_STR,    offsetof (BarSettings_t, atIcon),             0, 0, NULL},
+	{"format_nowplaying_song",     CFG_STR, offsetof (BarSettings_t, npSongFormat),     0, 0, NULL},
+	{"format_nowplaying_station",  CFG_STR, offsetof (BarSettings_t, npStationFormat),  0, 0, NULL},
+	{"format_list_song",           CFG_STR, offsetof (BarSettings_t, listSongFormat),   0, 0, NULL},
+	{"format_time",                CFG_STR, offsetof (BarSettings_t, timeFormat),        0, 0, NULL},
+	{"locale",             CFG_STR,    offsetof (BarSettings_t, locale),             0, 0, NULL},
+	{"alsa_mixer",         CFG_STR,    offsetof (BarSettings_t, alsaMixer),          0, 0, NULL},
+	/* tilde-expanding paths */
+	{"event_command",      CFG_TILDE,  offsetof (BarSettings_t, eventCmd),           0, 0, NULL},
+	{"fifo",               CFG_TILDE,  offsetof (BarSettings_t, fifo),               0, 0, NULL},
+	{"audio_pipe",         CFG_TILDE,  offsetof (BarSettings_t, audioPipe),          0, 0, NULL},
+	/* integer range fields */
+	{"history",            CFG_UINT,   offsetof (BarSettings_t, history),            0, 10000, NULL},
+	{"max_retry",          CFG_UINT,   offsetof (BarSettings_t, maxRetry),           0, 100, NULL},
+	{"timeout",            CFG_UINT,   offsetof (BarSettings_t, timeout),            1, 600, NULL},
+	{"pause_timeout",      CFG_UINT,   offsetof (BarSettings_t, pauseTimeout),       0, 86400, NULL},
+	{"buffer_seconds",     CFG_UINT,   offsetof (BarSettings_t, bufferSecs),         1, 300, NULL},
+	{"volume",             CFG_INT,    offsetof (BarSettings_t, volume),             0, 100, NULL},
+	{"system_volume_player_gain", CFG_INT, offsetof (BarSettings_t, systemVolumePlayerGain), -60, 60, NULL},
+	{"max_gain",           CFG_INT,    offsetof (BarSettings_t, maxGain),            0, 100, NULL},
+	{"sample_rate",        CFG_INT,    offsetof (BarSettings_t, sampleRate),         8000, 192000, NULL},
+	/* float field */
+	{"gain_mul",           CFG_FLOAT,  offsetof (BarSettings_t, gainMul),            0, 0, NULL},
+	/* custom enum/complex parsers */
+	{"audio_quality",               CFG_CUSTOM, 0, 0, 0, cfgAudioQuality},
+	{"sort",                        CFG_CUSTOM, 0, 0, 0, cfgSortOrder},
+	{"volume_mode",                 CFG_CUSTOM, 0, 0, 0, cfgVolumeMode},
+	{"audio_backend",               CFG_CUSTOM, 0, 0, 0, cfgAudioBackend},
+	{"autoselect",                  CFG_CUSTOM, 0, 0, 0, cfgAutoselect},
+	{"station_display_name_override", CFG_CUSTOM, 0, 0, 0, cfgStationDisplayName},
+	{NULL, CFG_STR, 0, 0, 0, NULL}  /* sentinel */
+};
+
+#ifdef WEBSOCKET_ENABLED
+static const BarConfigKey_t wsKeys[] = {
+	{"ui_mode",       CFG_CUSTOM, 0, 0, 0, cfgUiMode},
+	{"websocket_port",CFG_INT,    offsetof (BarSettings_t, websocketPort), 1, 65535, NULL},
+	{"websocket_host",CFG_STR,    offsetof (BarSettings_t, websocketHost), 0, 0, NULL},
+	{"webui_path",    CFG_STR,    offsetof (BarSettings_t, webuiPath),     0, 0, NULL},
+	{"pid_file",      CFG_TILDE,  offsetof (BarSettings_t, pidFile),       0, 0, NULL},
+	{"log_file",      CFG_TILDE,  offsetof (BarSettings_t, logFile),       0, 0, NULL},
+	{NULL, CFG_STR, 0, 0, 0, NULL}
+};
+#endif
+
+/* Dispatch a single key=val pair through the descriptor tables.
+ * Returns true if the key was recognised and handled. */
+static bool dispatchConfigKey (BarSettings_t *settings, const char *key,
+		const char *val, const char *userhome) {
+	for (const BarConfigKey_t *k = commonKeys; k->key != NULL; k++) {
+		if (streq (k->key, key)) {
+			applyConfigKey (settings, k, val, userhome);
+			return true;
+		}
+	}
+#ifdef WEBSOCKET_ENABLED
+	for (const BarConfigKey_t *k = wsKeys; k->key != NULL; k++) {
+		if (streq (k->key, key)) {
+			applyConfigKey (settings, k, val, userhome);
+			return true;
+		}
+	}
+#endif
+	return false;
 }
 
 /*	initialize settings structure
@@ -205,6 +441,9 @@ static char *BarSettingsResolveAccountPath (const char *path, const char *config
 	/* relative to config dir */
 	size_t len = strlen (configDir) + 1 + strlen (path) + 1;
 	char *resolved = malloc (len);
+	if (resolved == NULL) {
+		return NULL;
+	}
 	snprintf (resolved, len, "%s/%s", configDir, path);
 	return resolved;
 }
@@ -356,8 +595,13 @@ void BarSettingsRead (BarSettings_t *settings) {
 	char * const userhome = BarSettingsGetHome ();
 	assert (userhome != NULL);
 	/* set xdg config path (if not set) */
-	char * const defaultxdg = malloc (strlen (userhome) + strlen ("/.config") + 1);
-	sprintf (defaultxdg, "%s/.config", userhome);
+	const size_t defaultxdgLen = strlen (userhome) + strlen ("/.config") + 1;
+	char * const defaultxdg = malloc (defaultxdgLen);
+	if (defaultxdg == NULL) {
+		log_write (LOG_ERROR, "settings: out of memory for XDG config path");
+		return;
+	}
+	snprintf (defaultxdg, defaultxdgLen, "%s/.config", userhome);
 	setenv ("XDG_CONFIG_HOME", defaultxdg, 0);
 	free (defaultxdg);
 
@@ -502,303 +746,65 @@ void BarSettingsRead (BarSettings_t *settings) {
 				--valend;
 			}
 
-			if (streq ("control_proxy", key)) {
-				settings->controlProxy = strdup (val);
-			} else if (streq ("proxy", key)) {
-				settings->proxy = strdup (val);
-			} else if (streq ("bind_to", key)) {
-				settings->bindTo = strdup (val);
-			} else if (streq ("user", key)) {
-				settings->username = strdup (val);
-			} else if (streq ("password", key)) {
-				settings->password = strdup (val);
-			} else if (streq ("password_command", key)) {
-				settings->passwordCmd = strdup (val);
-			} else if (streq ("rpc_host", key)) {
-				free (settings->rpcHost);
-				settings->rpcHost = strdup (val);
-			} else if (streq ("rpc_tls_port", key)) {
-				free (settings->rpcTlsPort);
-				settings->rpcTlsPort = strdup (val);
-			} else if (streq ("partner_user", key)) {
-				free (settings->partnerUser);
-				settings->partnerUser = strdup (val);
-			} else if (streq ("partner_password", key)) {
-				free (settings->partnerPassword);
-				settings->partnerPassword = strdup (val);
-			} else if (streq ("device", key)) {
-				free (settings->device);
-				settings->device = strdup (val);
-			} else if (streq ("encrypt_password", key)) {
-				free (settings->outkey);
-				settings->outkey = strdup (val);
-			} else if (streq ("decrypt_password", key)) {
-				free (settings->inkey);
-				settings->inkey = strdup (val);
-			} else if (streq ("ca_bundle", key)) {
-				free (settings->caBundle);
-				settings->caBundle = strdup (val);
-			} else if (memcmp ("act_", key, 4) == 0) {
-				size_t i;
-				/* keyboard shortcuts */
-				for (i = 0; i < BAR_KS_COUNT; i++) {
+			/* act_* keyboard shortcuts (prefix-based, not exact match) */
+			if (memcmp ("act_", key, 4) == 0) {
+				for (size_t i = 0; i < BAR_KS_COUNT; i++) {
 					if (streq (dispatchActions[i].configKey, key)) {
-						if (streq (val, "disabled")) {
-							settings->keys[i] = BAR_KS_DISABLED;
-						} else {
-							settings->keys[i] = val[0];
-						}
+						settings->keys[i] = streq (val, "disabled") ?
+						                    BAR_KS_DISABLED : val[0];
 						break;
 					}
 				}
-			} else if (streq ("audio_quality", key)) {
-				if (streq (val, "low")) {
-					settings->audioQuality = PIANO_AQ_LOW;
-				} else if (streq (val, "medium")) {
-					settings->audioQuality = PIANO_AQ_MEDIUM;
-				} else if (streq (val, "high")) {
-					settings->audioQuality = PIANO_AQ_HIGH;
-				}
-			} else if (streq ("autostart_station", key)) {
-				free (settings->autostartStation);
-				settings->autostartStation = strdup (val);
-			} else if (streq ("event_command", key)) {
-				settings->eventCmd = BarSettingsExpandTilde (val, userhome);
-			} else if (streq ("history", key)) {
-				settings->history = atoi (val);
-			} else if (streq ("max_retry", key)) {
-				settings->maxRetry = atoi (val);
-			} else if (streq ("timeout", key)) {
-				settings->timeout = atoi (val);
-			} else if (streq ("pause_timeout", key)) {
-				settings->pauseTimeout = atoi (val);
-			} else if (streq ("buffer_seconds", key)) {
-				settings->bufferSecs = atoi (val);
-			} else if (streq ("sort", key)) {
-				size_t i;
-				static const char *mapping[] = {"name_az",
-						"name_za",
-						"quickmix_01_name_az",
-						"quickmix_01_name_za",
-						"quickmix_10_name_az",
-						"quickmix_10_name_za",
-						};
-				for (i = 0; i < BAR_SORT_COUNT; i++) {
-					if (streq (mapping[i], val)) {
-						settings->sortOrder = i;
-						break;
-					}
-				}
-			} else if (streq ("love_icon", key)) {
-				free (settings->loveIcon);
-				settings->loveIcon = strdup (val);
-			} else if (streq ("ban_icon", key)) {
-				free (settings->banIcon);
-				settings->banIcon = strdup (val);
-			} else if (streq ("tired_icon", key)) {
-				free (settings->tiredIcon);
-				settings->tiredIcon = strdup (val);
-			} else if (streq ("at_icon", key)) {
-				free (settings->atIcon);
-				settings->atIcon = strdup (val);
-			} else if (streq ("volume", key)) {
-				settings->volume = atoi (val);
-			} else if (streq ("system_volume_player_gain", key)) {
-				settings->systemVolumePlayerGain = atoi (val);
-			} else if (streq ("station_display_name_override", key)) {
-				/* Parse /regex/replacement/ format */
-				if (val[0] == '/') {
-					const char *p = val + 1;
-					const char *pattern_start = p;
-					const char *pattern_end = strchr (p, '/');
-					
-					if (pattern_end) {
-						const char *repl_start = pattern_end + 1;
-						const char *repl_end = strchr (repl_start, '/');
-						
-						if (repl_end) {
-							/* Valid format found */
-							size_t idx = settings->stationDisplayNameOverrideCount;
-							settings->stationDisplayNameOverrides = realloc (
-								settings->stationDisplayNameOverrides,
-								(idx + 1) * sizeof (BarStationDisplayNameOverride_t));
-							
-							/* Copy pattern */
-							size_t pattern_len = pattern_end - pattern_start;
-							settings->stationDisplayNameOverrides[idx].pattern = 
-								strndup (pattern_start, pattern_len);
-							if (!settings->stationDisplayNameOverrides[idx].pattern) {
-								continue;  /* Skip this entry on allocation failure */
-							}
-							
-							/* Copy replacement */
-							size_t repl_len = repl_end - repl_start;
-							settings->stationDisplayNameOverrides[idx].replacement = 
-								strndup (repl_start, repl_len);
-							if (!settings->stationDisplayNameOverrides[idx].replacement) {
-								free (settings->stationDisplayNameOverrides[idx].pattern);
-								continue;  /* Skip this entry on allocation failure */
-							}
-							
-							/* Compile regex */
-							int ret = regcomp (
-								&settings->stationDisplayNameOverrides[idx].compiled,
-								settings->stationDisplayNameOverrides[idx].pattern,
-								REG_EXTENDED);
-							
-							settings->stationDisplayNameOverrides[idx].valid = (ret == 0);
-							settings->stationDisplayNameOverrideCount++;
-							
-							if (ret != 0) {
-								log_write(LOG_ERROR, "Warning: Invalid regex pattern: %s\n",
-									settings->stationDisplayNameOverrides[idx].pattern);
-							}
-						}
-					}
-				}
-			} else if (streq ("volume_mode", key)) {
-				if (streq (val, "system")) {
-					settings->volumeMode = BAR_VOLUME_MODE_SYSTEM;
-				} else {
-					settings->volumeMode = BAR_VOLUME_MODE_PLAYER;
-				}
-			} else if (streq ("audio_backend", key)) {
-				if (streq (val, "auto")) {
-					settings->audioBackend = BAR_AUDIO_BACKEND_AUTO;
-				} else if (streq (val, "pulseaudio")) {
-					settings->audioBackend = BAR_AUDIO_BACKEND_PULSEAUDIO;
-				} else if (streq (val, "alsa")) {
-					settings->audioBackend = BAR_AUDIO_BACKEND_ALSA;
-				} else if (streq (val, "jack")) {
-					settings->audioBackend = BAR_AUDIO_BACKEND_JACK;
-				} else if (streq (val, "coreaudio")) {
-					settings->audioBackend = BAR_AUDIO_BACKEND_COREAUDIO;
-				} else if (streq (val, "wasapi")) {
-					settings->audioBackend = BAR_AUDIO_BACKEND_WASAPI;
-				} else {
-					settings->audioBackend = BAR_AUDIO_BACKEND_AUTO;
-				}
-			} else if (streq ("gain_mul", key)) {
-				settings->gainMul = atof (val);
-			} else if (streq ("max_gain", key)) {
-				settings->maxGain = atoi (val);
-			} else if (streq ("format_nowplaying_song", key)) {
-				free (settings->npSongFormat);
-				settings->npSongFormat = strdup (val);
-			} else if (streq ("format_nowplaying_station", key)) {
-				free (settings->npStationFormat);
-				settings->npStationFormat = strdup (val);
-			} else if (streq ("format_list_song", key)) {
-				free (settings->listSongFormat);
-				settings->listSongFormat = strdup (val);
-			} else if (streq ("format_time", key)) {
-				free (settings->timeFormat);
-				settings->timeFormat = strdup (val);
-			} else if (streq ("fifo", key)) {
-				free (settings->fifo);
-				settings->fifo = BarSettingsExpandTilde (val, userhome);
-			} else if (streq ("locale", key)) {
-				free (settings->locale);
-				settings->locale = strdup (val);
-			} else if (streq ("audio_pipe", key)) {
-				free (settings->audioPipe);
-				settings->audioPipe = BarSettingsExpandTilde (val, userhome);
-			} else if (streq ("autoselect", key)) {
-				settings->autoselect = atoi (val);
-			} else if (streq ("sample_rate", key)) {
-				settings->sampleRate = atoi (val);
-			} else if (strncmp (formatMsgPrefix, key,
-					strlen (formatMsgPrefix)) == 0) {
-				static const char *mapping[] = {"none", "info", "nowplaying",
+			/* format_msg_* (prefix-based) */
+			} else if (strncmp (formatMsgPrefix, key, strlen (formatMsgPrefix)) == 0) {
+				static const char *fmtNames[] = {"none", "info", "nowplaying",
 						"time", "err", "question", "list"};
 				const char *typeStart = key + strlen (formatMsgPrefix);
-				for (size_t i = 0; i < sizeof (mapping) / sizeof (*mapping); i++) {
-					if (streq (typeStart, mapping[i])) {
-						const char *formatPos = strstr (val, "%s");
-						
-						/* keep default if there is no format character */
-						if (formatPos != NULL) {
-							BarMsgFormatStr_t *format = &settings->msgFormat[i];
-
-							free (format->prefix);
-							free (format->postfix);
-
-							const size_t prefixLen = formatPos - val;
-							format->prefix = calloc (prefixLen + 1,
-									sizeof (*format->prefix));
-							memcpy (format->prefix, val, prefixLen);
-
-							const size_t postfixLen = strlen (val) -
-									(formatPos-val) - 2;
-							format->postfix = calloc (postfixLen + 1,
-									sizeof (*format->postfix));
-							memcpy (format->postfix, formatPos+2, postfixLen);
-						}
-						break;
+				for (size_t i = 0; i < sizeof (fmtNames) / sizeof (*fmtNames); i++) {
+					if (!streq (typeStart, fmtNames[i])) { continue; }
+					const char *formatPos = strstr (val, "%s");
+					if (formatPos != NULL) {
+						BarMsgFormatStr_t *fmt = &settings->msgFormat[i];
+						free (fmt->prefix); free (fmt->postfix);
+						const size_t plen = (size_t)(formatPos - val);
+						fmt->prefix = calloc (plen + 1, 1);
+						if (fmt->prefix) { memcpy (fmt->prefix, val, plen); }
+						const size_t slen = strlen (val) - plen - 2;
+						fmt->postfix = calloc (slen + 1, 1);
+						if (fmt->postfix) { memcpy (fmt->postfix, formatPos + 2, slen); }
 					}
+					break;
 				}
-		#ifdef WEBSOCKET_ENABLED
-		} else if (streq ("ui_mode", key)) {
-			if (streq (val, "cli")) {
-				settings->uiMode = BAR_UI_MODE_CLI;
-			} else if (streq (val, "web")) {
-				settings->uiMode = BAR_UI_MODE_WEB;
-			} else if (streq (val, "both")) {
-				settings->uiMode = BAR_UI_MODE_BOTH;
-			} else {
-				/* Invalid value defaults to 'both' */
-				settings->uiMode = BAR_UI_MODE_BOTH;
-			}
-		} else if (streq ("websocket_port", key)) {
-				settings->websocketPort = atoi (val);
-			} else if (streq ("websocket_host", key)) {
-				free (settings->websocketHost);
-				settings->websocketHost = strdup (val);
-			} else if (streq ("webui_path", key)) {
-				free (settings->webuiPath);
-				settings->webuiPath = strdup (val);
-			} else if (streq ("pid_file", key)) {
-				free (settings->pidFile);
-				settings->pidFile = BarSettingsExpandTilde (val, userhome);
-			} else if (streq ("log_file", key)) {
-				free (settings->logFile);
-				settings->logFile = BarSettingsExpandTilde (val, userhome);
-			#endif
-		} else if (streq ("alsa_mixer", key)) {
-			free (settings->alsaMixer);
-			settings->alsaMixer = strdup (val);
-		} else if (streq ("account", key)) {
-			/* account = id:path */
-			char *colon = strchr (val, ':');
-			if (colon && colon != val && *(colon + 1) != '\0') {
-				*colon = '\0';
-				BarAccountLine_t *newLines = realloc (accountLines,
-						(accountLineCount + 1) * sizeof (BarAccountLine_t));
-				if (newLines == NULL) {
-					BarUiMsg (settings, MSG_ERR,
-							"Out of memory reading account lines at %s:%zu\n",
-							path, lineNum);
+			/* account (uses local parsing state, not BarSettings_t fields) */
+			} else if (streq ("account", key)) {
+				char *colon = strchr (val, ':');
+				if (colon && colon != val && *(colon + 1) != '\0') {
+					*colon = '\0';
+					BarAccountLine_t *newLines = realloc (accountLines,
+							(accountLineCount + 1) * sizeof (BarAccountLine_t));
+					if (newLines == NULL) {
+						BarUiMsg (settings, MSG_ERR,
+								"Out of memory reading account lines at %s:%zu\n",
+								path, lineNum);
+					} else {
+						accountLines = newLines;
+						accountLines[accountLineCount].id = strdup (val);
+						accountLines[accountLineCount].path = strdup (colon + 1);
+						accountLineCount++;
+					}
 				} else {
-					accountLines = newLines;
-					accountLines[accountLineCount].id = strdup (val);
-					accountLines[accountLineCount].path = strdup (colon + 1);
-					accountLineCount++;
+					BarUiMsg (settings, MSG_INFO,
+							"Invalid account format at %s:%zu (expected id:path)\n",
+							path, lineNum);
 				}
-			} else {
-				BarUiMsg (settings, MSG_INFO,
-						"Invalid account format at %s:%zu (expected id:path)\n",
-						path, lineNum);
-			}
-		} else if (streq ("main_account_id", key)) {
-			free (mainAccountId);
-			mainAccountId = strdup (val);
-		} else if (streq ("default_account", key)) {
-			free (defaultAccount);
-			defaultAccount = strdup (val);
-		} else if (streq ("account_label", key)) {
-			free (accountLabel);
-			accountLabel = strdup (val);
-		} else {
+			} else if (streq ("main_account_id", key)) {
+				free (mainAccountId); mainAccountId = strdup (val);
+			} else if (streq ("default_account", key)) {
+				free (defaultAccount); defaultAccount = strdup (val);
+			} else if (streq ("account_label", key)) {
+				free (accountLabel); accountLabel = strdup (val);
+			/* table-driven dispatch for all remaining keys */
+			} else if (!dispatchConfigKey (settings, key, val, userhome)) {
 				BarUiMsg (settings, MSG_INFO,
 						"Unrecognized key %s at %s:%zu\n", key, path, lineNum);
 			}

@@ -124,6 +124,36 @@ ws.onmessage = (event) => {
 
 ---
 
+## Server-to-client event wire format
+
+All server-to-client events are Socket.IO v2 text frames. The general shape is:
+
+```
+2["<eventName>", <payload>]
+```
+
+where `2` is the Socket.IO MESSAGE packet type. Consumers **must not** receive
+a different frame shape after any internal refactor. The complete list of frames the HA
+coordinator and Lovelace card depend on:
+
+| Event | Wire packet example | Payload type |
+|-------|--------------------|----|
+| `start` | `2["start",{"title":"Song","artist":"Artist","album":"Album","coverArt":"https://...","duration":240,"rating":1,"trackToken":"tok","stationId":"sid","songStationName":"Name"}]` | object |
+| `stop` | `2["stop"]` | none (no second element) |
+| `progress` | `2["progress",{"elapsed":42,"duration":240,"percentage":17}]` | object |
+| `volume` | `2["volume",50]` | bare integer (not an object) |
+| `stations` | `2["stations",[{"id":"sid","name":"Name","isQuickMix":false}]]` | array |
+| `process` | `2["process",{"song":{...},"station":"Name","stationId":"sid","playing":true,"paused":false,"volume":50}]` | object |
+| `playState` | `2["playState",{"paused":true}]` | object |
+| `error` | `2["error",{"operation":"query.history","message":"..."}]` | object |
+| `pandora.disconnected` | `2["pandora.disconnected",{"reason":"idle"}]` | object |
+
+**Breaking change rule:** any field rename, type change (e.g. `volume` payload
+from integer to object), or event name rename is a **breaking change** for all
+consumers. Add a compatibility assertion test before renaming anything.
+
+---
+
 ## Server-to-Client Events
 
 These events are broadcast from the server to connected clients.
@@ -1574,5 +1604,11 @@ The following features are defined in the action mappings but are **not implemen
 | `query.history` | Not yet implemented |
 | `app.settings` | Settings changes don't persist and are only temporary session changes |
 
-Attempting to use these actions will have no effect.
+Attempting to use these actions now emits an `error` event instead of silently doing nothing:
+
+```json
+["error", {"operation": "query.history", "message": "Song history is not available through the remote API yet."}]
+```
+
+Unknown action names (not in the mapping table at all) receive no response.
 

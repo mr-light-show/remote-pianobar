@@ -28,6 +28,8 @@ cli:
   wait_station_web_alt: "Waiting for station selection via web interface...\n"
   no_station_press_s: "No station selected. Press 's' to select a station.\n"
   invalid_song_url: "Invalid song url.\n"
+  piano_reinit_failed: "Failed to reset Pandora session: %s\n"
+  player_stop_timeout: "Timed out waiting for playback to stop.\n"
   player_thread_detach: "Player thread did not exit within 10s, detaching\n"
   piano_init_failed: "Initialization failed: %s\n"
   press_help: "Press %c for a list of commands.\n"
@@ -87,6 +89,10 @@ web:
     no_station_selected: "No station is selected"
     not_connected: "Not connected to Pandora"
     action_context: "Action cannot be performed in current context"
+    not_implemented: "This command is not supported by this server."
+    not_implemented_bookmark: "Song bookmarking is no longer supported by Pandora."
+    not_implemented_history: "Song history is not available through the remote API yet."
+    not_implemented_settings: "Runtime settings changes are not available through the remote API yet."
 
   # Web UI only (Lit); flat keys web.ui.* in generated JSON / locale files
   ui:

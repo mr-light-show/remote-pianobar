@@ -22,11 +22,14 @@ THE SOFTWARE.
 */
 
 #include "log.h"
+#include "parse_utils.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <limits.h>
 
 #ifdef HAVE_DEBUGLOG
 #define COLOR_RESET   "\033[0m"
@@ -40,7 +43,15 @@ THE SOFTWARE.
 #define COLOR_RED     "\033[0;31m"  /* Error */
 #endif
 
-static unsigned int debug_mask = 0;
+static _Atomic unsigned int debug_mask = 0;
+
+void log_set_debug_mask (unsigned int mask) {
+	atomic_store_explicit (&debug_mask, mask, memory_order_relaxed);
+}
+
+unsigned int log_get_debug_mask (void) {
+	return atomic_load_explicit (&debug_mask, memory_order_relaxed);
+}
 
 void log_init(void)
 {
@@ -48,7 +59,12 @@ void log_init(void)
 	const char *const s = getenv("PIANOBAR_DEBUG");
 	unsigned int raw = 0;
 	if (s != NULL) {
-		raw = (unsigned int)atoi(s);
+		int tmp = 0;
+		if (!BarParseIntInRange (s, 0, INT_MAX, &tmp)) {
+			fprintf (stderr, "PIANOBAR_DEBUG: invalid value \"%s\", ignoring\n", s);
+		} else {
+			raw = (unsigned int) tmp;
+		}
 	}
 	debug_mask = raw;
 	if (debug_mask != 0) {
@@ -184,4 +200,20 @@ void log_write(logKind kind, const char *format, ...)
 	}
 
 	va_end(args);
+}
+
+void log_network_request(const char *url)
+{
+	if (url == NULL) {
+		return;
+	}
+	log_write(DEBUG_NETWORK, "← %s\n", url);
+}
+
+void log_network_response(const char *summary)
+{
+	if (summary == NULL) {
+		return;
+	}
+	log_write(DEBUG_NETWORK, "→ %s\n", summary);
 }

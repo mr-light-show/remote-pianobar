@@ -25,6 +25,9 @@ jobs:
         run: echo 'CFLAGS=-g -O0' >> $GITHUB_ENV
 
       - name: Build and test with coverage
+        env:
+          PIANOBAR_INTEGRATION: "1"
+          PIANOBAR_TEST_NO_DEVICE: "1"
         run: make test-coverage
 
       - name: Upload C coverage to Codecov

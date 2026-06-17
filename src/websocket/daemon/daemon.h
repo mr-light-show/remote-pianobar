@@ -67,5 +67,9 @@ bool BarDaemonWriteLockPid(int lockFd);
  * Returns true if instance was killed or no instance running */
 bool BarDaemonKillExistingInstance(void);
 
+/* Get the machine's first non-loopback IPv4 address.
+ * Falls back to "127.0.0.1" when no suitable interface is found. */
+void BarDaemonGetIPv4Address(char *buffer, size_t buffer_size);
+
 #endif /* _DAEMON_H */
 

@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include <check.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <stdio.h>
@@ -64,7 +65,91 @@ START_TEST(test_daemon_is_running_nonexistent) {
 }
 END_TEST
 
+START_TEST(test_daemon_get_ipv4_address_returns_nonempty_address) {
+	char addr[64];
+	memset(addr, 0, sizeof(addr));
+
+	BarDaemonGetIPv4Address(addr, sizeof(addr));
+
+	ck_assert_str_ne(addr, "");
+}
+END_TEST
+
+/* Real-world: write PID file with a configured path, check process detection,
+ * then remove it.  Mirrors what happens when the daemon launches. */
+START_TEST(test_daemon_pid_file_write_detect_remove_roundtrip) {
+	const char *pidPath = "/tmp/test_pianobar_daemon_roundtrip.pid";
+	unlink(pidPath);
+
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.pidFile = strdup(pidPath);
+
+	ck_assert(BarDaemonWritePidFile(&app));
+	struct stat st;
+	ck_assert_int_eq(stat(pidPath, &st), 0);
+
+	/* The PID written is our own — BarDaemonIsRunning should see us alive. */
+	ck_assert(BarDaemonIsRunning(pidPath));
+
+	BarDaemonRemovePidFile(&app);
+	ck_assert_int_ne(stat(pidPath, &st), 0);
+
+	free(app.settings.pidFile);
+}
+END_TEST
+
+START_TEST(test_daemon_is_running_with_dead_pid) {
+	const char *pidPath = "/tmp/test_pianobar_daemon_dead.pid";
+	FILE *f = fopen(pidPath, "w");
+	ck_assert_ptr_nonnull(f);
+	/* PID that almost certainly does not exist on test hosts. */
+	fprintf(f, "2147483646\n");
+	fclose(f);
+
+	ck_assert(!BarDaemonIsRunning(pidPath));
+	unlink(pidPath);
+}
+END_TEST
+
+START_TEST(test_daemon_get_lock_file_path_is_under_config) {
+	char *path = BarDaemonGetLockFilePath();
+	ck_assert_ptr_nonnull(path);
+	ck_assert(strstr(path, "pianobar.lock") != NULL);
+	free(path);
+}
+END_TEST
+
+START_TEST(test_daemon_lock_acquire_write_read_roundtrip) {
+	int lockFd = BarDaemonAcquireLock();
+	if (lockFd < 0) {
+		/* Another instance may hold the default lock on a dev machine. */
+		ck_assert(1);
+		return;
+	}
+
+	ck_assert(BarDaemonWriteLockPid(lockFd));
+	ck_assert_int_eq(BarDaemonReadLockPid(), getpid());
+	close(lockFd);
+}
+END_TEST
+
+START_TEST(test_daemon_write_lock_pid_rejects_invalid_fd) {
+	ck_assert(!BarDaemonWriteLockPid(-1));
+}
+END_TEST
+
+START_TEST(test_daemonize_steps_rejects_null_app) {
+	ck_assert(!BarDaemonizeSteps(NULL));
+}
+END_TEST
+
 /* Create test suite */
+START_TEST(test_daemon_kill_running_nonexistent_pid_file) {
+	ck_assert(!BarDaemonKillRunning("/tmp/nonexistent_pianobar_kill.pid"));
+}
+END_TEST
+
 Suite *daemon_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -77,6 +162,14 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_daemonize_null);
 	tcase_add_test(tc_core, test_daemon_is_running_null);
 	tcase_add_test(tc_core, test_daemon_is_running_nonexistent);
+	tcase_add_test(tc_core, test_daemon_get_ipv4_address_returns_nonempty_address);
+	tcase_add_test(tc_core, test_daemon_pid_file_write_detect_remove_roundtrip);
+	tcase_add_test(tc_core, test_daemon_is_running_with_dead_pid);
+	tcase_add_test(tc_core, test_daemon_get_lock_file_path_is_under_config);
+	tcase_add_test(tc_core, test_daemon_lock_acquire_write_read_roundtrip);
+	tcase_add_test(tc_core, test_daemon_write_lock_pid_rejects_invalid_fd);
+	tcase_add_test(tc_core, test_daemonize_steps_rejects_null_app);
+	tcase_add_test(tc_core, test_daemon_kill_running_nonexistent_pid_file);
 	
 	suite_add_tcase(s, tc_core);
 	

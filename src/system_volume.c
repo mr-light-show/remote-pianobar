@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <json-c/json.h>
 #include <time.h>
 
 /* Track which backend is active */
@@ -479,19 +480,91 @@ static void pulseaudioDestroy(void) {
 }
 #endif /* HAVE_PULSEAUDIO */
 
-/* pactl CLI fallback: Get volume */
+/*
+ * pactl fallback: used when libpulse headers are absent at build time.
+ * Prefers pactl >= 16.0 --format=json to avoid locale/format-fragile text
+ * parsing.  Falls back to the text pipeline on older installations
+ * (prefer building with HAVE_PULSEAUDIO to avoid the pactl dependency).
+ */
+
+/* Parse volume percentage from pactl --format=json output.
+ * Returns 0-100 on success, -1 on failure. */
+int BarSystemVolumeParsePactlJsonVolume(const char *buf) {
+	if (buf == NULL) {
+		return -1;
+	}
+	struct json_object *root = json_tokener_parse(buf);
+	if (!root) {
+		return -1;
+	}
+
+	int result = -1;
+
+	/* JSON is an array; take the first sink entry */
+	struct json_object *entry = json_object_array_get_idx(root, 0);
+	if (!entry) {
+		goto done;
+	}
+
+	struct json_object *vol_obj;
+	if (!json_object_object_get_ex(entry, "volume", &vol_obj)) {
+		goto done;
+	}
+
+	/* Iterate over channel entries and take the first value_percent */
+	json_object_object_foreach(vol_obj, _chan_key, chan_val) {
+		(void)_chan_key;
+		struct json_object *vp;
+		if (json_object_object_get_ex(chan_val, "value_percent", &vp)) {
+			const char *pct = json_object_get_string(vp);
+			if (pct) {
+				result = atoi(pct); /* "100%" → 100 */
+				break;
+			}
+		}
+	}
+
+done:
+	json_object_put(root);
+	return result;
+}
+
+/* Read up to buf_size-1 bytes from fp into buf, NUL-terminated. */
+static void pactlReadAll(FILE *fp, char *buf, size_t buf_size) {
+	size_t total = 0;
+	size_t n;
+	while (total < buf_size - 1 &&
+	       (n = fread(buf + total, 1, buf_size - 1 - total, fp)) > 0) {
+		total += n;
+	}
+	buf[total] = '\0';
+}
+
 static int pactlGetVolume(void) {
-	FILE *fp = popen("pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oP '\\d+%' | head -1 | tr -d '%'", "r");
+	/* Attempt JSON output (pactl >= 16.0) */
+	FILE *fp = popen("pactl --format=json get-sink-volume @DEFAULT_SINK@"
+	                 " 2>/dev/null", "r");
+	if (fp) {
+		char buf[4096];
+		pactlReadAll(fp, buf, sizeof(buf));
+		pclose(fp);
+		int vol = BarSystemVolumeParsePactlJsonVolume(buf);
+		if (vol >= 0) {
+			return vol;
+		}
+	}
+
+	/* Fall back to text parsing for older pactl installations */
+	fp = popen("pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null"
+	           " | grep -oP '\\d+%' | head -1 | tr -d '%'", "r");
 	if (!fp) {
 		return -1;
 	}
-	
 	int volume = -1;
 	if (fscanf(fp, "%d", &volume) != 1) {
 		volume = -1;
 	}
 	pclose(fp);
-	
 	return volume;
 }
 

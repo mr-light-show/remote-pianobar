@@ -45,6 +45,7 @@ This will:
 ### Individual Test Targets
 
 - `make test` - Run unit tests only
+- `make test-integration` - Run integration tests (sets `PIANOBAR_INTEGRATION=1`)
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
 - `make test-asan` - Run tests with AddressSanitizer (memory leak detection)
@@ -68,10 +69,12 @@ test/
 │   ├── test_http_server.c   # HTTP file serving tests
 │   ├── test_daemon.c        # Daemonization tests
 │   └── test_socketio.c      # Socket.IO protocol tests (future)
-├── integration/             # Integration tests (future)
-│   └── test_client_server.c
+├── integration/             # Integration tests (opt-in)
+│   ├── fixture_http.c       # Local HTTP server for audio fixtures
+│   └── test_playback_integration.c
 └── fixtures/                # Test data files
-    └── test_config.ini
+    ├── test_config.ini
+    └── tone.mp3             # Short MP3 for player integration tests
 ```
 
 ## Current Test Coverage
@@ -96,6 +99,49 @@ test/
 - Process detection
 
 **Total Test Cases**: 19
+
+### Integration tests (`test/integration/`)
+
+Heavy tests for `playback_lifecycle.c` and `player.c` that exercise real HTTP audio
+decoding and mocked Pandora playlist fetch. They are **opt-in** locally:
+
+```bash
+make test-integration
+# or
+PIANOBAR_INTEGRATION=1 ./pianobar_test
+```
+
+CI runs them during `make test-coverage` (`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1`).
+
+Requirements:
+- `test/fixtures/tone.mp3` (committed; regenerate with ffmpeg if needed)
+- Headless CI uses `PIANOBAR_TEST_NO_DEVICE=1` (miniaudio `noDevice`); without it, audio tests skip if the engine cannot init
+- `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
+
+Production code exposes `BarUiPianoCallSetTestHook()` / `BarUiPianoCallClearTestHook()`
+so playlist fetch can be mocked without network access.
+
+Coverage includes lifecycle failure paths (empty playlist, session error, generic failure),
+player error/interrupt paths, two-song manual advance, and playback-manager end-to-end.
+
+## Code coverage and build variants
+
+Codecov patch coverage reflects **only what CI uploads** — it does **not** merge runs from different `make` invocations automatically.
+
+| Target / env | What runs | Uploaded to Codecov? | Notes |
+|--------------|-----------|----------------------|-------|
+| `make test-coverage` | Full WebSocket test binary + integration + headless audio | Yes (`c-tests` flag) | Matches GitHub Actions `test.yml`; always use this before judging patch % |
+| `make test` | Unit tests only (no integration) | No | Fast dev loop; lower coverage than CI |
+| `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` | Same tests as CI except no `--coverage` | No | Pre-push CI parity when `Makefile` / `test/**` changed |
+| `make NOWEBSOCKET=1 test` | Base tests only; no WebSocket objects linked | No | Separate binary; `#ifdef WEBSOCKET_ENABLED` code is **not** exercised |
+| `make test-asan` | ASan rebuild + unit tests | No | Memory checking only |
+| `cd webui && npm test -- --run --coverage` | Vitest | Yes (`web-tests` flag) | Separate upload; combined with `c-tests` for default patch gate |
+
+**Implication:** production lines compiled only under `NOWEBSOCKET=1`, or only when integration env vars are unset, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
+
+The `codecov/patch/c-tests` gate scopes to **`src/**/*.c` only** — changed headers (`*.h`) and docs (`*.md`) in `src/` are excluded from the patch denominator because they are not executable.
+
+Unit tests in `test/unit/test_player.c` also exercise `BarPlayerThread` error paths (invalid URL, connection refused, non-audio file) without requiring `PIANOBAR_INTEGRATION=1`.
 
 ## Adding New Tests
 

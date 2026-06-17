@@ -4,5 +4,25 @@
 set -e
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-echo "pre-push: running make test-all..."
-make test-all
+
+# Commits being pushed (empty when upstream not set yet)
+RANGE="@{u}..HEAD"
+if ! git rev-parse --verify "$RANGE" >/dev/null 2>&1; then
+	RANGE="HEAD"
+fi
+
+CHANGED="$(git diff --name-only "$RANGE" 2>/dev/null || true)"
+needs_clean=0
+if printf '%s\n' "$CHANGED" | grep -qE '^(Makefile|test/)'; then
+	needs_clean=1
+fi
+
+if [ "$needs_clean" -eq 1 ]; then
+	echo "pre-push: Makefile or test/** changed — clean build (CI parity)..."
+	make distclean
+	echo "pre-push: running PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all..."
+	PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all
+else
+	echo "pre-push: running make test-all..."
+	make test-all
+fi

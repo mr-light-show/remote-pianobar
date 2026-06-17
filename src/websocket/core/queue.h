@@ -28,12 +28,8 @@ THE SOFTWARE.
 /* Message types for bucket communication */
 typedef enum {
 	/* Broadcast messages (Main → WebSocket thread) */
-	MSG_TYPE_BROADCAST_START,      /* Song started */
-	MSG_TYPE_BROADCAST_STOP,       /* Song stopped */
-	MSG_TYPE_BROADCAST_PROGRESS,   /* Progress update */
-	MSG_TYPE_BROADCAST_VOLUME,     /* Volume changed */
-	MSG_TYPE_BROADCAST_STATIONS,   /* Station list changed */
-	
+	MSG_TYPE_BROADCAST_SOCKETIO,   /* data is a heap-owned Socket.IO text frame */
+
 	/* Command messages (WebSocket → Main thread) */
 	MSG_TYPE_COMMAND_ACTION,       /* User action */
 	MSG_TYPE_COMMAND_CHANGE_STATION, /* Change station */

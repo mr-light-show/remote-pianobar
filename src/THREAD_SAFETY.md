@@ -147,17 +147,20 @@ When **`stateRwlock`** and **`player.lock`** must both be acquired, **always fol
 
 ### Conditional Locking
 
-`app->stateRwlock` is **conditionally active** when [`BarStateUsesRwlock`](bar_state.h) is true (`ui_mode` is web or both):
+`app->stateRwlock` is **always** held by `BarStateSet*` functions in any mode
+that has concurrent WebSocket threads (`BAR_UI_MODE_BOTH` and `BAR_UI_MODE_WEB`).
+Callers must not hold a read lock when calling any `BarStateSet*` function.
+In CLI-only mode, the lock operations are no-ops (optimized away).
 
 ```c
-if (BarStateUsesRwlock(app)) {
-    pthread_rwlock_rdlock(&app->stateRwlock);   /* or wrlock for writers */
-    // ... critical section ...
-    pthread_rwlock_unlock(&app->stateRwlock);
+/* Internal helper in bar_state.c — active for BOTH and WEB modes */
+static bool state_needs_lock(const BarApp_t *app) {
+    return app->settings.uiMode == BAR_UI_MODE_BOTH ||
+           app->settings.uiMode == BAR_UI_MODE_WEB;
 }
 ```
 
-In CLI mode (`ui_mode=cli`), lock operations are no-ops. Implemented via `WITH_STATE_LOCK`, `WITH_STATE_LOCK_RETURN`, and `WITH_STATE_LOCK_WRITE_RETURN` in [`bar_state.c`](bar_state.c).
+This is implemented via the `WITH_STATE_LOCK`, `WITH_STATE_LOCK_RETURN`, and `WITH_STATE_LOCK_WRITE_RETURN` macros in [`bar_state.c`](bar_state.c).
 
 ---
 

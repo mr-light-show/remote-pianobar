@@ -37,9 +37,7 @@ THE SOFTWARE.
 #include "error_messages.h"
 #include "../core/websocket.h"
 
-/* Forward declare ui_act functions to avoid full header include */
-extern void BarUiSwitchStation(BarApp_t *app, PianoStation_t *station);
-extern int BarTransformIfShared(BarApp_t *app, PianoStation_t *station);
+#include "../../ui_act.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -47,6 +45,12 @@ extern int BarTransformIfShared(BarApp_t *app, PianoStation_t *station);
 #include <stdbool.h>
 #include <math.h>
 #include <json-c/json.h>
+
+/* json-c rejects NULL; Socket.IO payloads treat missing strings as "". */
+static struct json_object *BarJsonStringOrEmpty (const char *s)
+{
+	return json_object_new_string (s != NULL ? s : "");
+}
 
 /* Helper: Create JSON object for a song with common fields
  * includeTrackToken: whether to include trackToken field
@@ -64,23 +68,16 @@ static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song,
 	songObj = json_object_new_object();
 	
 	/* Core song fields - use empty string as fallback for safety */
-	json_object_object_add(songObj, "title", 
-	                       json_object_new_string(song->title ? song->title : ""));
-	json_object_object_add(songObj, "artist", 
-	                       json_object_new_string(song->artist ? song->artist : ""));
-	json_object_object_add(songObj, "album", 
-	                       json_object_new_string(song->album ? song->album : ""));
-	json_object_object_add(songObj, "coverArt", 
-	                       json_object_new_string(song->coverArt ? song->coverArt : ""));
-	json_object_object_add(songObj, "rating", 
-	                       json_object_new_int(song->rating));
-	json_object_object_add(songObj, "duration", 
-	                       json_object_new_int(song->length));
+	json_object_object_add(songObj, "title",    BarJsonStringOrEmpty(song->title));
+	json_object_object_add(songObj, "artist",   BarJsonStringOrEmpty(song->artist));
+	json_object_object_add(songObj, "album",    BarJsonStringOrEmpty(song->album));
+	json_object_object_add(songObj, "coverArt", BarJsonStringOrEmpty(song->coverArt));
+	json_object_object_add(songObj, "rating",   json_object_new_int(song->rating));
+	json_object_object_add(songObj, "duration", json_object_new_int(song->length));
 	
 	/* Optional: track token */
 	if (includeTrackToken) {
-		json_object_object_add(songObj, "trackToken", 
-		                       json_object_new_string(song->trackToken ? song->trackToken : ""));
+		json_object_object_add(songObj, "trackToken", BarJsonStringOrEmpty(song->trackToken));
 	}
 	
 	/* Optional: station name the song came from */
@@ -88,82 +85,97 @@ static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song,
 		songStation = BarStateFindStationById(app, song->stationId);
 		if (songStation) {
 			const char *displayName = songStation->displayName ? songStation->displayName : songStation->name;
-			json_object_object_add(songObj, stationFieldName,
-			                       json_object_new_string(displayName));
+			json_object_object_add(songObj, stationFieldName, BarJsonStringOrEmpty(displayName));
 		}
 	}
 	
 	return songObj;
 }
 
-/* Action mapping: descriptive command name → action ID */
+/* Action capability: whether the action is fully implemented or known-unimplemented */
+typedef enum {
+	BAR_SOCKETIO_ACTION_DISPATCH,        /* fully implemented — route to dispatch table */
+	BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED  /* mapped but no server action: emit error */
+} BarSocketIoActionCapability_t;
+
+/* Action mapping: descriptive command name → action ID + capability */
 typedef struct {
-	const char *descriptive;
-	BarKeyShortcutId_t actionId;
+	const char                   *descriptive;
+	BarKeyShortcutId_t            actionId;
+	BarSocketIoActionCapability_t capability;
+	const char                   *reasonKey; /* l10n key for NOT_IMPLEMENTED error */
 } BarActionMapping_t;
 
 static const BarActionMapping_t actionMappings[] = {
 	/* Playback */
-	{"playback.next", BAR_KS_SKIP},
-	{"playback.toggle", BAR_KS_PLAYPAUSE},
-	{"playback.play", BAR_KS_PLAY},
-	{"playback.pause", BAR_KS_PAUSE},
-	
+	{"playback.next",   BAR_KS_SKIP,      BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"playback.toggle", BAR_KS_PLAYPAUSE, BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"playback.play",   BAR_KS_PLAY,      BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"playback.pause",  BAR_KS_PAUSE,     BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+
 	/* Volume */
-	{"volume.up", BAR_KS_VOLUP},
-	{"volume.down", BAR_KS_VOLDOWN},
-	{"volume.reset", BAR_KS_VOLRESET},
+	{"volume.up",    BAR_KS_VOLUP,    BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"volume.down",  BAR_KS_VOLDOWN,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"volume.reset", BAR_KS_VOLRESET, BAR_SOCKETIO_ACTION_DISPATCH, NULL},
 	/* volume.set handled specially in BarSocketIoHandleAction */
-	
+
 	/* Song */
-	{"song.love", BAR_KS_LOVE},
-	{"song.ban", BAR_KS_BAN},
-	{"song.tired", BAR_KS_TIRED},
-	{"song.bookmark", BAR_KS_BOOKMARK}, // Not implemented in websocekts - Pandora discontinued this feature in August 2022
-	{"song.explain", BAR_KS_EXPLAIN},
-	{"song.info", BAR_KS_INFO},
-	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG},
-	
+	{"song.love",              BAR_KS_LOVE,                 BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"song.ban",               BAR_KS_BAN,                  BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"song.tired",             BAR_KS_TIRED,                BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"song.bookmark",          BAR_KS_BOOKMARK,             BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_bookmark"},
+	{"song.explain",           BAR_KS_EXPLAIN,              BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"song.info",              BAR_KS_INFO,                 BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG, BAR_SOCKETIO_ACTION_DISPATCH,       NULL},
+
 	/* Station */
-	{"station.change", BAR_KS_SELECTSTATION},
-	{"station.create", BAR_KS_CREATESTATION},
-	{"station.delete", BAR_KS_DELETESTATION},
-	{"station.rename", BAR_KS_RENAMESTATION},
-	{"station.addMusic", BAR_KS_ADDMUSIC},
-	{"station.addGenre", BAR_KS_GENRESTATION},
-	{"station.addShared", BAR_KS_ADDSHARED},
-	{"station.selectQuickMix", BAR_KS_SELECTQUICKMIX},
+	{"station.change",        BAR_KS_SELECTSTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.create",        BAR_KS_CREATESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.delete",        BAR_KS_DELETESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.rename",        BAR_KS_RENAMESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.addMusic",      BAR_KS_ADDMUSIC,       BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.addGenre",      BAR_KS_GENRESTATION,   BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.addShared",     BAR_KS_ADDSHARED,      BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	{"station.selectQuickMix",BAR_KS_SELECTQUICKMIX, BAR_SOCKETIO_ACTION_DISPATCH, NULL},
 	/* station.mode, station.seeds, music.search, query.stations handled by dedicated events */
-	
+
 	/* Query */
-	{"query.history", BAR_KS_HISTORY},  // TODO: Implement this
-	{"query.upcoming", BAR_KS_UPCOMING},
-	
+	{"query.history",  BAR_KS_HISTORY,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_history"},
+	{"query.upcoming", BAR_KS_UPCOMING, BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+
 	/* App */
-	{"app.quit", BAR_KS_QUIT},
-	{"app.pandora-disconnect", BAR_KS_PANDORA_DISCONNECT},
-	{"app.settings", BAR_KS_SETTINGS}, // Not implemented in websocekts - Changes don't persist, and are only temporary session changes
-	{"app.pandora-reconnect", BAR_KS_PANDORA_RECONNECT},
-	
-	{NULL, (BarKeyShortcutId_t)-1} /* terminator */
+	{"app.quit",               BAR_KS_QUIT,                BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"app.pandora-disconnect", BAR_KS_PANDORA_DISCONNECT,  BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+	{"app.settings",           BAR_KS_SETTINGS,            BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_settings"},
+	{"app.pandora-reconnect",  BAR_KS_PANDORA_RECONNECT,   BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
+
+	{NULL, (BarKeyShortcutId_t)-1, BAR_SOCKETIO_ACTION_DISPATCH, NULL} /* terminator */
 };
 
-/* Translate descriptive command to action ID
- * Returns (BarKeyShortcutId_t)-1 if command not found */
-static BarKeyShortcutId_t BarSocketIoTranslateAction(const char *command) {
-	if (!command) {
-		return (BarKeyShortcutId_t)-1;
-	}
-	
-	/* Look up descriptive command in mapping table */
+/* Look up action mapping entry; returns NULL if not found */
+static const BarActionMapping_t *BarSocketIoLookupAction (const char *command) {
+	if (!command) { return NULL; }
 	for (size_t i = 0; actionMappings[i].descriptive != NULL; i++) {
-		if (strcmp(command, actionMappings[i].descriptive) == 0) {
-			return actionMappings[i].actionId;
+		if (strcmp (command, actionMappings[i].descriptive) == 0) {
+			return &actionMappings[i];
 		}
 	}
-	
-	/* Not found */
-	return (BarKeyShortcutId_t)-1;
+	return NULL;
+}
+
+/* Translate descriptive command to action ID; kept for callers that only need the ID.
+ * Returns (BarKeyShortcutId_t)-1 if command not found. */
+static BarKeyShortcutId_t BarSocketIoTranslateAction (const char *command) {
+	const BarActionMapping_t *m = BarSocketIoLookupAction (command);
+	return m ? m->actionId : (BarKeyShortcutId_t)-1;
+}
+
+/* Emit a localized "not implemented" error for a mapped but unsupported action */
+static void BarSocketIoEmitNotImplemented (BarApp_t *app, const char *operation,
+                                           const char *reasonKey) {
+	const char *message = BarL10nGet (app ? &app->l10n : NULL,
+	        reasonKey ? reasonKey : "web.socket.not_implemented");
+	BarSocketIoEmitError (app, operation, message);
 }
 
 /* Parse Socket.IO protocol message format */
@@ -213,38 +225,147 @@ static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName,
 	return type;
 }
 
+/*
+ * ============================================================================
+ * Event dispatch table
+ * ============================================================================
+ */
+
+/* Canonical event handler type: (app, data, wsi) */
+typedef void (*BarSocketIoEventFn)(BarApp_t *, json_object *, void *);
+
+typedef struct {
+	const char        *name;
+	BarSocketIoEventFn fn;
+} BarSocketIoEvent_t;
+
+/* Thin adapters for handlers whose native signatures differ from the canonical type */
+static void evtHandleQuery(BarApp_t *a, json_object *d, void *w) {
+	(void)d; BarSocketIoHandleQuery(a, w);
+}
+static void evtHandleStationChange(BarApp_t *a, json_object *d, void *w) {
+	(void)w;
+	if (!d) { return; }
+	if (json_object_is_type(d, json_type_string)) {
+		const char *id = json_object_get_string(d);
+		if (id) { BarSocketIoHandleChangeStation(a, id); }
+	} else if (json_object_is_type(d, json_type_object)) {
+		json_object *idObj;
+		if (json_object_object_get_ex(d, "id", &idObj)) {
+			const char *id = json_object_get_string(idObj);
+			if (id) { BarSocketIoHandleChangeStation(a, id); }
+		}
+	}
+}
+static void evtEmitStations(BarApp_t *a, json_object *d, void *w) {
+	(void)d; (void)w;
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
+	BarSocketIoEmitStations(a);
+}
+static void evtGetGenres(BarApp_t *a, json_object *d, void *w) {
+	(void)d; (void)w; BarSocketIoHandleGetGenres(a);
+}
+static void evtPingNoop(BarApp_t *a, json_object *d, void *w) {
+	(void)a; (void)d; (void)w; /* client keepalive; no response needed */
+}
+static void evtSetQuickMix(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleSetQuickMix(a, d);
+}
+static void evtDeleteStation(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleDeleteStation(a, d);
+}
+static void evtCreateStationFrom(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleCreateStationFrom(a, d);
+}
+static void evtAddGenre(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleAddGenre(a, d);
+}
+static void evtSearchMusic(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleSearchMusic(a, d);
+}
+static void evtAddMusic(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleAddMusic(a, d);
+}
+static void evtAddShared(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleAddShared(a, d);
+}
+static void evtRenameStation(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleRenameStation(a, d);
+}
+static void evtGetStationModes(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleGetStationModes(a, d);
+}
+static void evtSetStationMode(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleSetStationMode(a, d);
+}
+static void evtGetStationInfo(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleGetStationInfo(a, d);
+}
+static void evtDeleteSeed(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleDeleteSeed(a, d);
+}
+static void evtDeleteFeedback(BarApp_t *a, json_object *d, void *w) {
+	(void)w; BarSocketIoHandleDeleteFeedback(a, d);
+}
+
+static const BarSocketIoEvent_t eventHandlers[] = {
+	/* station events */
+	{"station.change",         evtHandleStationChange},
+	{"changeStation",          evtHandleStationChange},   /* legacy alias */
+	{"station.setQuickMix",    evtSetQuickMix},
+	{"station.delete",         evtDeleteStation},
+	{"station.createFrom",     evtCreateStationFrom},
+	{"station.getGenres",      evtGetGenres},
+	{"station.addGenre",       evtAddGenre},
+	{"station.addMusic",       evtAddMusic},
+	{"station.addShared",      evtAddShared},
+	{"station.rename",         evtRenameStation},
+	{"station.getModes",       evtGetStationModes},
+	{"station.setMode",        evtSetStationMode},
+	{"station.getInfo",        evtGetStationInfo},
+	{"station.deleteSeed",     evtDeleteSeed},
+	{"station.deleteFeedback", evtDeleteFeedback},
+	/* music events */
+	{"music.search",           evtSearchMusic},
+	/* query events */
+	{"query",                  evtHandleQuery},
+	{"query.state",            evtHandleQuery},           /* alias */
+	{"query.stations",         evtEmitStations},
+	/* protocol events */
+	{"ping",                   evtPingNoop},
+	{NULL, NULL}  /* sentinel */
+};
+
 /* Handle incoming Socket.IO message */
 void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	BarSocketIoType_t type;
 	char *eventName = NULL;
 	json_object *data = NULL;
-	
+
 	if (!app || !message) {
 		log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with null app or message\n");
 		return;
 	}
-	
-	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.*s%s\n", 
+
+	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: HandleMessage called with: %.*s%s\n",
 	           (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
-	
-	/* Parse Socket.IO message */
+
 	type = BarSocketIoParse(message, &eventName, &data);
-	
-	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Parsed message - type=%d, eventName=%s\n", 
+
+	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Parsed message - type=%d, eventName=%s\n",
 	           type, eventName ? eventName : "(null)");
-	
+
 	if (type == SOCKETIO_CONNECT) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
-		/* Send initial state on connect (unicast to requesting client) */
 		BarSocketIoHandleQuery(app, wsi);
 		goto cleanup;
 	}
-	
+
 	if (type != SOCKETIO_EVENT || !eventName) {
 		goto cleanup;
 	}
-	
-	/* Route to appropriate handler */
+
+	/* "action" has complex sub-routing (string/object data formats); handle before table */
 	if (strcmp(eventName, "action") == 0) {
 		if (data && json_object_is_type(data, json_type_string)) {
 			const char *action = json_object_get_string(data);
@@ -253,88 +374,24 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 			json_object *actionObj;
 			if (json_object_object_get_ex(data, "action", &actionObj)) {
 				const char *action = json_object_get_string(actionObj);
-				if (action) {
-					BarSocketIoHandleAction(app, action, data, wsi);
-				}
+				if (action) { BarSocketIoHandleAction(app, action, data, wsi); }
 			} else if (json_object_object_get_ex(data, "command", &actionObj)) {
 				const char *action = json_object_get_string(actionObj);
-				if (action) {
-					BarSocketIoHandleAction(app, action, data, wsi);
-				}
+				if (action) { BarSocketIoHandleAction(app, action, data, wsi); }
 			}
 		}
-	} else if (strcmp(eventName, "station.change") == 0 || 
-	           strcmp(eventName, "changeStation") == 0) {
-		/* Support both new (station.change) and old (changeStation) names */
-		if (data && json_object_is_type(data, json_type_string)) {
-			const char *stationId = json_object_get_string(data);
-			BarSocketIoHandleChangeStation(app, stationId);
-		} else if (data && json_object_is_type(data, json_type_object)) {
-			json_object *idObj;
-			/* Extract station ID from object */
-			if (json_object_object_get_ex(data, "id", &idObj)) {
-				const char *stationId = json_object_get_string(idObj);
-				if (stationId) {
-					BarSocketIoHandleChangeStation(app, stationId);
-				}
-			}
-		}
-	} else if (strcmp(eventName, "query") == 0 || 
-	           strcmp(eventName, "query.state") == 0) {
-		/* query or query.state = full state (unicast to requesting client) */
-		BarSocketIoHandleQuery(app, wsi);
-	} else if (strcmp(eventName, "query.stations") == 0) {
-		/* query.stations = just stations list */
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
-		BarSocketIoEmitStations(app);
-	} else if (strcmp(eventName, "station.setQuickMix") == 0) {
-		/* Set QuickMix stations from array of station IDs */
-		BarSocketIoHandleSetQuickMix(app, data);
-	} else if (strcmp(eventName, "station.delete") == 0) {
-		/* Delete a station */
-		BarSocketIoHandleDeleteStation(app, data);
-	} else if (strcmp(eventName, "station.createFrom") == 0) {
-		/* Create station from current song or artist */
-		BarSocketIoHandleCreateStationFrom(app, data);
-	} else if (strcmp(eventName, "station.getGenres") == 0) {
-		/* Get genre categories and stations */
-		BarSocketIoHandleGetGenres(app);
-	} else if (strcmp(eventName, "station.addGenre") == 0) {
-		/* Add genre station */
-		BarSocketIoHandleAddGenre(app, data);
-	} else if (strcmp(eventName, "music.search") == 0) {
-		/* Search for music (artists/songs) */
-		BarSocketIoHandleSearchMusic(app, data);
-	} else if (strcmp(eventName, "station.addMusic") == 0) {
-		/* Add music to station */
-		BarSocketIoHandleAddMusic(app, data);
-	} else if (strcmp(eventName, "station.addShared") == 0) {
-		/* Add shared station by ID */
-		BarSocketIoHandleAddShared(app, data);
-	} else if (strcmp(eventName, "station.rename") == 0) {
-		/* Rename station */
-		BarSocketIoHandleRenameStation(app, data);
-	} else if (strcmp(eventName, "station.getModes") == 0) {
-		/* Get station modes */
-		BarSocketIoHandleGetStationModes(app, data);
-	} else if (strcmp(eventName, "station.setMode") == 0) {
-		/* Set station mode */
-		BarSocketIoHandleSetStationMode(app, data);
-	} else if (strcmp(eventName, "station.getInfo") == 0) {
-		/* Get station info (seeds/feedback) */
-		BarSocketIoHandleGetStationInfo(app, data);
-	} else if (strcmp(eventName, "station.deleteSeed") == 0) {
-		/* Delete seed */
-		BarSocketIoHandleDeleteSeed(app, data);
-	} else if (strcmp(eventName, "station.deleteFeedback") == 0) {
-		/* Delete feedback */
-		BarSocketIoHandleDeleteFeedback(app, data);
-	} else if (strcmp(eventName, "ping") == 0) {
-		/* Client keepalive no-op; no response needed */
-	} else {
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
+		goto cleanup;
 	}
-	
+
+	/* Table-driven dispatch for all other events */
+	for (const BarSocketIoEvent_t *e = eventHandlers; e->name != NULL; e++) {
+		if (strcmp(eventName, e->name) == 0) {
+			e->fn(app, data, wsi);
+			goto cleanup;
+		}
+	}
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown event: %s\n", eventName);
+
 cleanup:
 	free(eventName);
 	if (data) {
@@ -375,7 +432,7 @@ void *BarSocketIoGetUnicastTarget(void) {
 }
 
 /* Format Socket.IO event message */
-static char *BarSocketIoFormat(const char *event, json_object *data) {
+char *BarSocketIoFormatEventMessage(const char *event, json_object *data) {
 	json_object *arr;
 	const char *jsonStr;
 	char *formatted;
@@ -387,7 +444,7 @@ static char *BarSocketIoFormat(const char *event, json_object *data) {
 	
 	/* Create JSON array: ["event", data] */
 	arr = json_object_new_array();
-	json_object_array_add(arr, json_object_new_string(event));
+	json_object_array_add(arr, BarJsonStringOrEmpty(event));
 	
 	if (data) {
 		json_object_array_add(arr, json_object_get(data)); /* Increment ref */
@@ -421,7 +478,7 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 
 	log_write(dbgFlag, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
 
-	message = BarSocketIoFormat(event, data);
+	message = BarSocketIoFormatEventMessage(event, data);
 	if (!message) {
 		log_write(dbgFlag, "Socket.IO: Failed to format message for event '%s'\n", event);
 		return;
@@ -445,32 +502,15 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 
 /* Emit 'start' event (song started) */
 void BarSocketIoEmitStart(BarApp_t *app) {
-	json_object *data, *songData;
-	PianoSong_t *song = BarStateGetPlaylist(app);
-	
-	if (!app || !song) {
+	if (!app) {
 		return;
 	}
-	
-	/* Create song JSON with all fields including trackToken and songStationName */
-	songData = BarSocketIoCreateSongJson(app, song, true, "songStationName");
-	if (!songData) {
+
+	json_object *data = BarSocketIoBuildStartPayload (app);
+	if (data == NULL) {
 		return;
 	}
-	
-	/* Copy all song fields to root level for 'start' event */
-	data = json_object_get(songData);  /* Increment ref count */
-	
-	/* Add current station info */
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	if (curStation) {
-		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
-		json_object_object_add(data, "station", 
-		                       json_object_new_string(displayName));
-		json_object_object_add(data, "stationId",
-		                       json_object_new_string(curStation->id));
-	}
-	
+
 	BarSocketIoEmit("start", data);
 	json_object_put(data);
 }
@@ -498,8 +538,8 @@ void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
 	}
 	
 	data = json_object_new_object();
-	json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
-	json_object_object_add(data, "duration", json_object_new_int(duration));
+	json_object_object_add(data, "elapsed",    json_object_new_int(elapsed));
+	json_object_object_add(data, "duration",   json_object_new_int(duration));
 	json_object_object_add(data, "percentage", json_object_new_double(percentage));
 	
 	BarSocketIoEmit("progress", data);
@@ -542,14 +582,10 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
 		
 		station = json_object_new_object();
-		json_object_object_add(station, "id", 
-		                       json_object_new_string(curStation->id));
-		json_object_object_add(station, "name", 
-		                       json_object_new_string(displayName));
-		json_object_object_add(station, "isQuickMix", 
-		                       json_object_new_boolean(curStation->isQuickMix));
-		json_object_object_add(station, "isQuickMixed", 
-		                       json_object_new_boolean(curStation->useQuickMix));
+		json_object_object_add(station, "id",           BarJsonStringOrEmpty(curStation->id));
+		json_object_object_add(station, "name",         BarJsonStringOrEmpty(displayName));
+		json_object_object_add(station, "isQuickMix",   json_object_new_boolean(curStation->isQuickMix));
+		json_object_object_add(station, "isQuickMixed", json_object_new_boolean(curStation->useQuickMix));
 		
 		json_object_array_add(stations, station);
 	}
@@ -562,96 +598,151 @@ void BarSocketIoEmitStations(BarApp_t *app) {
 
 /* Emit 'process' event (full state) */
 void BarSocketIoEmitProcess(BarApp_t *app) {
-	json_object *data, *song;
-	
 	if (!app) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
 		return;
 	}
-	
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess starting\n");
-	
-	data = json_object_new_object();
-	PianoSong_t *playlist = BarStateGetPlaylist(app);
-	json_object_object_add(data, "playing", 
-	                       json_object_new_boolean(playlist != NULL));
-	
-	/* Include pause state */
-	pthread_mutex_lock(&app->player.lock);
-	bool paused = app->player.doPause;
-	pthread_mutex_unlock(&app->player.lock);
-	json_object_object_add(data, "paused", json_object_new_boolean(paused));
-	
-	/* Include current volume as 0-100 percentage */
-	int volumePercent;
-	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
-		volumePercent = BarSystemVolumeGet();
-		if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
-	} else {
-		/* Player mode: volume is already 0-100 linear */
-		volumePercent = app->settings.volume;
-	}
-	json_object_object_add(data, "volume", json_object_new_int(volumePercent));
-	
-	/* Always include station fields, even if NULL */
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	if (curStation) {
-		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
-		json_object_object_add(data, "station", 
-		                       json_object_new_string(displayName));
-		json_object_object_add(data, "stationId",
-		                       json_object_new_string(curStation->id));
-	} else {
-		json_object_object_add(data, "station", 
-		                       json_object_new_string(""));
-		json_object_object_add(data, "stationId",
-		                       json_object_new_string(""));
-	}
-	
-	if (playlist) {
-		/* Create song JSON with all fields including trackToken and songStationName */
-		song = BarSocketIoCreateSongJson(app, playlist, true, "songStationName");
-		if (song) {
-			json_object_object_add(data, "song", song);
-		}
-		
-		/* Include current elapsed time */
-		unsigned int elapsed = BarWebsocketGetElapsed(app);
-		json_object_object_add(data, "elapsed", json_object_new_int(elapsed));
-	}
-	
-	/* Emit account info when multiple accounts are configured */
-	if (app->settings.accountCount > 0) {
-		const BarAccount_t *active = BarSettingsGetActiveAccount(&app->settings);
-		if (active) {
-			json_object *currentAcct = json_object_new_object();
-			json_object_object_add(currentAcct, "id",
-					json_object_new_string(active->id));
-			json_object_object_add(currentAcct, "label",
-					json_object_new_string(active->label ? active->label : active->id));
-			json_object_object_add(data, "current_account", currentAcct);
-		}
 
-		json_object *accountsArr = json_object_new_array();
-		for (size_t i = 0; i < app->settings.accountCount; i++) {
-			json_object *acctObj = json_object_new_object();
-			json_object_object_add(acctObj, "id",
-					json_object_new_string(app->settings.accounts[i].id));
-			json_object_object_add(acctObj, "label",
-					json_object_new_string(
-						app->settings.accounts[i].label ?
-						app->settings.accounts[i].label :
-						app->settings.accounts[i].id));
-			json_object_array_add(accountsArr, acctObj);
-		}
-		json_object_object_add(data, "accounts", accountsArr);
+	json_object *data = BarSocketIoBuildProcessPayload (app);
+	if (data == NULL) {
+		return;
 	}
-
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
 	BarSocketIoEmit("process", data);
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
 	json_object_put(data);
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
+}
+
+/* --- Payload builders (snapshot app state; caller json_object_put()s the result) --- */
+
+/* Comparison for qsort: sort snapshot items by effective display name */
+static int stationSnapshotCmp (const void *a, const void *b) {
+	const BarStationSnapshot_t *sa = (const BarStationSnapshot_t *) a;
+	const BarStationSnapshot_t *sb = (const BarStationSnapshot_t *) b;
+	const char *na = sa->displayName ? sa->displayName : (sa->name ? sa->name : "");
+	const char *nb = sb->displayName ? sb->displayName : (sb->name ? sb->name : "");
+	return strcmp (na, nb);
+}
+
+struct json_object *BarSocketIoBuildStartPayload (BarApp_t *app) {
+	if (!app) return NULL;
+
+	BarPlaybackSnapshot_t snap;
+	BarStateSnapshotPlayback (app, &snap);
+
+	if (!snap.hasSong) {
+		BarStateFreePlaybackSnapshot (&snap);
+		return NULL;
+	}
+
+	struct json_object *data = json_object_new_object ();
+	json_object_object_add(data, "title",      BarJsonStringOrEmpty (snap.songTitle));
+	json_object_object_add(data, "artist",     BarJsonStringOrEmpty (snap.songArtist));
+	json_object_object_add(data, "album",      BarJsonStringOrEmpty (snap.songAlbum));
+	json_object_object_add(data, "coverArt",   BarJsonStringOrEmpty (snap.songCoverArt));
+	json_object_object_add(data, "trackToken", BarJsonStringOrEmpty (snap.trackToken));
+	json_object_object_add(data, "rating",     json_object_new_int    (snap.rating));
+	json_object_object_add(data, "duration",   json_object_new_int    ((int) snap.duration));
+
+	if (snap.songStationName) {
+		json_object_object_add(data, "songStationName", BarJsonStringOrEmpty(snap.songStationName));
+	}
+
+	if (snap.hasStation) {
+		json_object_object_add(data, "station",   BarJsonStringOrEmpty (snap.stationName));
+		json_object_object_add(data, "stationId", BarJsonStringOrEmpty (snap.stationId));
+	}
+	BarStateFreePlaybackSnapshot (&snap);
+	return data;
+}
+
+struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app) {
+	if (!app) return json_object_new_array ();
+
+	BarStationSnapshotList_t snap;
+	if (!BarStateSnapshotStations (app, &snap)) return json_object_new_array ();
+
+	if (snap.count > 0) {
+		qsort (snap.items, snap.count, sizeof (*snap.items), stationSnapshotCmp);
+	}
+
+	struct json_object *stations = json_object_new_array ();
+	for (size_t i = 0; i < snap.count; i++) {
+		const BarStationSnapshot_t *st = &snap.items[i];
+		const char *displayName = st->displayName ? st->displayName : (st->name ? st->name : "");
+		struct json_object *station = json_object_new_object ();
+		json_object_object_add(station, "id",           BarJsonStringOrEmpty (st->id));
+		json_object_object_add(station, "name",         BarJsonStringOrEmpty (displayName));
+		json_object_object_add(station, "isQuickMix",   json_object_new_boolean (st->isQuickMix));
+		json_object_object_add(station, "isQuickMixed", json_object_new_boolean (st->isQuickMixed));
+		json_object_array_add (stations, station);
+	}
+	BarStateFreeStationSnapshot (&snap);
+	return stations;
+}
+
+struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
+	if (!app) return NULL;
+
+	/* Snapshot station + song fields atomically under lock */
+	BarPlaybackSnapshot_t pbSnap;
+	BarStateSnapshotPlayback (app, &pbSnap);
+
+	struct json_object *data = json_object_new_object ();
+	json_object_object_add (data, "playing", json_object_new_boolean (pbSnap.hasSong));
+
+	bool paused = BarStateGetPlayerPaused (app);
+	json_object_object_add (data, "paused", json_object_new_boolean (paused));
+
+	int volumePercent;
+	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
+		volumePercent = BarSystemVolumeGet ();
+		if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
+	} else {
+		volumePercent = app->settings.volume;
+	}
+	json_object_object_add (data, "volume", json_object_new_int (volumePercent));
+
+	json_object_object_add(data, "station",   BarJsonStringOrEmpty(pbSnap.stationName));
+	json_object_object_add(data, "stationId", BarJsonStringOrEmpty(pbSnap.stationId));
+
+	if (pbSnap.hasSong) {
+		struct json_object *song = json_object_new_object ();
+		json_object_object_add(song, "title",      BarJsonStringOrEmpty (pbSnap.songTitle));
+		json_object_object_add(song, "artist",     BarJsonStringOrEmpty (pbSnap.songArtist));
+		json_object_object_add(song, "album",      BarJsonStringOrEmpty (pbSnap.songAlbum));
+		json_object_object_add(song, "coverArt",   BarJsonStringOrEmpty (pbSnap.songCoverArt));
+		json_object_object_add(song, "trackToken", BarJsonStringOrEmpty (pbSnap.trackToken));
+		json_object_object_add(song, "rating",     json_object_new_int    (pbSnap.rating));
+		json_object_object_add(song, "duration",   json_object_new_int    ((int) pbSnap.duration));
+		if (pbSnap.songStationName) {
+			json_object_object_add(song, "songStationName", BarJsonStringOrEmpty(pbSnap.songStationName));
+		}
+		json_object_object_add(data, "song",    song);
+		json_object_object_add(data, "elapsed", json_object_new_int((int) BarWebsocketGetElapsed(app)));
+	}
+
+	BarStateFreePlaybackSnapshot (&pbSnap);
+
+	if (app->settings.accountCount > 0) {
+		const BarAccount_t *active = BarSettingsGetActiveAccount (&app->settings);
+		if (active) {
+			struct json_object *currentAcct = json_object_new_object ();
+			json_object_object_add(currentAcct, "id",    BarJsonStringOrEmpty(active->id));
+			json_object_object_add(currentAcct, "label", BarJsonStringOrEmpty(active->label ? active->label : active->id));
+			json_object_object_add (data, "current_account", currentAcct);
+		}
+		struct json_object *accountsArr = json_object_new_array ();
+		for (size_t i = 0; i < app->settings.accountCount; i++) {
+			struct json_object *acctObj = json_object_new_object ();
+			json_object_object_add(acctObj, "id",    BarJsonStringOrEmpty(app->settings.accounts[i].id));
+			json_object_object_add(acctObj, "label", BarJsonStringOrEmpty(app->settings.accounts[i].label ? app->settings.accounts[i].label : app->settings.accounts[i].id));
+			json_object_array_add (accountsArr, acctObj);
+		}
+		json_object_object_add (data, "accounts", accountsArr);
+	}
+	return data;
 }
 
 /* Emit 'process' event to specific client only (unicast) */
@@ -679,8 +770,7 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 	}
 	
 	data = json_object_new_object();
-	json_object_object_add(data, "explanation", 
-	                       json_object_new_string(explanation_copy));
+	json_object_object_add(data, "explanation", BarJsonStringOrEmpty(explanation_copy));
 	
 	BarSocketIoEmit("song.explanation", data);
 	json_object_put(data);
@@ -705,12 +795,10 @@ void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *me
 	friendlyMessage = BarWsGetFriendlyErrorMessage(l10n, operation, message);
 	
 	data = json_object_new_object();
-	json_object_object_add(data, "operation", 
-	                       json_object_new_string(operation));
-	json_object_object_add(data, "message", 
-	                       json_object_new_string(friendlyMessage));
+	json_object_object_add(data, "operation", BarJsonStringOrEmpty(operation));
+	json_object_object_add(data, "message",   BarJsonStringOrEmpty(friendlyMessage));
 	if (stationId && *stationId) {
-		json_object_object_add(data, "stationId", json_object_new_string(stationId));
+		json_object_object_add(data, "stationId", BarJsonStringOrEmpty(stationId));
 	}
 	
 	BarSocketIoEmit("error", data);
@@ -724,7 +812,7 @@ void BarSocketIoEmitPandoraDisconnected(const char *reason) {
 		reason = "unknown";
 	}
 	data = json_object_new_object();
-	json_object_object_add(data, "reason", json_object_new_string(reason));
+	json_object_object_add(data, "reason", BarJsonStringOrEmpty(reason));
 	BarSocketIoEmit("pandora.disconnected", data);
 	json_object_put(data);
 }
@@ -772,8 +860,7 @@ void BarSocketIoEmitPlayState(BarApp_t *app) {
 	json_object *data = json_object_new_object();
 	
 	pthread_mutex_lock(&app->player.lock);
-	json_object_object_add(data, "paused", 
-	                       json_object_new_boolean(app->player.doPause));
+	json_object_object_add(data, "paused", json_object_new_boolean(app->player.doPause));
 	pthread_mutex_unlock(&app->player.lock);
 	
 	BarSocketIoEmit("playState", data);
@@ -827,8 +914,7 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 	while (category != NULL) {
 		categoryObj = json_object_new_object();
 		
-		json_object_object_add(categoryObj, "name",
-		                       json_object_new_string(category->name ? category->name : ""));
+		json_object_object_add(categoryObj, "name", BarJsonStringOrEmpty(category->name));
 		
 		/* Create genres array for this category */
 		genresArray = json_object_new_array();
@@ -837,10 +923,8 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 		while (genre != NULL) {
 			genreObj = json_object_new_object();
 			
-			json_object_object_add(genreObj, "name",
-			                       json_object_new_string(genre->name ? genre->name : ""));
-			json_object_object_add(genreObj, "musicId",
-			                       json_object_new_string(genre->musicId ? genre->musicId : ""));
+			json_object_object_add(genreObj, "name",    BarJsonStringOrEmpty(genre->name));
+			json_object_object_add(genreObj, "musicId", BarJsonStringOrEmpty(genre->musicId));
 			
 			json_object_array_add(genresArray, genreObj);
 			
@@ -1147,10 +1231,10 @@ void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_
 	mode = reqData->retModes;
 	PianoListForeachP(mode) {
 		modeObj = json_object_new_object();
-		json_object_object_add(modeObj, "id", json_object_new_int(i));
-		json_object_object_add(modeObj, "name", json_object_new_string(mode->name ? mode->name : ""));
-		json_object_object_add(modeObj, "description", json_object_new_string(mode->description ? mode->description : ""));
-		json_object_object_add(modeObj, "active", json_object_new_boolean(mode->active));
+		json_object_object_add(modeObj, "id",          json_object_new_int(i));
+		json_object_object_add(modeObj, "name",        BarJsonStringOrEmpty (mode->name));
+		json_object_object_add(modeObj, "description", BarJsonStringOrEmpty (mode->description));
+		json_object_object_add(modeObj, "active",      json_object_new_boolean(mode->active));
 		json_object_array_add(modesArray, modeObj);
 		i++;
 	}
@@ -1263,8 +1347,8 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	artist = reqData->info.artistSeeds;
 	PianoListForeachP(artist) {
 		itemObj = json_object_new_object();
-		json_object_object_add(itemObj, "seedId", json_object_new_string(artist->seedId ? artist->seedId : ""));
-		json_object_object_add(itemObj, "name", json_object_new_string(artist->name ? artist->name : ""));
+		json_object_object_add(itemObj, "seedId", BarJsonStringOrEmpty (artist->seedId));
+		json_object_object_add(itemObj, "name",   BarJsonStringOrEmpty (artist->name));
 		json_object_array_add(artistsArray, itemObj);
 	}
 	json_object_object_add(data, "artistSeeds", artistsArray);
@@ -1274,9 +1358,9 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	song = reqData->info.songSeeds;
 	PianoListForeachP(song) {
 		itemObj = json_object_new_object();
-		json_object_object_add(itemObj, "seedId", json_object_new_string(song->seedId ? song->seedId : ""));
-		json_object_object_add(itemObj, "title", json_object_new_string(song->title ? song->title : ""));
-		json_object_object_add(itemObj, "artist", json_object_new_string(song->artist ? song->artist : ""));
+		json_object_object_add(itemObj, "seedId", BarJsonStringOrEmpty (song->seedId));
+		json_object_object_add(itemObj, "title",  BarJsonStringOrEmpty (song->title));
+		json_object_object_add(itemObj, "artist", BarJsonStringOrEmpty (song->artist));
 		json_object_array_add(songsArray, itemObj);
 	}
 	json_object_object_add(data, "songSeeds", songsArray);
@@ -1286,8 +1370,8 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	station = reqData->info.stationSeeds;
 	PianoListForeachP(station) {
 		itemObj = json_object_new_object();
-		json_object_object_add(itemObj, "seedId", json_object_new_string(station->seedId ? station->seedId : ""));
-		json_object_object_add(itemObj, "name", json_object_new_string(station->name ? station->name : ""));
+		json_object_object_add(itemObj, "seedId", BarJsonStringOrEmpty (station->seedId));
+		json_object_object_add(itemObj, "name",   BarJsonStringOrEmpty (station->name));
 		json_object_array_add(stationsArray, itemObj);
 	}
 	json_object_object_add(data, "stationSeeds", stationsArray);
@@ -1297,10 +1381,10 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	song = reqData->info.feedback;
 	PianoListForeachP(song) {
 		itemObj = json_object_new_object();
-		json_object_object_add(itemObj, "feedbackId", json_object_new_string(song->feedbackId ? song->feedbackId : ""));
-		json_object_object_add(itemObj, "title", json_object_new_string(song->title ? song->title : ""));
-		json_object_object_add(itemObj, "artist", json_object_new_string(song->artist ? song->artist : ""));
-		json_object_object_add(itemObj, "rating", json_object_new_int(song->rating));
+		json_object_object_add(itemObj, "feedbackId", BarJsonStringOrEmpty (song->feedbackId));
+		json_object_object_add(itemObj, "title",      BarJsonStringOrEmpty (song->title));
+		json_object_object_add(itemObj, "artist",     BarJsonStringOrEmpty (song->artist));
+		json_object_object_add(itemObj, "rating",     json_object_new_int(song->rating));
 		json_object_array_add(feedbackArray, itemObj);
 	}
 	json_object_object_add(data, "feedback", feedbackArray);
@@ -1474,7 +1558,7 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 	/* Create Artists category */
 	if (searchResult->artists != NULL) {
 		categoryObj = json_object_new_object();
-		json_object_object_add(categoryObj, "name", json_object_new_string("Artists"));
+		json_object_object_add(categoryObj, "name", BarJsonStringOrEmpty("Artists"));
 		
 		resultsArray = json_object_new_array();
 		artist = searchResult->artists;
@@ -1482,10 +1566,8 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 		while (artist != NULL) {
 			resultObj = json_object_new_object();
 			
-			json_object_object_add(resultObj, "name",
-			                       json_object_new_string(artist->name ? artist->name : ""));
-			json_object_object_add(resultObj, "musicId",
-			                       json_object_new_string(artist->musicId ? artist->musicId : ""));
+			json_object_object_add(resultObj, "name",    BarJsonStringOrEmpty(artist->name));
+			json_object_object_add(resultObj, "musicId", BarJsonStringOrEmpty(artist->musicId));
 			
 			json_object_array_add(resultsArray, resultObj);
 			
@@ -1499,7 +1581,7 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 	/* Create Songs category */
 	if (searchResult->songs != NULL) {
 		categoryObj = json_object_new_object();
-		json_object_object_add(categoryObj, "name", json_object_new_string("Songs"));
+		json_object_object_add(categoryObj, "name", BarJsonStringOrEmpty("Songs"));
 		
 		resultsArray = json_object_new_array();
 		song = searchResult->songs;
@@ -1507,12 +1589,9 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 		while (song != NULL) {
 			resultObj = json_object_new_object();
 			
-			json_object_object_add(resultObj, "title",
-			                       json_object_new_string(song->title ? song->title : ""));
-			json_object_object_add(resultObj, "artist",
-			                       json_object_new_string(song->artist ? song->artist : ""));
-			json_object_object_add(resultObj, "musicId",
-			                       json_object_new_string(song->musicId ? song->musicId : ""));
+			json_object_object_add(resultObj, "title",   BarJsonStringOrEmpty(song->title));
+			json_object_object_add(resultObj, "artist",  BarJsonStringOrEmpty(song->artist));
+			json_object_object_add(resultObj, "musicId", BarJsonStringOrEmpty(song->musicId));
 			
 			json_object_array_add(resultsArray, resultObj);
 			
@@ -1631,14 +1710,22 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		}
 	}
 
-	/* Translate descriptive command to action ID */
-	actionId = BarSocketIoTranslateAction(action);
-	
-	if (actionId == (BarKeyShortcutId_t)-1) {
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: Unknown or unsupported action: %s\n", action);
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: Use descriptive commands (e.g., playback.next, song.love)\n");
+	/* Look up action — check capability before dispatch */
+	const BarActionMapping_t *mapping = BarSocketIoLookupAction (action);
+
+	if (mapping == NULL) {
+		log_write (DEBUG_WEBSOCKET, "Socket.IO: Unknown or unsupported action: %s\n", action);
+		log_write (DEBUG_WEBSOCKET, "Socket.IO: Use descriptive commands (e.g., playback.next, song.love)\n");
 		return;
 	}
+
+	if (mapping->capability == BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED) {
+		log_write (DEBUG_WEBSOCKET, "Socket.IO: Action '%s' is not implemented\n", action);
+		BarSocketIoEmitNotImplemented (app, action, mapping->reasonKey);
+		return;
+	}
+
+	actionId = mapping->actionId;
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → ID %d (executing directly)\n", 
 	           action, actionId);

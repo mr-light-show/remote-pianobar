@@ -41,6 +41,7 @@ THE SOFTWARE.
 #include <sys/wait.h>
 
 #include "ui.h"
+#include "interrupt.h"
 #include "log.h"
 #include "ui_readline.h"
 #include "bar_state.h"
@@ -102,10 +103,8 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	assert (format != NULL);
 
 #ifdef HAVE_DEBUGLOG
-#ifdef WEBSOCKET_ENABLED
 	if (log_is_debug_cli_enabled () &&
-	    (settings->uiMode == BAR_UI_MODE_WEB ||
-	     settings->uiMode == BAR_UI_MODE_BOTH) &&
+	    BarWsSettingsIsWebActive (settings) &&
 	    type != MSG_TIME) {
 		va_start (fmtargs, format);
 		char body[BAR_BUF_LARGE];
@@ -127,7 +126,6 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 		va_end (fmtargs);
 		return;
 	}
-#endif
 #endif
 
 	switch (type) {
@@ -243,11 +241,12 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 		req->secure ? settings->rpcTlsPort : "80",
 		req->urlPath);
 	assert (ret >= 0 && ret <= (int) sizeof (url));
-	log_write(DEBUG_NETWORK, "← %s\n", url);
+	log_network_request(url);
 
-	/* save the previous interrupt destination */
-	prevint = interrupted;
-	interrupted = &lint;
+	/* redirect interrupts to local lint during HTTP so a SIGINT doesn't
+	 * stomp on doQuit or player.interrupted mid-request */
+	prevint = BarInterruptGetTarget ();
+	BarInterruptSetTarget (&lint);
 
 	curl_easy_reset (http);
 	CURLcode httpret;
@@ -316,9 +315,9 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	curl_slist_free_all (list);
 
 	req->responseData = buffer.data;
-	log_write(DEBUG_NETWORK, "→ %s\n", req->responseData);
+	log_network_response(req->responseData != NULL ? req->responseData : "(null)");
 
-	interrupted = prevint;
+	BarInterruptSetTarget (prevint);
 
 	return httpret;
 }
@@ -340,12 +339,26 @@ void BarUiPianoHttpMutexDestroy (BarApp_t *app) {
 	pthread_mutex_destroy (&app->pianoHttpMutex);
 }
 
+static BarUiPianoCallTestHook_fn g_barUiPianoCallTestHook = NULL;
+
+void BarUiPianoCallSetTestHook (BarUiPianoCallTestHook_fn hook) {
+	g_barUiPianoCallTestHook = hook;
+}
+
+void BarUiPianoCallClearTestHook (void) {
+	g_barUiPianoCallTestHook = NULL;
+}
+
 /*	piano wrapper: prepare/execute http request and pass result back to
  *	libpiano. Holds pianoHttpMutex for the whole call (including nested
  *	re-login) so only one thread uses app->http / overlapping Piano state.
  */
 bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	if (g_barUiPianoCallTestHook != NULL) {
+		return g_barUiPianoCallTestHook (app, type, data, pRet, wRet);
+	}
+
 	PianoReturn_t pRetLocal = PIANO_RET_OK;
 	CURLcode wRetLocal = CURLE_OK;
 	bool ret = false;
@@ -502,6 +515,10 @@ PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
 
 	stationCount = PianoListCountP (unsortedStations);
 	stationArray = calloc (stationCount, sizeof (*stationArray));
+	if (stationArray == NULL) {
+		*retStationCount = 0;
+		return NULL;
+	}
 
 	/* copy station pointers */
 	i = 0;
@@ -1105,23 +1122,7 @@ void BarPrintStartupInfo(BarApp_t *app, pid_t pid, bool is_daemon, FILE *stream)
 	/* Always print welcome message */
 	fprintf(stream, "Welcome to %s (%s)!\n", PACKAGE, VERSION);
 	
-#ifdef WEBSOCKET_ENABLED
-	/* Only print web-related info in web or both mode */
-	if (app->settings.uiMode == BAR_UI_MODE_WEB || app->settings.uiMode == BAR_UI_MODE_BOTH) {
-		if (app->settings.webuiPath) {
-			fprintf(stream, "Web UI files: %s\n", app->settings.webuiPath);
-		} else {
-			fprintf(stream, "Web UI files: (using built-in)\n");
-		}
-		
-		fprintf(stream, "Web interface: http://%s:%d/\n",
-		       app->settings.websocketHost ? app->settings.websocketHost : "127.0.0.1",
-		       app->settings.websocketPort);
-	}
-#endif
-	
-	/* Print PID file if daemon and pidFile configured */
-	if (is_daemon && app->settings.pidFile) {
-		fprintf(stream, "PID file: %s\n", app->settings.pidFile);
-	}
+	BarWsPrintWebInfo(app, stream);
+
+	BarWsPrintPidFileInfo(app, is_daemon, stream);
 }
