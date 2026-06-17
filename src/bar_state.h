@@ -171,6 +171,9 @@ void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap);
 void BarStateInit(BarApp_t *app);
 void BarStateDestroy(BarApp_t *app);
 
+/* Wake playback manager after queue/station mutations (web/both only). */
+void BarStateSignalPlaybackManager(BarApp_t *app);
+
 /* Station access (thread-safe) */
 PianoStation_t *BarStateGetNextStation(const BarApp_t *app);
 void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station);

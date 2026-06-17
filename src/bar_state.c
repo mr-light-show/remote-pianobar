@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include <assert.h>
 #include <string.h>
 #include <stdarg.h>
+#include <pthread.h>
 
 /*	State rwlock: read for getters, write for setters.
  *	Held unconditionally in all modes that involve concurrent WebSocket threads
@@ -49,6 +50,20 @@ static bool state_needs_lock (const BarApp_t *app) {
 	(void) app;
 	return false;
 	#endif
+}
+
+void BarStateSignalPlaybackManager(BarApp_t *app)
+{
+#ifdef WEBSOCKET_ENABLED
+	if (app == NULL || !state_needs_lock(app)) {
+		return;
+	}
+	pthread_mutex_lock(&app->player.lock);
+	pthread_cond_broadcast(&app->player.cond);
+	pthread_mutex_unlock(&app->player.lock);
+#else
+	(void)app;
+#endif
 }
 
 static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operation) {
@@ -169,6 +184,7 @@ void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station) {
 	WITH_STATE_LOCK(app, "SetNextStation", "State: SetNextStation <- %s\n", station ? station->name : "null") {
 		app->nextStation = station;
 	}
+	BarStateSignalPlaybackManager(app);
 }
 
 /*	Get current station (thread-safe)
@@ -245,6 +261,7 @@ void BarStateSetPlaylist(BarApp_t *app, PianoSong_t *playlist) {
 	WITH_STATE_LOCK(app, "SetPlaylist", "State: SetPlaylist <- %s\n", playlist ? playlist->title : "null") {
 		app->playlist = playlist;
 	}
+	BarStateSignalPlaybackManager(app);
 }
 
 /*	Drain playlist (destroy and clear) (thread-safe)
@@ -258,6 +275,7 @@ void BarStateDrainPlaylist(BarApp_t *app) {
 			app->playlist = NULL;
 		}
 	}
+	BarStateSignalPlaybackManager(app);
 }
 
 /*	Switch station (drain playlist and set next station) (thread-safe)
@@ -274,6 +292,7 @@ void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 		/* Set new station */
 		app->nextStation = station;
 	}
+	BarStateSignalPlaybackManager(app);
 }
 
 /*	Get player mode (thread-safe)
