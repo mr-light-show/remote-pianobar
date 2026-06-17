@@ -260,6 +260,8 @@ BarStateSwitchStation(app, newStation);
 
 Without this atomicity, the player thread could see an inconsistent state (e.g., playlist from old station but `nextStation` pointing to new station).
 
+After `BarStateSetNextStation`, `BarStateSetPlaylist`, `BarStateDrainPlaylist`, or `BarStateSwitchStation` returns, `BarStateSignalPlaybackManager()` broadcasts `app->player.cond` so the playback manager wakes immediately (see [Playback manager wake](#playback-manager-wake)).
+
 ### Pattern 6: Broadcasting State to WebSocket Clients
 
 **Always call broadcast functions AFTER releasing locks**:
@@ -276,6 +278,20 @@ BarWsBroadcastPlayState(app);
 ```
 
 **Why:** Broadcast functions may acquire locks internally. Calling them while holding a lock risks nested locking and contention.
+
+### Playback manager wake
+
+The playback manager thread ([`playback_manager.c`](playback_manager.c)) waits on `app->player.cond` for work. When there is nothing to do — `PLAYER_DEAD` with no playlist and no `nextStation` — it **parks** on `pthread_cond_wait` (no 1 Hz `pthread_cond_timedwait` poll). A one-shot `PlaybackMgr: Parked (waiting for station)` log line is emitted when entering this state.
+
+**Wake sources while parked:**
+
+- `BarStateSignalPlaybackManager()` — called at the end of `BarStateSetNextStation`, `BarStateSetPlaylist`, `BarStateDrainPlaylist`, and `BarStateSwitchStation` (web/both only)
+- `BarPlayerSetMode()` — mode transitions already broadcast `player.cond`
+- Play/pause/skip UI actions, quit (`BarUiActQuit`), and `BarPlaybackManagerStop()` — existing `pthread_cond_broadcast` paths
+
+**Lock rule for `BarStateSignalPlaybackManager`:** The signal runs **after** the `WITH_STATE_LOCK` scope releases `stateRwlock`. Inside the signal function, only `player.lock` is acquired — never nest `stateRwlock` → `player.lock` from state setters.
+
+When not parked (active playback, idle queue work, pause timeout, or progress broadcast), the manager keeps the 1-second `pthread_cond_timedwait` interval (`PROGRESS_BROADCAST_INTERVAL_SECS`).
 
 ---
 
@@ -665,6 +681,7 @@ static void doNetworkCall(BarApp_t *app) {
 | Switch station | `BarStateSwitchStation()` | `stateRwlock` (write) |
 | Get playlist | `BarStateGetPlaylist()` | `stateRwlock` (read) |
 | Drain playlist | `BarStateDrainPlaylist()` | `stateRwlock` (write) |
+| Signal playback manager | `BarStateSignalPlaybackManager()` | `player.lock` (after `stateRwlock` released) |
 | Get player paused | `BarStateGetPlayerPaused()` | `player.lock` |
 | Get player time | `BarStateGetPlayerTime()` | `player.lock` |
 | Make Pandora API call | `BarUiPianoCall()` | `pianoHttpMutex` (recursive, whole call) |
