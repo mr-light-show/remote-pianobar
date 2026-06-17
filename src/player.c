@@ -717,12 +717,19 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 	av_dict_set(&options, "timeout", timeoutStr, 0);
 
 	assert(player->url != NULL);
+	log_network_request(player->url);
 	if ((ret = avformat_open_input(&player->fctx, player->url, NULL, &options)) < 0) {
 		av_dict_free(&options);
 		options = NULL;
 		if (staleCdn403 != NULL) {
 			*staleCdn403 = BarIsAvErrStaleCdnUrl(ret);
 		}
+		char avmsg[AV_ERROR_MAX_STRING_SIZE];
+		av_strerror(ret, avmsg, sizeof avmsg);
+		char errSummary[160];
+		snprintf(errSummary, sizeof errSummary, "error: %s",
+			avmsg[0] != '\0' ? avmsg : "unknown");
+		log_network_response(errSummary);
 		printError(player->settings, "Unable to open audio file", ret);
 		/* avformat_open_input frees fctx on failure (or it wasn't opened); clear the pointer */
 		if (player->fctx != NULL) {
@@ -733,6 +740,7 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 	}
 	av_dict_free(&options);
 	options = NULL;
+	log_network_response("ok");
 
 	if ((ret = avformat_find_stream_info(player->fctx, NULL)) < 0) {
 		printError(player->settings, "find_stream_info", ret);
