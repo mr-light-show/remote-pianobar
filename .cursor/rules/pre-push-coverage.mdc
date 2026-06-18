@@ -1,0 +1,38 @@
+---
+description: Patch coverage ≥90% on changed src before push; matches Codecov gate
+alwaysApply: true
+---
+
+# Pre-push: patch coverage ≥90%
+
+Codecov enforces **≥90% patch coverage** on PRs for `src/**/*.c` and `webui/src/**` ([codecov.yml](../codecov.yml)). Agents must meet this **before `git push`**, not only after CI fails.
+
+## Mandatory before push (when you changed production code)
+
+1. Run tests with coverage (CI parity):
+
+```bash
+PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
+```
+
+If `lcov` is unavailable: `make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all`, then rely on Codecov on the PR — but **still add tests** for new/changed lines.
+
+2. Confirm **≥90% patch coverage** on files you touched (Codecov PR comment, or scoped report). See skill `.cursor/skills/pre-push-coverage/SKILL.md`.
+
+3. If below 90%: add unit/integration tests for uncovered lines/branches, or document in the PR why lines are not reasonably testable.
+
+## Scope
+
+- **C:** `src/**/*.c`, `src/libpiano/**`, `src/websocket/**` (not `.h`-only edits alone)
+- **Web UI:** `webui/src/**` — `cd webui && npm test -- --run --coverage`
+- **Excluded:** generated locale, `l10n_defaults_gen.c`, vendored `miniaudio_impl.c`, `test/**`, config/workflow-only edits
+
+## With tests-only changes
+
+When **`test/**`** changed, also run CI-parity tests (`.cursor/skills/pre-push-ci-parity/SKILL.md`). Coverage on **new test code** is not gated; gate applies to **production code you modified**.
+
+## Push workflow order
+
+`make test-all` (or CI-parity clean build) → **patch coverage check** → `git push`.
+
+Do not push production changes that knowingly leave patch coverage below 90% unless the user explicitly accepts the tradeoff.
