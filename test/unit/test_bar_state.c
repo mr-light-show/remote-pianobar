@@ -428,6 +428,34 @@ START_TEST(test_bar_state_lock_taken_in_web_mode) {
 }
 END_TEST
 
+#ifdef WEBSOCKET_ENABLED
+START_TEST(test_signal_playback_manager_no_deadlock) {
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	BarStateSignalPlaybackManager(&app);
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+START_TEST(test_signal_playback_manager_noop_null_and_cli) {
+	BarStateSignalPlaybackManager(NULL);
+
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	BarStateSignalPlaybackManager(&app);
+	BarStateDestroy(&app);
+}
+END_TEST
+#endif
+
 /* --- Snapshot tests --- */
 
 START_TEST(test_bar_state_snapshot_stations_copies_fields)
@@ -646,6 +674,10 @@ Suite *bar_state_suite(void) {
 
 	TCase *tc_web = tcase_create("WEB mode locking");
 	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
+#ifdef WEBSOCKET_ENABLED
+	tcase_add_test(tc_web, test_signal_playback_manager_no_deadlock);
+	tcase_add_test(tc_web, test_signal_playback_manager_noop_null_and_cli);
+#endif
 	suite_add_tcase(s, tc_web);
 
 	TCase *tc_snap = tcase_create("Snapshot");

@@ -65,3 +65,9 @@ Allow ≥ **180000 ms**. The pre-push hook runs this automatically when commits 
 ## What `make test-all` does
 
 Unit tests plus cppcheck static analysis across configured variants.
+
+---
+
+## Patch coverage before push
+
+When you change **`src/**` or `webui/src/**`**, run **`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage`** (or web UI coverage) and confirm **≥90% patch coverage** on the diff before push. Details: `.cursor/skills/pre-push-coverage/SKILL.md` and `.cursor/rules/pre-push-coverage.mdc`.

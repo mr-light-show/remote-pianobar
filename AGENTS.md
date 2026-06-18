@@ -21,6 +21,7 @@ Player protocol strings and shared concepts start here (`locale/en.yaml`), then 
 4. **User-facing text:** edit `locale/en.yaml`, then `make locale-codegen`. Do not hand-edit generated locale artifacts.
 5. **Before `git push`:** run `make test-all` from the repo root (allow ≥120s). Do not push if it fails.
    - If **`Makefile`**, **`test/**`**, or **`.github/workflows/test.yml`** changed: run **`make test-ci-local`** (Docker) or **`make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all`**. See `.cursor/skills/pre-push-ci-parity/SKILL.md`.
+   - If **`src/**`**, **`src/libpiano/**`**, **`src/websocket/**`**, or **`webui/src/**`** changed: run **`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage`** (or web UI coverage) and confirm **≥90% patch coverage** on your diff before push. See `.cursor/skills/pre-push-coverage/SKILL.md` and [codecov.yml](codecov.yml).
 6. **Commits and pushes** only when the user explicitly asks.
 
 ---
@@ -50,6 +51,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Build player | `make` |
 | C unit tests | `make test` |
 | **Pre-push gate** (tests + cppcheck) | `make test-all` |
+| **Pre-push patch coverage** (after `src/**` or `webui/src/**` changes) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` — target ≥90% on diff ([codecov.yml](codecov.yml)); see `.cursor/skills/pre-push-coverage/SKILL.md` |
 | **Pre-push CI parity** (after `Makefile` / `test/**` changes) | `make test-ci-local` or `make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` |
 | C coverage (CI-style) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` (requires `lcov`) |
 | Docker CI repro | `make test-ci-local` |
