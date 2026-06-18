@@ -442,6 +442,18 @@ START_TEST(test_signal_playback_manager_no_deadlock) {
 	BarStateDestroy(&app);
 }
 END_TEST
+
+START_TEST(test_signal_playback_manager_noop_null_and_cli) {
+	BarStateSignalPlaybackManager(NULL);
+
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	BarStateSignalPlaybackManager(&app);
+	BarStateDestroy(&app);
+}
+END_TEST
 #endif
 
 /* --- Snapshot tests --- */
@@ -664,6 +676,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
 #ifdef WEBSOCKET_ENABLED
 	tcase_add_test(tc_web, test_signal_playback_manager_no_deadlock);
+	tcase_add_test(tc_web, test_signal_playback_manager_noop_null_and_cli);
 #endif
 	suite_add_tcase(s, tc_web);
 
