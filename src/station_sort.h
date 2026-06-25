@@ -37,3 +37,7 @@ PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
 /* Sort snapshot items in place using the same rules as BarSortedStations. */
 void BarSortStationSnapshots (BarStationSnapshot_t *items, size_t count,
 		BarStationSorting_t order);
+
+typedef void *(*BarStationSortCallocTestHook_fn) (size_t nmemb, size_t size);
+void BarStationSortSetCallocTestHook (BarStationSortCallocTestHook_fn hook);
+void BarStationSortClearCallocTestHook (void);

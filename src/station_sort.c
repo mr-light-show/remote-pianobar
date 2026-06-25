@@ -35,18 +35,37 @@ typedef struct {
 /* Set for the duration of qsort; not re-entrant (matches prior ui.c usage). */
 static BarStationSorting_t g_sortOrder;
 
+static void *(*g_barStationSortCallocHook) (size_t nmemb, size_t size) = NULL;
+
+void BarStationSortSetCallocTestHook (void *(*hook) (size_t nmemb, size_t size)) {
+	g_barStationSortCallocHook = hook;
+}
+
+void BarStationSortClearCallocTestHook (void) {
+	g_barStationSortCallocHook = NULL;
+}
+
+static void *BarStationSortCalloc (size_t nmemb, size_t size) {
+	if (g_barStationSortCallocHook != NULL) {
+		return g_barStationSortCallocHook (nmemb, size);
+	}
+	return calloc (nmemb, size);
+}
+
 static inline BarStationSortKey_t BarStationSortKeyFromPiano (const PianoStation_t *st) {
+	assert (st != NULL);
 	return (BarStationSortKey_t) {
-		.isQuickMix = st != NULL && st->isQuickMix,
-		.name = (st != NULL && st->name != NULL) ? st->name : "",
+		.isQuickMix = st->isQuickMix,
+		.name = st->name != NULL ? st->name : "",
 	};
 }
 
 static inline BarStationSortKey_t BarStationSortKeyFromSnapshot (
 		const BarStationSnapshot_t *st) {
+	assert (st != NULL);
 	return (BarStationSortKey_t) {
-		.isQuickMix = st != NULL && st->isQuickMix,
-		.name = (st != NULL && st->name != NULL) ? st->name : "",
+		.isQuickMix = st->isQuickMix,
+		.name = st->name != NULL ? st->name : "",
 	};
 }
 
@@ -120,7 +139,7 @@ PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
 	assert (order < BAR_SORT_COUNT);
 
 	stationCount = PianoListCountP (unsortedStations);
-	stationArray = calloc (stationCount, sizeof (*stationArray));
+	stationArray = BarStationSortCalloc (stationCount, sizeof (*stationArray));
 	if (stationArray == NULL) {
 		*retStationCount = 0;
 		return NULL;
