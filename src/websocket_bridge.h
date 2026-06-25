@@ -76,8 +76,8 @@ void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
 void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason);
 
 /* UI info printing */
-void BarWsPrintWebInfo(BarApp_t *app, FILE *stream);
-void BarWsPrintPidFileInfo(BarApp_t *app, bool is_daemon, FILE *stream);
+void BarWsPrintWebInfo(const BarApp_t *app, FILE *stream);
+void BarWsPrintPidFileInfo(const BarApp_t *app, bool is_daemon, FILE *stream);
 
 /* True when uiMode is WEB or BOTH (uses BarSettings_t; useful without full app) */
 bool BarWsSettingsIsWebActive(const BarSettings_t *s);

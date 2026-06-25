@@ -47,8 +47,6 @@ THE SOFTWARE.
 #include "bar_state.h"
 #include "websocket_bridge.h"
 
-typedef int (*BarSortFunc_t) (const void *, const void *);
-
 /*	is string a number?
  */
 static bool isnumeric (const char *s) {
@@ -439,99 +437,6 @@ bool BarUiPianoCallLogged (BarApp_t * const app, const PianoRequestType_t type,
 		PianoReturn_t * const pRet, CURLcode * const wRet) {
 	BarUiMsg (&app->settings, MSG_INFO, "%s... ", actionName);
 	return BarUiPianoCall (app, type, data, pRet, wRet);
-}
-
-/*	Station sorting functions */
-
-static inline int BarStationQuickmix01Cmp (const void *a, const void *b) {
-	const PianoStation_t *stationA = *((PianoStation_t * const *) a),
-			*stationB = *((PianoStation_t * const *) b);
-	return stationA->isQuickMix - stationB->isQuickMix;
-}
-
-/*	sort by station name from a to z, case insensitive
- */
-static inline int BarStationNameAZCmp (const void *a, const void *b) {
-	const PianoStation_t *stationA = *((PianoStation_t * const *) a),
-			*stationB = *((PianoStation_t * const *) b);
-	return strcasecmp (stationA->name, stationB->name);
-}
-
-/*	sort by station name from z to a, case insensitive
- */
-static int BarStationNameZACmp (const void *a, const void *b) {
-	return BarStationNameAZCmp (b, a);
-}
-
-/*	helper for quickmix/name sorting
- */
-static inline int BarStationQuickmixNameCmp (const void *a, const void *b,
-		const void *c, const void *d) {
-	int qmc = BarStationQuickmix01Cmp (a, b);
-	return qmc == 0 ? BarStationNameAZCmp (c, d) : qmc;
-}
-
-/*	sort by quickmix (no to yes) and name (a to z)
- */
-static int BarStationCmpQuickmix01NameAZ (const void *a, const void *b) {
-	return BarStationQuickmixNameCmp (a, b, a, b);
-}
-
-/*	sort by quickmix (no to yes) and name (z to a)
- */
-static int BarStationCmpQuickmix01NameZA (const void *a, const void *b) {
-	return BarStationQuickmixNameCmp (a, b, b, a);
-}
-
-/*	sort by quickmix (yes to no) and name (a to z)
- */
-static int BarStationCmpQuickmix10NameAZ (const void *a, const void *b) {
-	return BarStationQuickmixNameCmp (b, a, a, b);
-}
-
-/*	sort by quickmix (yes to no) and name (z to a)
- */
-static int BarStationCmpQuickmix10NameZA (const void *a, const void *b) {
-	return BarStationQuickmixNameCmp (b, a, b, a);
-}
-
-/*	sort linked list (station)
- *	@param stations
- *	@return NULL-terminated array with sorted stations
- */
-PianoStation_t **BarSortedStations (PianoStation_t *unsortedStations,
-		size_t *retStationCount, BarStationSorting_t order) {
-	static const BarSortFunc_t orderMapping[] = {BarStationNameAZCmp,
-			BarStationNameZACmp,
-			BarStationCmpQuickmix01NameAZ,
-			BarStationCmpQuickmix01NameZA,
-			BarStationCmpQuickmix10NameAZ,
-			BarStationCmpQuickmix10NameZA,
-			};
-	PianoStation_t **stationArray = NULL, *currStation = NULL;
-	size_t stationCount = 0, i;
-
-	assert (order < sizeof (orderMapping)/sizeof(*orderMapping));
-
-	stationCount = PianoListCountP (unsortedStations);
-	stationArray = calloc (stationCount, sizeof (*stationArray));
-	if (stationArray == NULL) {
-		*retStationCount = 0;
-		return NULL;
-	}
-
-	/* copy station pointers */
-	i = 0;
-	currStation = unsortedStations;
-	PianoListForeachP (currStation) {
-		stationArray[i] = currStation;
-		++i;
-	}
-
-	qsort (stationArray, stationCount, sizeof (*stationArray), orderMapping[order]);
-
-	*retStationCount = stationCount;
-	return stationArray;
 }
 
 /*	let user pick one station
@@ -1113,7 +1018,7 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 
 
 /* Print startup info (welcome, web UI files, interface URL, PID file) */
-void BarPrintStartupInfo(BarApp_t *app, pid_t pid, bool is_daemon, FILE *stream) {
+void BarPrintStartupInfo(const BarApp_t *app, pid_t pid, bool is_daemon, FILE *stream) {
 	/* Print daemon/process start message if daemon mode */
 	if (is_daemon) {
 		fprintf(stream, "Pianobar daemon started (PID: %d)\n", (int)pid);

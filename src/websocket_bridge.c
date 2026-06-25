@@ -266,7 +266,7 @@ void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
 }
 
 /* Web info printing (web or both mode) */
-void BarWsPrintWebInfo(BarApp_t *app, FILE *stream) {
+void BarWsPrintWebInfo(const BarApp_t *app, FILE *stream) {
 	if (!BarWsIsWebActive(app)) { return; }
 	if (app->settings.webuiPath) {
 		fprintf(stream, "Web UI files: %s\n", app->settings.webuiPath);
@@ -279,7 +279,7 @@ void BarWsPrintWebInfo(BarApp_t *app, FILE *stream) {
 }
 
 /* Print PID file info if daemon and configured */
-void BarWsPrintPidFileInfo(BarApp_t *app, bool is_daemon, FILE *stream) {
+void BarWsPrintPidFileInfo(const BarApp_t *app, bool is_daemon, FILE *stream) {
 	if (is_daemon && app && app->settings.pidFile) {
 		fprintf(stream, "PID file: %s\n", app->settings.pidFile);
 	}
