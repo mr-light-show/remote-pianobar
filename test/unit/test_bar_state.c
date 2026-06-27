@@ -359,6 +359,22 @@ START_TEST(test_bar_state_advance_playlist) {
 }
 END_TEST
 
+START_TEST(test_bar_state_advance_playlist_both) {
+	BarApp_t app;
+	PianoSong_t song;
+	memset(&song, 0, sizeof(song));
+	song.title = (char *)"both-mode";
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateSetPlaylist(&app, &song);
+	PianoSong_t *finished = BarStateAdvancePlaylist(&app);
+	ck_assert_ptr_eq(finished, &song);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
 typedef struct {
 	BarApp_t *app;
 	int iterations;
@@ -740,6 +756,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_playlist, test_bar_state_playlist_get_set_web);
 	tcase_add_test(tc_playlist, test_bar_state_drain_playlist);
 	tcase_add_test(tc_playlist, test_bar_state_advance_playlist);
+	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_both);
 	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_race_with_drain);
 	tcase_add_test(tc_playlist, test_bar_state_switch_station);
 	suite_add_tcase(s, tc_playlist);
