@@ -185,6 +185,8 @@ PianoStation_t *BarStateGetStationList(const BarApp_t *app);
 /* Playlist access (thread-safe) */
 PianoSong_t *BarStateGetPlaylist(const BarApp_t *app);
 void BarStateSetPlaylist(BarApp_t *app, PianoSong_t *playlist);
+/* Pop head song for history; NULL if playlist empty or already drained. */
+PianoSong_t *BarStateAdvancePlaylist(BarApp_t *app);
 void BarStateDrainPlaylist(BarApp_t *app);
 void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station);
 

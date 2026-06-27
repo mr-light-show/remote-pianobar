@@ -264,6 +264,24 @@ void BarStateSetPlaylist(BarApp_t *app, PianoSong_t *playlist) {
 	BarStateSignalPlaybackManager(app);
 }
 
+/*	Advance playlist (pop head for history) (thread-safe)
+ *	Returns the finished song detached from the list, or NULL if empty.
+ */
+PianoSong_t *BarStateAdvancePlaylist(BarApp_t *app) {
+	assert(app != NULL);
+
+	PianoSong_t *finished = NULL;
+	WITH_STATE_LOCK(app, "AdvancePlaylist", NULL) {
+		if (app->playlist != NULL) {
+			finished = app->playlist;
+			app->playlist = PianoListNextP(app->playlist);
+			finished->head.next = NULL;
+		}
+	}
+	BarStateSignalPlaybackManager(app);
+	return finished;
+}
+
 /*	Drain playlist (destroy and clear) (thread-safe)
  */
 void BarStateDrainPlaylist(BarApp_t *app) {
