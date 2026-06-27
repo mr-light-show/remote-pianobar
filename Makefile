@@ -56,6 +56,7 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/l10n.c \
 		${PIANOBAR_DIR}/l10n_defaults_gen.c \
 		${PIANOBAR_DIR}/station_display.c \
+		${PIANOBAR_DIR}/station_sort.c \
 		${PIANOBAR_DIR}/terminal.c \
 		${PIANOBAR_DIR}/ui_act.c \
 		${PIANOBAR_DIR}/ui.c \
@@ -299,6 +300,7 @@ BASE_TEST_SRC:=\
 		${TEST_DIR}/unit/test_system_volume.c \
 		${TEST_DIR}/unit/test_ui_readline.c \
 		${TEST_DIR}/unit/test_ui.c \
+		${TEST_DIR}/unit/test_station_sort.c \
 		${TEST_DIR}/unit/test_interrupt.c \
 		${TEST_DIR}/unit/test_libpiano_response.c
 
@@ -323,7 +325,7 @@ endif
 TEST_OBJ:=${TEST_SRC:.c=.o}
 
 # Objects common to both test variants (no WebSocket objects)
-BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}
+BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/station_sort.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}
 
 ifeq ($(NOWEBSOCKET),1)
 # NOWEBSOCKET=1: link only base objects (no websocket/socketio/daemon/queue/http)
@@ -380,9 +382,12 @@ test-coverage: clean
 	${SILENTECHO} "   TEST  Running test suite (CI parity: integration + headless audio)..."
 	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
 	${SILENTECHO} "   COV   Generating coverage report..."
-	${SILENTCMD}lcov --capture --directory . --output-file coverage.info --rc lcov_branch_coverage=1
-	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info --rc lcov_branch_coverage=1
-	${SILENTCMD}lcov --remove coverage.info '*l10n_defaults_gen.c' --output-file coverage.info --rc lcov_branch_coverage=1
+	${SILENTCMD}lcov --capture --directory . --output-file coverage.info \
+		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
+	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info \
+		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
+	${SILENTCMD}lcov --remove coverage.info '*l10n_defaults_gen.c' --output-file coverage.info \
+		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
 	${SILENTECHO} "   COV   Coverage report: coverage.info"
 
 # Clean coverage files

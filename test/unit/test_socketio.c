@@ -774,6 +774,34 @@ START_TEST (test_socketio_build_stations_payload_sorts_snapshot) {
 }
 END_TEST
 
+START_TEST (test_socketio_build_stations_payload_quickmix_10_name_az) {
+	BarApp_t app;
+	PianoStation_t alpha, quickmix;
+	memset (&app, 0, sizeof (app));
+	memset (&alpha, 0, sizeof (alpha));
+	memset (&quickmix, 0, sizeof (quickmix));
+	BarSettingsInit (&app.settings);
+	app.settings.sortOrder = BAR_SORT_QUICKMIX_10_NAME_AZ;
+	BarStateInit (&app);
+	alpha.id = "a"; alpha.name = "Alpha";
+	quickmix.id = "q"; quickmix.name = "Zzz QuickMix"; quickmix.isQuickMix = 1;
+	alpha.head.next = (PianoListHead_t *) &quickmix;
+	app.ph.stations = &alpha;
+
+	json_object *payload = BarSocketIoBuildStationsPayload (&app);
+	ck_assert_ptr_nonnull (payload);
+	ck_assert_int_eq (json_object_array_length (payload), 2);
+	struct json_object *first = json_object_array_get_idx (payload, 0);
+	struct json_object *nameObj = NULL;
+	ck_assert (json_object_object_get_ex (first, "name", &nameObj));
+	ck_assert_str_eq (json_object_get_string (nameObj), "Zzz QuickMix");
+
+	json_object_put (payload);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_socketio_unknown_action_emits_nothing) {
 	BarApp_t app;
 	BarWsContext_t ctx;
@@ -1879,6 +1907,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_info_success);
 	tcase_add_test(tc_handle, test_socketio_handle_search_music_success);
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_sorts_snapshot);
+	tcase_add_test(tc_handle, test_socketio_build_stations_payload_quickmix_10_name_az);
 	tcase_add_test(tc_handle, test_socketio_unknown_action_emits_nothing);
 	suite_add_tcase(s, tc_handle);
 

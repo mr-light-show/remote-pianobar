@@ -616,15 +616,6 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 
 /* --- Payload builders (snapshot app state; caller json_object_put()s the result) --- */
 
-/* Comparison for qsort: sort snapshot items by effective display name */
-static int stationSnapshotCmp (const void *a, const void *b) {
-	const BarStationSnapshot_t *sa = (const BarStationSnapshot_t *) a;
-	const BarStationSnapshot_t *sb = (const BarStationSnapshot_t *) b;
-	const char *na = sa->displayName ? sa->displayName : (sa->name ? sa->name : "");
-	const char *nb = sb->displayName ? sb->displayName : (sb->name ? sb->name : "");
-	return strcmp (na, nb);
-}
-
 struct json_object *BarSocketIoBuildStartPayload (BarApp_t *app) {
 	if (!app) return NULL;
 
@@ -664,7 +655,7 @@ struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app) {
 	if (!BarStateSnapshotStations (app, &snap)) return json_object_new_array ();
 
 	if (snap.count > 0) {
-		qsort (snap.items, snap.count, sizeof (*snap.items), stationSnapshotCmp);
+		BarSortStationSnapshots (snap.items, snap.count, app->settings.sortOrder);
 	}
 
 	struct json_object *stations = json_object_new_array ();

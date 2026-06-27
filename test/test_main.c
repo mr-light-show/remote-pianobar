@@ -51,6 +51,7 @@ Suite *playback_lifecycle_suite(void);
 Suite *system_volume_suite(void);
 Suite *ui_readline_suite(void);
 Suite *ui_suite(void);
+Suite *station_sort_suite(void);
 Suite *interrupt_suite(void);
 Suite *libpiano_response_suite(void);
 
@@ -98,6 +99,7 @@ int main(void) {
 	srunner_add_suite(sr, system_volume_suite());
 	srunner_add_suite(sr, ui_readline_suite());
 	srunner_add_suite(sr, ui_suite());
+	srunner_add_suite(sr, station_sort_suite());
 	srunner_add_suite(sr, interrupt_suite());
 	srunner_add_suite(sr, libpiano_response_suite());
 

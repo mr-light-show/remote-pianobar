@@ -5,6 +5,7 @@
 *.gcda
 *.gcno
 *.gcov
+coverage.info
 .locale-codegen.stamp
 # vim swap files
 .*.sw*
