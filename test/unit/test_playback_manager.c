@@ -193,6 +193,40 @@ START_TEST(test_manager_thread_one_loop_iteration) {
 }
 END_TEST
 
+/* Covers idle PLAYER_DEAD path: BarStateAdvancePlaylist + BarUiHistoryPrepend. */
+START_TEST(test_manager_idle_advances_playlist) {
+	BarApp_t app;
+	PianoSong_t song;
+
+	memset(&song, 0, sizeof(song));
+	song.title = (char *)"idle-advance";
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.history = 10;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+	BarStateSetPlaylist(&app, &song);
+
+	ck_assert(BarPlaybackManagerStart(&app));
+	pthread_mutex_lock(&app.player.lock);
+	pthread_cond_broadcast(&app.player.cond);
+	pthread_mutex_unlock(&app.player.lock);
+	usleep(100000);
+
+	BarPlaybackManagerStop(&app);
+
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+	ck_assert_ptr_eq(app.songHistory, &song);
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 START_TEST(test_should_park_idle_when_dead_and_empty) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
@@ -301,6 +335,7 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_complete_song_cleanup_interrupt_on_quit);
 	tcase_add_test(tc, test_complete_song_cleanup_no_interrupt_log_when_not_quitting);
 	tcase_add_test(tc, test_manager_thread_one_loop_iteration);
+	tcase_add_test(tc, test_manager_idle_advances_playlist);
 	tcase_add_test(tc, test_should_park_idle_when_dead_and_empty);
 	tcase_add_test(tc, test_should_not_park_when_next_station_set);
 	tcase_add_test(tc, test_should_not_park_when_not_dead);

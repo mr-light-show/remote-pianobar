@@ -524,14 +524,11 @@ static void BarMainLoop (BarApp_t *app) {
 		 * song */
 		if (BarPlayerGetMode (player) == PLAYER_DEAD) {
 			/* what's next? */
-			PianoSong_t *playlist = BarStateGetPlaylist(app);
-			if (playlist != NULL) {
-				PianoSong_t *histsong = playlist;
-				BarStateSetPlaylist(app, PianoListNextP (playlist));
-				histsong->head.next = NULL;
-				BarUiHistoryPrepend (app, histsong);
+			PianoSong_t *finished = BarStateAdvancePlaylist(app);
+			if (finished != NULL) {
+				BarUiHistoryPrepend (app, finished);
 			}
-			playlist = BarStateGetPlaylist(app);
+			PianoSong_t *playlist = BarStateGetPlaylist(app);
 			PianoStation_t *nextStation = BarStateGetNextStation(app);
 			if (playlist == NULL && nextStation != NULL && !app->doQuit) {
 				PianoStation_t *curStation = BarStateGetCurrentStation(app);

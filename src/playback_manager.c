@@ -270,17 +270,14 @@ static void *BarPlaybackManagerThread(void *data) {
 				log_write(DEBUG_UI, "PlaybackMgr: Player idle\n");
 			}
 			
-			/* Advance playlist */
-			PianoSong_t *playlist = BarStateGetPlaylist(app);
-			if (playlist != NULL) {
-				PianoSong_t *histsong = playlist;
-				BarStateSetPlaylist(app, PianoListNextP(playlist));
-				histsong->head.next = NULL;
-				BarUiHistoryPrepend(app, histsong);
+			/* Advance playlist (atomic under state lock — safe vs DrainPlaylist) */
+			PianoSong_t *finished = BarStateAdvancePlaylist(app);
+			if (finished != NULL) {
+				BarUiHistoryPrepend(app, finished);
 			}
-			
+
 			/* Fetch more songs if needed */
-			playlist = BarStateGetPlaylist(app);
+			PianoSong_t *playlist = BarStateGetPlaylist(app);
 			PianoStation_t *nextStation = BarStateGetNextStation(app);
 			
 			if (playlist == NULL && nextStation != NULL && !app->doQuit) {

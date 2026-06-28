@@ -331,6 +331,104 @@ START_TEST(test_bar_state_drain_playlist) {
 }
 END_TEST
 
+START_TEST(test_bar_state_advance_playlist) {
+	BarApp_t app;
+	PianoSong_t song1, song2;
+	memset(&song1, 0, sizeof(song1));
+	memset(&song2, 0, sizeof(song2));
+	song1.head.next = &song2.head;
+	song1.title = (char *)"first";
+	song2.title = (char *)"second";
+	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
+
+	BarStateSetPlaylist(&app, &song1);
+
+	PianoSong_t *finished = BarStateAdvancePlaylist(&app);
+	ck_assert_ptr_eq(finished, &song1);
+	ck_assert_ptr_null(finished->head.next);
+	ck_assert_ptr_eq(BarStateGetPlaylist(&app), &song2);
+
+	finished = BarStateAdvancePlaylist(&app);
+	ck_assert_ptr_eq(finished, &song2);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	finished = BarStateAdvancePlaylist(&app);
+	ck_assert_ptr_null(finished);
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_advance_playlist_both) {
+	BarApp_t app;
+	PianoSong_t song;
+	memset(&song, 0, sizeof(song));
+	song.title = (char *)"both-mode";
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateSetPlaylist(&app, &song);
+	PianoSong_t *finished = BarStateAdvancePlaylist(&app);
+	ck_assert_ptr_eq(finished, &song);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	int iterations;
+} bar_state_playlist_thread_args_t;
+
+static void *advance_playlist_worker(void *arg) {
+	const bar_state_playlist_thread_args_t *args = arg;
+	for (int i = 0; i < args->iterations; ++i) {
+		PianoSong_t *finished = BarStateAdvancePlaylist(args->app);
+		(void) finished;
+	}
+	return NULL;
+}
+
+static void *drain_playlist_worker(void *arg) {
+	const bar_state_playlist_thread_args_t *args = arg;
+	for (int i = 0; i < args->iterations; ++i) {
+		BarStateDrainPlaylist(args->app);
+	}
+	return NULL;
+}
+
+/* Regression: reconnect/disconnect DrainPlaylist vs playback-manager advance. */
+START_TEST(test_bar_state_advance_playlist_race_with_drain) {
+	BarApp_t app;
+	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
+
+	for (int round = 0; round < 50; ++round) {
+		PianoSong_t *s1 = calloc(1, sizeof(*s1));
+		PianoSong_t *s2 = calloc(1, sizeof(*s2));
+		ck_assert_ptr_nonnull(s1);
+		ck_assert_ptr_nonnull(s2);
+		s1->head.next = &s2->head;
+		BarStateSetPlaylist(&app, s1);
+
+		bar_state_playlist_thread_args_t args = { .app = &app, .iterations = 200 };
+		pthread_t advance_tid;
+		pthread_t drain_tid;
+		ck_assert_int_eq(pthread_create(&advance_tid, NULL,
+		                                advance_playlist_worker, &args), 0);
+		ck_assert_int_eq(pthread_create(&drain_tid, NULL,
+		                                drain_playlist_worker, &args), 0);
+		ck_assert_int_eq(pthread_join(advance_tid, NULL), 0);
+		ck_assert_int_eq(pthread_join(drain_tid, NULL), 0);
+
+		if (BarStateGetPlaylist(&app) != NULL) {
+			BarStateDrainPlaylist(&app);
+		}
+	}
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
 /* SwitchStation: drains playlist and sets nextStation (test with playlist NULL) */
 START_TEST(test_bar_state_switch_station) {
 	BarApp_t app;
@@ -657,6 +755,9 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_playlist, test_bar_state_playlist_get_set);
 	tcase_add_test(tc_playlist, test_bar_state_playlist_get_set_web);
 	tcase_add_test(tc_playlist, test_bar_state_drain_playlist);
+	tcase_add_test(tc_playlist, test_bar_state_advance_playlist);
+	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_both);
+	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_race_with_drain);
 	tcase_add_test(tc_playlist, test_bar_state_switch_station);
 	suite_add_tcase(s, tc_playlist);
 
