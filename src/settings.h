@@ -191,3 +191,10 @@ const BarAccount_t *BarSettingsGetActiveAccount (const BarSettings_t *);
 bool BarSettingsSetActiveAccountById (BarSettings_t *, const char *id);
 char *BarSettingsExpandTilde (const char * const, const char * const);
 
+/* Test-only hooks (no-op unless set by unit tests). */
+bool BarSettingsAccountUsernamesEqualForTest (const BarAccount_t *a,
+		const BarAccount_t *b);
+void BarSettingsTestSetAppendReallocFailWhenCount (size_t accountCount);
+void BarSettingsTestSetResolveAccountPathFail (bool fail);
+void BarSettingsTestResetAccountHooks (void);
+

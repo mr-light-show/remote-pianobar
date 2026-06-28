@@ -66,6 +66,18 @@ static void read_settings_in_dir (BarSettings_t *settings, const char *xdg_root)
 	BarSettingsRead (settings);
 }
 
+static bool settings_has_account_id (const BarSettings_t *s, const char *id) {
+	if (s->accounts == NULL || id == NULL) {
+		return false;
+	}
+	for (size_t i = 0; i < s->accountCount; i++) {
+		if (s->accounts[i].id != NULL && strcmp (s->accounts[i].id, id) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 START_TEST (test_settings_expand_tilde) {
 	const char *home = "/home/testuser";
 	char *a = BarSettingsExpandTilde ("~/pianobar/config", home);
@@ -601,6 +613,362 @@ START_TEST (test_settings_audio_quality_dispatch)
 }
 END_TEST
 
+START_TEST (test_settings_rejects_missing_account_file_with_primary) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:does-not-exist.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (settings_has_account_id (&s, "home"));
+	ck_assert (!settings_has_account_id (&s, "work"));
+	ck_assert (!BarSettingsSetActiveAccountById (&s, "work"));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_rejects_missing_account_file_only) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"account = solo:missing.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 0);
+	ck_assert_ptr_null (BarSettingsGetActiveAccount (&s));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_rejects_duplicate_credentials_explicit) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"account_label = Work\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (settings_has_account_id (&s, "home"));
+	ck_assert (!settings_has_account_id (&s, "work"));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_rejects_duplicate_credentials_inherited) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath, "account_label = Work\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (!settings_has_account_id (&s, "work"));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_rejects_duplicate_username_different_password) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"user = mainuser\n"
+			"password = differentpass\n"
+			"account_label = Work\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (settings_has_account_id (&s, "home"));
+	ck_assert (!settings_has_account_id (&s, "work"));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_rejects_duplicate_credentials_between_files) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char a1[512], a2[512];
+	snprintf (a1, sizeof (a1), "%s/pianobar/a.conf", tmpl);
+	snprintf (a2, sizeof (a2), "%s/pianobar/b.conf", tmpl);
+	ck_assert_int_eq (write_file (a1, "user = shared\npassword = secret\n"), 0);
+	ck_assert_int_eq (write_file (a2, "user = shared\npassword = secret\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"account = a:a.conf\n"
+			"account = b:b.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (settings_has_account_id (&s, "a"));
+	ck_assert (!settings_has_account_id (&s, "b"));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_accepts_distinct_file_credentials) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"user = otheruser\n"
+			"password = otherpass\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 2);
+	ck_assert (settings_has_account_id (&s, "home"));
+	ck_assert (settings_has_account_id (&s, "work"));
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_account_usernames_equal_edges) {
+	BarAccount_t a = { .username = (char *) "user@example.com" };
+	BarAccount_t b = { .username = (char *) "user@example.com" };
+	BarAccount_t c = { .username = (char *) "other@example.com" };
+
+	ck_assert (BarSettingsAccountUsernamesEqualForTest (&a, &b));
+	ck_assert (!BarSettingsAccountUsernamesEqualForTest (&a, &c));
+	ck_assert (!BarSettingsAccountUsernamesEqualForTest (NULL, &a));
+	ck_assert (!BarSettingsAccountUsernamesEqualForTest (&a, NULL));
+	b.username = NULL;
+	ck_assert (!BarSettingsAccountUsernamesEqualForTest (&a, &b));
+}
+END_TEST
+
+START_TEST (test_settings_primary_password_command_autostart_with_file) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"user = work-user\n"
+			"password = work-pass\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = main-user\n"
+			"password_command = echo main-secret\n"
+			"autostart_station = station-main\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 2);
+	ck_assert_str_eq (s.accounts[0].username, "main-user");
+	ck_assert_ptr_nonnull (s.accounts[0].passwordCmd);
+	ck_assert_str_eq (s.accounts[0].autostartStation, "station-main");
+	ck_assert_str_eq (s.accounts[1].username, "work-user");
+	ck_assert_ptr_nonnull (s.accounts[1].passwordCmd);
+	ck_assert_str_eq (s.accounts[1].passwordCmd, "echo main-secret");
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_append_realloc_fail_on_primary) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"), 0);
+
+	BarSettingsTestSetAppendReallocFailWhenCount (0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 0);
+	ck_assert_ptr_null (BarSettingsGetActiveAccount (&s));
+
+	BarSettingsTestResetAccountHooks ();
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_append_realloc_fail_on_file_backed) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"user = work-user\n"
+			"password = work-pass\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettingsTestSetAppendReallocFailWhenCount (1);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (settings_has_account_id (&s, "home"));
+	ck_assert (!settings_has_account_id (&s, "work"));
+
+	BarSettingsTestResetAccountHooks ();
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_resolve_account_path_fail) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/work.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"user = work-user\n"
+			"password = work-pass\n"), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"account = work:work.conf\n"), 0);
+
+	BarSettingsTestSetResolveAccountPathFail (true);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert (!settings_has_account_id (&s, "work"));
+
+	BarSettingsTestResetAccountHooks ();
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+START_TEST (test_settings_default_account_not_found_after_reject) {
+	char tmpl[] = "/tmp/piano_set_XXXXXX";
+	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"user = mainuser\n"
+			"password = mainpass\n"
+			"main_account_id = home\n"
+			"default_account = work\n"
+			"account = work:missing.conf\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert_uint_eq (s.activeAccountIndex, 0);
+	ck_assert_str_eq (s.accounts[0].id, "home");
+
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
 Suite *settings_suite (void) {
 	Suite *s = suite_create ("Settings");
 	TCase *tc = tcase_create ("Core");
@@ -619,6 +987,19 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_table_dispatch_invalid_websocket_port_ignored);
 	tcase_add_test (tc, test_settings_table_dispatch_rejects_malformed_account_line);
 	tcase_add_test (tc, test_settings_table_dispatch_all_sort_orders);
+	tcase_add_test (tc, test_settings_rejects_missing_account_file_with_primary);
+	tcase_add_test (tc, test_settings_rejects_missing_account_file_only);
+	tcase_add_test (tc, test_settings_rejects_duplicate_credentials_explicit);
+	tcase_add_test (tc, test_settings_rejects_duplicate_credentials_inherited);
+	tcase_add_test (tc, test_settings_rejects_duplicate_username_different_password);
+	tcase_add_test (tc, test_settings_rejects_duplicate_credentials_between_files);
+	tcase_add_test (tc, test_settings_accepts_distinct_file_credentials);
+	tcase_add_test (tc, test_settings_account_usernames_equal_edges);
+	tcase_add_test (tc, test_settings_primary_password_command_autostart_with_file);
+	tcase_add_test (tc, test_settings_append_realloc_fail_on_primary);
+	tcase_add_test (tc, test_settings_append_realloc_fail_on_file_backed);
+	tcase_add_test (tc, test_settings_resolve_account_path_fail);
+	tcase_add_test (tc, test_settings_default_account_not_found_after_reject);
 
 	TCase *tc_parse = tcase_create ("ParseIntInRange");
 	tcase_add_test (tc_parse, test_parse_int_in_range_valid);

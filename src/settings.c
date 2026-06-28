@@ -429,6 +429,25 @@ typedef struct {
 	char *path;
 } BarAccountLine_t;
 
+static bool g_testAppendReallocFail = false;
+static size_t g_testAppendReallocFailWhenCount = SIZE_MAX;
+static bool g_testResolveAccountPathFail = false;
+
+void BarSettingsTestSetAppendReallocFailWhenCount (size_t accountCount) {
+	g_testAppendReallocFail = true;
+	g_testAppendReallocFailWhenCount = accountCount;
+}
+
+void BarSettingsTestSetResolveAccountPathFail (bool fail) {
+	g_testResolveAccountPathFail = fail;
+}
+
+void BarSettingsTestResetAccountHooks (void) {
+	g_testAppendReallocFail = false;
+	g_testAppendReallocFailWhenCount = SIZE_MAX;
+	g_testResolveAccountPathFail = false;
+}
+
 /*	Resolve an account file path relative to the config directory.
  *	Absolute paths and ~ paths are returned as-is (after tilde expansion).
  *	Relative paths are resolved against configDir.
@@ -451,12 +470,14 @@ static char *BarSettingsResolveAccountPath (const char *path, const char *config
 /*	Read credentials and per-account keys from a file, populating an account entry.
  *	Only credential-related and per-account keys are read (user, password,
  *	password_command, account_label, autostart_station).
+ *	@return true if the file was opened and read, false if missing
  */
-static void BarSettingsReadAccountFile (BarAccount_t *acct, const char *filepath) {
+static bool BarSettingsReadAccountFile (BarAccount_t *acct, const char *filepath) {
 	FILE *fd = fopen (filepath, "r");
 	if (fd == NULL) {
-		log_write (LOG_ERROR, "Warning: Cannot open account file: %s\n", filepath);
-		return;
+		log_write (LOG_ERROR,
+				"Error: Account file not found: %s\n", filepath);
+		return false;
 	}
 
 	char line[1024];
@@ -503,6 +524,53 @@ static void BarSettingsReadAccountFile (BarAccount_t *acct, const char *filepath
 		}
 	}
 	fclose (fd);
+	return true;
+}
+
+static bool BarAccountUsernamesEqual (const BarAccount_t *a,
+		const BarAccount_t *b) {
+	if (a == NULL || b == NULL) {
+		return false;
+	}
+	if (a->username == NULL || b->username == NULL) {
+		return false;
+	}
+	return strcmp (a->username, b->username) == 0;
+}
+
+bool BarSettingsAccountUsernamesEqualForTest (const BarAccount_t *a,
+		const BarAccount_t *b) {
+	return BarAccountUsernamesEqual (a, b);
+}
+
+static const BarAccount_t *BarSettingsFindDuplicateAccount (
+		const BarSettings_t *settings, const BarAccount_t *candidate) {
+	for (size_t i = 0; i < settings->accountCount; i++) {
+		if (BarAccountUsernamesEqual (candidate, &settings->accounts[i])) {
+			return &settings->accounts[i];
+		}
+	}
+	return NULL;
+}
+
+static bool BarSettingsAppendAccount (BarSettings_t *settings, BarAccount_t *acct) {
+	BarAccount_t *newAccounts;
+	if (g_testAppendReallocFail
+			&& settings->accountCount == g_testAppendReallocFailWhenCount) {
+		newAccounts = NULL;
+	} else {
+		newAccounts = realloc (settings->accounts,
+				(settings->accountCount + 1) * sizeof (BarAccount_t));
+	}
+	if (newAccounts == NULL) {
+		log_write (LOG_ERROR, "Out of memory building account list\n");
+		return false;
+	}
+	settings->accounts = newAccounts;
+	settings->accounts[settings->accountCount] = *acct;
+	settings->accountCount++;
+	memset (acct, 0, sizeof (*acct));
+	return true;
 }
 
 /*	Build the accounts array from parsed config.
@@ -514,58 +582,85 @@ static void BarSettingsBuildAccounts (BarSettings_t *settings,
 		const char *accountLabel,
 		BarAccountLine_t *accountLines, size_t accountLineCount,
 		const char *configDir, const char *userhome) {
+	settings->accounts = NULL;
+	settings->accountCount = 0;
+
 	bool hasMainCredentials = (settings->username != NULL);
-	size_t total = accountLineCount;
-	size_t startIndex = 0;
 
 	if (hasMainCredentials) {
-		total += 1;  /* primary account from main config */
-		startIndex = 1;
-	}
-
-	if (total == 0) {
-		/* no credentials anywhere */
-		return;
-	}
-
-	settings->accounts = calloc (total, sizeof (BarAccount_t));
-	settings->accountCount = total;
-
-	/* Primary account from main config credentials */
-	if (hasMainCredentials) {
-		BarAccount_t *primary = &settings->accounts[0];
-		primary->id = strdup (mainAccountId ? mainAccountId : "default");
-		primary->label = strdup (accountLabel ? accountLabel :
+		BarAccount_t primary = {0};
+		primary.id = strdup (mainAccountId ? mainAccountId : "default");
+		primary.label = strdup (accountLabel ? accountLabel :
 				(mainAccountId ? mainAccountId : "default"));
-		primary->username = strdup (settings->username);
+		primary.username = strdup (settings->username);
 		if (settings->password) {
-			primary->password = strdup (settings->password);
+			primary.password = strdup (settings->password);
 		}
 		if (settings->passwordCmd) {
-			primary->passwordCmd = strdup (settings->passwordCmd);
+			primary.passwordCmd = strdup (settings->passwordCmd);
 		}
 		if (settings->autostartStation) {
-			primary->autostartStation = strdup (settings->autostartStation);
+			primary.autostartStation = strdup (settings->autostartStation);
+		}
+		if (!BarSettingsAppendAccount (settings, &primary)) {
+			BarAccountDestroy (&primary);
 		}
 	}
 
-	/* File-backed accounts */
 	for (size_t i = 0; i < accountLineCount; i++) {
-		BarAccount_t *acct = &settings->accounts[startIndex + i];
-		acct->id = strdup (accountLines[i].id);
-		/* label defaults to id, may be overridden by account_label in file */
-		acct->label = strdup (accountLines[i].id);
+		BarAccount_t acct = {0};
+		acct.id = strdup (accountLines[i].id);
+		acct.label = strdup (accountLines[i].id);
 
-		/* Inherit main config credentials as defaults for merge */
-		if (settings->username) acct->username = strdup (settings->username);
-		if (settings->password) acct->password = strdup (settings->password);
-		if (settings->passwordCmd) acct->passwordCmd = strdup (settings->passwordCmd);
+		if (settings->username) {
+			acct.username = strdup (settings->username);
+		}
+		if (settings->password) {
+			acct.password = strdup (settings->password);
+		}
+		if (settings->passwordCmd) {
+			acct.passwordCmd = strdup (settings->passwordCmd);
+		}
 
-		/* Read account file (overrides inherited fields) */
-		char *resolved = BarSettingsResolveAccountPath (accountLines[i].path,
-				configDir, userhome);
-		BarSettingsReadAccountFile (acct, resolved);
+		char *resolved = NULL;
+		if (g_testResolveAccountPathFail) {
+			resolved = NULL;
+		} else {
+			resolved = BarSettingsResolveAccountPath (accountLines[i].path,
+					configDir, userhome);
+		}
+		if (resolved == NULL) {
+			log_write (LOG_ERROR,
+					"Error: Out of memory resolving account file for '%s'\n",
+					accountLines[i].id);
+			BarAccountDestroy (&acct);
+			continue;
+		}
+
+		if (!BarSettingsReadAccountFile (&acct, resolved)) {
+			log_write (LOG_ERROR,
+					"Error: Account '%s' not loaded (missing file: %s)\n",
+					accountLines[i].id, resolved);
+			BarAccountDestroy (&acct);
+			free (resolved);
+			continue;
+		}
 		free (resolved);
+
+		const BarAccount_t *dup = BarSettingsFindDuplicateAccount (settings, &acct);
+		if (dup != NULL) {
+			log_write (LOG_ERROR,
+					"Error: Account '%s' has the same username as account '%s' "
+					"(not loaded)\n",
+					accountLines[i].id,
+					dup->id ? dup->id : "(unknown)");
+			BarAccountDestroy (&acct);
+			continue;
+		}
+
+		if (!BarSettingsAppendAccount (settings, &acct)) {
+			BarAccountDestroy (&acct);
+		}
 	}
 
 	/* Resolve default_account to activeAccountIndex */

@@ -153,6 +153,7 @@ Follow existing code in the module you edit.
 
 - Pre-push hook enforces `make test-all`. Do not use `git push --no-verify` unless the user requests it.
 - Immutable GitHub releases: create a **draft** release before CI uploads assets; publish after uploads complete (see [DEVELOPMENT.md](DEVELOPMENT.md)).
+- **“Tag a PR” means a git tag, not a GitHub PR label.** When the user names a version (e.g. `v2.6.8.dev.5`), create an annotated tag on the PR branch HEAD and push it (`git tag -a … && git push origin <tag>`). Optionally open a **draft** release for that tag to run `release.yml`. Do **not** substitute a PR label unless they explicitly ask for a label.
 
 ---
 
