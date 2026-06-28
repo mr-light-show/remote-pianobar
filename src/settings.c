@@ -429,6 +429,25 @@ typedef struct {
 	char *path;
 } BarAccountLine_t;
 
+static bool g_testAppendReallocFail = false;
+static size_t g_testAppendReallocFailWhenCount = SIZE_MAX;
+static bool g_testResolveAccountPathFail = false;
+
+void BarSettingsTestSetAppendReallocFailWhenCount (size_t accountCount) {
+	g_testAppendReallocFail = true;
+	g_testAppendReallocFailWhenCount = accountCount;
+}
+
+void BarSettingsTestSetResolveAccountPathFail (bool fail) {
+	g_testResolveAccountPathFail = fail;
+}
+
+void BarSettingsTestResetAccountHooks (void) {
+	g_testAppendReallocFail = false;
+	g_testAppendReallocFailWhenCount = SIZE_MAX;
+	g_testResolveAccountPathFail = false;
+}
+
 /*	Resolve an account file path relative to the config directory.
  *	Absolute paths and ~ paths are returned as-is (after tilde expansion).
  *	Relative paths are resolved against configDir.
@@ -519,6 +538,11 @@ static bool BarAccountUsernamesEqual (const BarAccount_t *a,
 	return strcmp (a->username, b->username) == 0;
 }
 
+bool BarSettingsAccountUsernamesEqualForTest (const BarAccount_t *a,
+		const BarAccount_t *b) {
+	return BarAccountUsernamesEqual (a, b);
+}
+
 static const BarAccount_t *BarSettingsFindDuplicateAccount (
 		const BarSettings_t *settings, const BarAccount_t *candidate) {
 	for (size_t i = 0; i < settings->accountCount; i++) {
@@ -530,8 +554,14 @@ static const BarAccount_t *BarSettingsFindDuplicateAccount (
 }
 
 static bool BarSettingsAppendAccount (BarSettings_t *settings, BarAccount_t *acct) {
-	BarAccount_t *newAccounts = realloc (settings->accounts,
-			(settings->accountCount + 1) * sizeof (BarAccount_t));
+	BarAccount_t *newAccounts;
+	if (g_testAppendReallocFail
+			&& settings->accountCount == g_testAppendReallocFailWhenCount) {
+		newAccounts = NULL;
+	} else {
+		newAccounts = realloc (settings->accounts,
+				(settings->accountCount + 1) * sizeof (BarAccount_t));
+	}
 	if (newAccounts == NULL) {
 		log_write (LOG_ERROR, "Out of memory building account list\n");
 		return false;
@@ -592,8 +622,13 @@ static void BarSettingsBuildAccounts (BarSettings_t *settings,
 			acct.passwordCmd = strdup (settings->passwordCmd);
 		}
 
-		char *resolved = BarSettingsResolveAccountPath (accountLines[i].path,
-				configDir, userhome);
+		char *resolved = NULL;
+		if (g_testResolveAccountPathFail) {
+			resolved = NULL;
+		} else {
+			resolved = BarSettingsResolveAccountPath (accountLines[i].path,
+					configDir, userhome);
+		}
 		if (resolved == NULL) {
 			log_write (LOG_ERROR,
 					"Error: Out of memory resolving account file for '%s'\n",
