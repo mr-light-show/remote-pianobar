@@ -49,6 +49,12 @@ You can configure **more than one** Pandora login. Exactly one account is **acti
 
 **Inheritance:** For file-backed accounts, remote-pianobar first copies `user` / `password` / `password_command` from the **main** config (if set), then the snippet file **overrides** any keys it defines.
 
+**Validation at load time:**
+
+- If an `account = id:path` snippet file cannot be opened, remote-pianobar logs an error and **does not** add that account to the runtime account list.
+- If a file-backed account’s merged `user` (after inheritance) matches the `user` of an account already in the list, remote-pianobar logs an error and **does not** add the duplicate. Password / `password_command` differences do not exempt a second account with the same username.
+- `default_account` must refer to an account that was actually loaded; otherwise the first loaded account is used (existing warning).
+
 **Path resolution:** Paths on `account = id:path` are resolved like other config paths: **relative** paths are relative to the directory of the config file that contained the `account` line (after the last processed config path, typically `~/.config/pianobar`). **Absolute** paths and paths starting with `~` are expanded as usual.
 
 **Runtime switching:** With the WebSocket / web UI enabled, clients can change the active account without editing the config. See **`WEBSOCKET_API.md`**: `process` includes `accounts` and `current_account` when multiple accounts exist; send action `app.pandora-reconnect` with optional `account_id` to switch and re-authenticate.
