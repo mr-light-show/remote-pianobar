@@ -1010,7 +1010,7 @@ export class PianobarApp extends LitElement {
               <span class="material-icons">menu</span>
             </button>
             <info-menu
-              ?showAccountSwitch=${this._menuSessionReady && this.accounts.length > 1}
+              ?showAccountSwitch=${this.connected && this.accounts.length > 1}
               ?showExplain=${this._menuRowExplain}
               ?disabledExplain=${this._menuDisabledExplain}
               ?showUpcoming=${this._menuRowUpcoming}

@@ -265,6 +265,25 @@ describe('PianobarApp', () => {
     expect(el.shadowRoot?.querySelector('h1')?.textContent).toBe('Not Playing');
   });
 
+  it('shows Switch Account after pandora.disconnected when multiple accounts', async () => {
+    const el = await mountConnectedApp();
+    hoisted.fire('process', {
+      playing: false,
+      station: 'Rock',
+      stationId: 's1',
+      accounts: [
+        { id: 'a', label: 'A' },
+        { id: 'b', label: 'B' },
+      ],
+      current_account: { id: 'a' },
+    });
+    await el.updateComplete;
+    hoisted.fire('pandora.disconnected', { reason: 'idle_timeout' });
+    await el.updateComplete;
+    const menu = el.shadowRoot?.querySelector('info-menu') as { showAccountSwitch?: boolean } | null;
+    expect(menu?.showAccountSwitch).toBe(true);
+  });
+
   it('error event for station.change removes station and toasts', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('error', {
