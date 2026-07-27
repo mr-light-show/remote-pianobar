@@ -76,6 +76,7 @@ WEBSOCKET_DIR:=src/websocket
 ifneq ($(NOWEBSOCKET),1)
 	PIANOBAR_SRC+=\
 		${WEBSOCKET_DIR}/core/websocket.c \
+		${WEBSOCKET_DIR}/core/websocket_lws_log.c \
 		${WEBSOCKET_DIR}/core/queue.c \
 		${WEBSOCKET_DIR}/http/http_server.c \
 		${WEBSOCKET_DIR}/protocol/socketio.c \
@@ -344,9 +345,9 @@ ${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ}
 	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 else
 # Full WebSocket build: link all objects including WebSocket modules
-${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
+${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 endif
 
 # Run tests

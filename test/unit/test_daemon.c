@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include <unistd.h>
 #include <sys/stat.h>
 #include <stdio.h>
+#include <sys/wait.h>
 #include "../../src/main.h"
 #include "../../src/websocket/daemon/daemon.h"
 
@@ -139,6 +140,30 @@ START_TEST(test_daemon_write_lock_pid_rejects_invalid_fd) {
 }
 END_TEST
 
+START_TEST(test_daemonize_steps_without_log_file_keeps_stderr) {
+	const char *pidPath = "/tmp/test_pianobar_daemon_steps.pid";
+	pid_t child;
+	int status;
+
+	unlink (pidPath);
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		BarApp_t app;
+
+		memset (&app, 0, sizeof (app));
+		BarSettingsInit (&app.settings);
+		app.settings.logFile = NULL;
+		app.settings.pidFile = strdup (pidPath);
+		_exit (BarDaemonizeSteps (&app) ? 0 : 1);
+	}
+	ck_assert_int_eq (waitpid (child, &status, 0), child);
+	ck_assert (WIFEXITED (status));
+	ck_assert_int_eq (WEXITSTATUS (status), 0);
+	unlink (pidPath);
+}
+END_TEST
+
 START_TEST(test_daemonize_steps_rejects_null_app) {
 	ck_assert(!BarDaemonizeSteps(NULL));
 }
@@ -168,6 +193,7 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_get_lock_file_path_is_under_config);
 	tcase_add_test(tc_core, test_daemon_lock_acquire_write_read_roundtrip);
 	tcase_add_test(tc_core, test_daemon_write_lock_pid_rejects_invalid_fd);
+	tcase_add_test(tc_core, test_daemonize_steps_without_log_file_keeps_stderr);
 	tcase_add_test(tc_core, test_daemonize_steps_rejects_null_app);
 	tcase_add_test(tc_core, test_daemon_kill_running_nonexistent_pid_file);
 	

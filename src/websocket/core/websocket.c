@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "../../log.h"
 #include "../../system_volume.h"
 #include "websocket.h"
+#include "websocket_lws_log.h"
 #include "../protocol/socketio.h"
 #include "../http/http_server.h"
 
@@ -57,55 +58,6 @@ static void BarWebsocketBroadcast(const char *message, size_t len);
 static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *msg);
 static void* BarWebsocketThread(void *arg);
 static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
-
-/* Strip libwebsockets' "[timestamp] N: " prefix; return message body for pianobar logging. */
-static const char *bar_lws_log_message(const char *line)
-{
-	const char *p;
-
-	if (line == NULL) {
-		return "";
-	}
-	p = strchr(line, ']');
-	if (p != NULL && p[1] != '\0') {
-		p++;
-		while (*p == ' ') {
-			p++;
-		}
-		if (p[0] != '\0' && p[1] == ':' && p[2] == ' ') {
-			p += 3;
-		}
-		return p;
-	}
-	return line;
-}
-
-/* Route libwebsockets library logs through pianobar's log module. */
-static void bar_lws_log_emit(int level, const char *line)
-{
-	const char *msg = bar_lws_log_message(line);
-
-	if (msg[0] == '\0') {
-		return;
-	}
-
-	if (level == LLL_ERR || level == LLL_WARN) {
-		log_write(LOG_ERROR, "lws: %s", msg);
-		return;
-	}
-
-	log_write(DEBUG_WEBSOCKET, "lws: %s", msg);
-}
-
-static void bar_lws_configure_logging(void)
-{
-	int lws_level = LLL_ERR | LLL_WARN;
-
-	if (log_get_debug_mask() & DEBUG_WEBSOCKET) {
-		lws_level |= LLL_NOTICE;
-	}
-	lws_set_log_level(lws_level, bar_lws_log_emit);
-}
 
 /*	Bucket Pattern for WebSocket Broadcasts
  *
@@ -548,7 +500,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Initialize libwebsockets */
 	memset(&info, 0, sizeof(info));
 
-	bar_lws_configure_logging();
+	BarWsLwsConfigureLogging();
 	
 	info.port = app->settings.websocketPort;
 	info.iface = app->settings.websocketHost ? app->settings.websocketHost : "0.0.0.0";
