@@ -49,6 +49,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 |------|---------|
 | Locale codegen (after YAML changes) | `make locale-codegen` |
 | Build player | `make` |
+| Minimal build (no runtime `debug=` support) | `make minimal` or `./build.sh minimal` |
 | C unit tests | `make test` |
 | **Pre-push gate** (tests + cppcheck) | `make test-all` |
 | **Pre-push patch coverage** (after `src/**` or `webui/src/**` changes) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` — target ≥90% on diff ([codecov.yml](codecov.yml)); see `.cursor/skills/pre-push-coverage/SKILL.md` |

@@ -19,7 +19,7 @@ jobs:
             libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
             libblas-dev liblapack-dev check lcov
 
-      # Match build.yml: omit default -DNDEBUG on PRs so HAVE_DEBUGLOG is defined (PIANOBAR_DEBUG).
+      # PR builds use -g -O0; all builds get HAVE_DEBUGLOG from the Makefile.
       - name: Debug-friendly C flags on pull requests
         if: github.event_name == 'pull_request'
         run: echo 'CFLAGS=-g -O0' >> $GITHUB_ENV

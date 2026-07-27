@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include "ui.h"
 #include <json-c/json.h>
 #include <pthread.h>
+#include <string.h>
 #include <unistd.h>
 #include <netinet/in.h>
 
@@ -267,15 +268,31 @@ void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
 
 /* Web info printing (web or both mode) */
 void BarWsPrintWebInfo(const BarApp_t *app, FILE *stream) {
-	if (!BarWsIsWebActive(app)) { return; }
+	const char *bind_host;
+
+	if (!BarWsIsWebActive(app)) {
+		return;
+	}
+	bind_host = app->settings.websocketHost ? app->settings.websocketHost
+	                                        : "127.0.0.1";
 	if (app->settings.webuiPath) {
 		fprintf(stream, "Web UI files: %s\n", app->settings.webuiPath);
 	} else {
 		fprintf(stream, "Web UI files: (using built-in)\n");
 	}
 	fprintf(stream, "Web interface: http://%s:%d/\n",
-	        app->settings.websocketHost ? app->settings.websocketHost : "127.0.0.1",
-	        app->settings.websocketPort);
+	        bind_host, app->settings.websocketPort);
+
+	if (app->settings.websocketPort > 0 &&
+	    (strcmp(bind_host, "0.0.0.0") == 0 || strcmp(bind_host, "::") == 0)) {
+		char lan[INET_ADDRSTRLEN];
+
+		BarDaemonGetIPv4Address(lan, sizeof(lan));
+		if (lan[0] != '\0' && strcmp(lan, "127.0.0.1") != 0) {
+			fprintf(stream, "Web interface: http://%s:%d/\n",
+			        lan, app->settings.websocketPort);
+		}
+	}
 }
 
 /* Print PID file info if daemon and configured */
@@ -285,17 +302,12 @@ void BarWsPrintPidFileInfo(const BarApp_t *app, bool is_daemon, FILE *stream) {
 	}
 }
 
-/* Print startup info for web/both modes (web interface URL, IPv4 address) */
-void BarWsPrintStartupInfo(BarApp_t *app) {
-	if (!BarWsIsWebActive(app)) { return; }
-	log_write(LOG_ERROR, "Starting pianobar\n");
-	char ipv4_addr[INET_ADDRSTRLEN];
-	BarDaemonGetIPv4Address(ipv4_addr, sizeof(ipv4_addr));
-	BarPrintStartupInfo(app, getpid(), false, stderr);
-	if (app->settings.websocketPort > 0) {
-		log_write(LOG_ERROR, "Web interface: http://%s:%d/\n",
-		          ipv4_addr, app->settings.websocketPort);
+/* Print startup info on stderr for web-only daemon (journal) before daemonize */
+void BarWsPrintStartupInfo(const BarApp_t *app) {
+	if (!BarIsWebOnlyMode(app)) {
+		return;
 	}
+	BarPrintStartupInfo(app, getpid(), false, stderr);
 }
 
 /* Configure web-only input (no stdin/FIFO) */
@@ -352,6 +364,6 @@ bool BarWsSettingsIsWebActive(const BarSettings_t *s) { (void)s; return false; }
 void BarWsPrintPidFileInfo(BarApp_t *app, bool is_daemon, FILE *stream) {
 	(void)app; (void)is_daemon; (void)stream;
 }
-void BarWsPrintStartupInfo(BarApp_t *app) { (void)app; }
+void BarWsPrintStartupInfo(const BarApp_t *app) { (void)app; }
 #endif
 

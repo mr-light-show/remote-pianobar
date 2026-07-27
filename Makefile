@@ -12,6 +12,12 @@ LOCALEDIR:=${PREFIX}/share/pianobar/locale
 DYNLINK:=0
 CFLAGS?=-O2 -DNDEBUG
 
+# Runtime debug categories (debug=N in config, PIANOBAR_DEBUG env) unless MINIMAL=1.
+# Mask 0 means no DEBUG_* output. Keeps -DNDEBUG for asserts in release builds.
+ifndef MINIMAL
+override CFLAGS+=-DHAVE_DEBUGLOG
+endif
+
 # Feature test macros for POSIX/BSD/GNU functions (flock, usleep, clock_gettime, etc.)
 # Use 'override' so these are always included even when CFLAGS is set on command line
 override CFLAGS+=-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE
@@ -251,6 +257,10 @@ all: pianobar
 	@echo "Build complete. Running tests..."
 	@${MAKE} test
 
+.PHONY: minimal
+minimal:
+	@$(MAKE) MINIMAL=1 pianobar
+
 ifeq (${DYNLINK},1)
 install: pianobar install-libpiano
 else
@@ -418,4 +428,4 @@ test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind debug all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind minimal all locale-codegen

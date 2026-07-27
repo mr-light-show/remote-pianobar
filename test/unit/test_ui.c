@@ -104,6 +104,31 @@ START_TEST (test_print_startup_info_web_mode_includes_url)
 }
 END_TEST
 
+START_TEST (test_print_startup_info_bind_all_shows_bind_address)
+{
+	BarApp_t app;
+	FILE *out;
+	char *text;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+	app.settings.websocketHost = strdup ("0.0.0.0");
+	app.settings.websocketPort = 8080;
+
+	out = tmpfile ();
+	ck_assert_ptr_nonnull (out);
+	BarPrintStartupInfo (&app, 0, false, out);
+	text = read_tmpfile (out);
+
+	ck_assert (strstr (text, "http://0.0.0.0:8080/") != NULL);
+
+	free (text);
+	fclose (out);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_print_startup_info_daemon_includes_pid_and_pid_file)
 {
 	BarApp_t app;
@@ -211,6 +236,7 @@ Suite *ui_suite (void)
 
 	tcase_add_test (tc, test_print_startup_info_cli_mode_omits_web_details);
 	tcase_add_test (tc, test_print_startup_info_web_mode_includes_url);
+	tcase_add_test (tc, test_print_startup_info_bind_all_shows_bind_address);
 	tcase_add_test (tc, test_print_startup_info_daemon_includes_pid_and_pid_file);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);

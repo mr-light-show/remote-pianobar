@@ -53,11 +53,11 @@ unsigned int log_get_debug_mask (void) {
 	return atomic_load_explicit (&debug_mask, memory_order_relaxed);
 }
 
-void log_init(void)
+void log_init(unsigned int config_debug)
 {
 #ifdef HAVE_DEBUGLOG
 	const char *const s = getenv("PIANOBAR_DEBUG");
-	unsigned int raw = 0;
+	unsigned int raw = config_debug;
 	if (s != NULL) {
 		int tmp = 0;
 		if (!BarParseIntInRange (s, 0, INT_MAX, &tmp)) {
@@ -96,7 +96,7 @@ void log_init(void)
 		fprintf(stderr, "\n");
 	}
 #else
-	(void)0;
+	(void) config_debug;
 #endif
 }
 

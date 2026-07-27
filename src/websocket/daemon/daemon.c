@@ -86,11 +86,10 @@ bool BarDaemonizeSteps(BarApp_t *app) {
 			close(fd);
 		}
 	} else {
-		/* Redirect to /dev/null */
+		/* Discard stdout; keep stderr (e.g. systemd journal) */
 		int fd = open("/dev/null", O_RDWR);
 		if (fd >= 0) {
 			dup2(fd, STDOUT_FILENO);
-			dup2(fd, STDERR_FILENO);
 			close(fd);
 		}
 	}

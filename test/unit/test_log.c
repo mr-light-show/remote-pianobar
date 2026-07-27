@@ -90,8 +90,32 @@ static void restore_stderr(void) {
 START_TEST(test_log_init_debug_state_banner) {
 	suppress_stderr();
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
-	log_init();
+	log_init(0);
 	ck_assert(log_is_any_debug_enabled());
+	restore_stderr();
+	unsetenv("PIANOBAR_DEBUG");
+}
+END_TEST
+
+START_TEST(test_log_init_config_debug_mask) {
+	suppress_stderr();
+	unsetenv("PIANOBAR_DEBUG");
+	log_init(15);
+	ck_assert(log_is_any_debug_enabled());
+	ck_assert((log_get_debug_mask() & DEBUG_NETWORK) != 0);
+	ck_assert((log_get_debug_mask() & DEBUG_WEBSOCKET) != 0);
+	log_set_debug_mask(0);
+	restore_stderr();
+}
+END_TEST
+
+START_TEST(test_log_init_env_overrides_config) {
+	suppress_stderr();
+	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
+	log_init(15);
+	ck_assert((log_get_debug_mask() & DEBUG_STATE) != 0);
+	ck_assert((log_get_debug_mask() & DEBUG_NETWORK) == 0);
+	log_set_debug_mask(0);
 	restore_stderr();
 	unsetenv("PIANOBAR_DEBUG");
 }
@@ -100,7 +124,7 @@ END_TEST
 START_TEST(test_log_init_debug_ui_without_state) {
 	suppress_stderr();
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "8", 1), 0);
-	log_init();
+	log_init(0);
 	ck_assert(log_is_any_debug_enabled());
 	restore_stderr();
 	unsetenv("PIANOBAR_DEBUG");
@@ -110,7 +134,7 @@ END_TEST
 START_TEST(test_log_write_debug_state) {
 	suppress_stderr();
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
-	log_init();
+	log_init(0);
 	log_write(DEBUG_STATE, "codecov probe\n");
 	restore_stderr();
 	unsetenv("PIANOBAR_DEBUG");
@@ -120,7 +144,7 @@ END_TEST
 START_TEST(test_log_write_unknown_kind) {
 	suppress_stderr();
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "255", 1), 0);
-	log_init();
+	log_init(0);
 	log_write((logKind)128, "unknown kind probe\n");
 	restore_stderr();
 	unsetenv("PIANOBAR_DEBUG");
@@ -144,7 +168,7 @@ START_TEST(test_log_network_request_and_response) {
 
 	capture_stderr_to_pipe(pipefd, &saved_stderr);
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "1", 1), 0);
-	log_init();
+	log_init(0);
 	log_network_request("http://cdn.example/track.mp3");
 	log_network_response("ok");
 	fflush(stderr);
@@ -196,6 +220,8 @@ Suite *log_suite (void) {
 	TCase *tc_debug = tcase_create ("DEBUG_STATE");
 #ifdef HAVE_DEBUGLOG
 	tcase_add_test (tc_debug, test_log_init_debug_state_banner);
+	tcase_add_test (tc_debug, test_log_init_config_debug_mask);
+	tcase_add_test (tc_debug, test_log_init_env_overrides_config);
 	tcase_add_test (tc_debug, test_log_init_debug_ui_without_state);
 	tcase_add_test (tc_debug, test_log_write_debug_state);
 	tcase_add_test (tc_debug, test_log_write_unknown_kind);

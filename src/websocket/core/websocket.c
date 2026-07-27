@@ -58,6 +58,55 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 static void* BarWebsocketThread(void *arg);
 static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
+/* Strip libwebsockets' "[timestamp] N: " prefix; return message body for pianobar logging. */
+static const char *bar_lws_log_message(const char *line)
+{
+	const char *p;
+
+	if (line == NULL) {
+		return "";
+	}
+	p = strchr(line, ']');
+	if (p != NULL && p[1] != '\0') {
+		p++;
+		while (*p == ' ') {
+			p++;
+		}
+		if (p[0] != '\0' && p[1] == ':' && p[2] == ' ') {
+			p += 3;
+		}
+		return p;
+	}
+	return line;
+}
+
+/* Route libwebsockets library logs through pianobar's log module. */
+static void bar_lws_log_emit(int level, const char *line)
+{
+	const char *msg = bar_lws_log_message(line);
+
+	if (msg[0] == '\0') {
+		return;
+	}
+
+	if (level == LLL_ERR || level == LLL_WARN) {
+		log_write(LOG_ERROR, "lws: %s", msg);
+		return;
+	}
+
+	log_write(DEBUG_WEBSOCKET, "lws: %s", msg);
+}
+
+static void bar_lws_configure_logging(void)
+{
+	int lws_level = LLL_ERR | LLL_WARN;
+
+	if (log_get_debug_mask() & DEBUG_WEBSOCKET) {
+		lws_level |= LLL_NOTICE;
+	}
+	lws_set_log_level(lws_level, bar_lws_log_emit);
+}
+
 /*	Bucket Pattern for WebSocket Broadcasts
  *
  * The bucket pattern provides thread-safe message passing from multiple threads
@@ -498,11 +547,8 @@ bool BarWebsocketInit(BarApp_t *app) {
 	
 	/* Initialize libwebsockets */
 	memset(&info, 0, sizeof(info));
-	
-#ifndef HAVE_DEBUGLOG
-	/* Suppress libwebsockets startup messages - only show errors and warnings */
-	lws_set_log_level(LLL_ERR | LLL_WARN, NULL);
-#endif
+
+	bar_lws_configure_logging();
 	
 	info.port = app->settings.websocketPort;
 	info.iface = app->settings.websocketHost ? app->settings.websocketHost : "0.0.0.0";
@@ -540,7 +586,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Set up Socket.IO broadcast callback */
 	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);
 	
-	log_write(LOG_ERROR, "Server started on port %d\n",
+	log_write(DEBUG_WEBSOCKET, "Server started on port %d\n",
 	        app->settings.websocketPort);
 	
 	/* Start WebSocket thread */
@@ -557,7 +603,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 		return false;
 	}
 	
-	log_write(LOG_ERROR, "Thread created successfully\n");
+	log_write(DEBUG_WEBSOCKET, "Thread created successfully\n");
 	
 	return true;
 }
@@ -568,7 +614,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		return;
 	}
 	
-	log_write(LOG_ERROR, "Stopping server...\n");
+	log_write(DEBUG_WEBSOCKET, "Stopping server...\n");
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
@@ -581,9 +627,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	}
 	
 	/* Wait for thread to finish */
-	log_write(LOG_ERROR, "Waiting for thread to stop...\n");
+	log_write(DEBUG_WEBSOCKET, "Waiting for thread to stop...\n");
 	pthread_join(ctx->thread, NULL);
-	log_write(LOG_ERROR, "Thread stopped\n");
+	log_write(DEBUG_WEBSOCKET, "Thread stopped\n");
 	
 	/* Now safe to cleanup (thread is dead) */
 	if (ctx->context) {
@@ -607,7 +653,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	free(ctx);
 	app->wsContext = NULL;
 	
-	log_write(LOG_ERROR, "Server stopped\n");
+	log_write(DEBUG_WEBSOCKET, "Server stopped\n");
 }
 
 /* Get current elapsed time from player */

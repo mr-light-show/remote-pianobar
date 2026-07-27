@@ -41,7 +41,7 @@
 #define HAVE_AV_REGISTER_ALL
 #endif
 
-/* May also be set by -DHAVE_DEBUGLOG (e.g. release CI); avoid redefinition warnings. */
+/* Enabled by default via Makefile (-DHAVE_DEBUGLOG). Without that, auto-define when NDEBUG is unset. */
 #if !defined(HAVE_DEBUGLOG) && !defined(NDEBUG)
 #define HAVE_DEBUGLOG
 #endif

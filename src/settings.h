@@ -153,6 +153,8 @@ typedef struct {
 	char *audioPipe;
 	char keys[BAR_KS_COUNT];
 	int sampleRate;
+	/* PIANOBAR_DEBUG bit mask; overridden by PIANOBAR_DEBUG env when set */
+	unsigned int debug;
 	BarMsgFormatStr_t msgFormat[MSG_COUNT];
 	
 	/* Station display name overrides */
