@@ -77,6 +77,7 @@ bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
 static char *last_broadcast_msg = NULL;
+static PianoStation_t *g_mock_reconnect_stations = NULL;
 
 static void
 mock_broadcast (const char *message, size_t len)
@@ -385,6 +386,7 @@ read_default_settings (BarSettings_t *settings)
 	snprintf (cfg, sizeof (cfg), "%s/config", sub);
 	FILE *f = fopen (cfg, "w");
 	ck_assert_ptr_nonnull (f);
+	ck_assert_int_ge (fprintf (f, "user = testuser\npassword = testpass\n"), 30);
 	fclose (f);
 
 	ck_assert_int_eq (setenv ("HOME", tmpl, 1), 0);
@@ -522,11 +524,18 @@ static bool
 mock_reconnect_login_stations (BarApp_t *app, const PianoRequestType_t type, void *data,
                                PianoReturn_t *pRet, CURLcode *wRet)
 {
-	(void) app;
 	(void) data;
-	if (type == PIANO_REQUEST_LOGIN || type == PIANO_REQUEST_GET_STATIONS) {
+	if (type == PIANO_REQUEST_LOGIN) {
 		*pRet = PIANO_RET_OK;
 		*wRet = CURLE_OK;
+		return true;
+	}
+	if (type == PIANO_REQUEST_GET_STATIONS) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		if (g_mock_reconnect_stations != NULL) {
+			app->ph.stations = g_mock_reconnect_stations;
+		}
 		return true;
 	}
 	return false;
@@ -564,14 +573,135 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 	                            app.settings.partnerPassword, app.settings.device,
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
-	app.ph.stations = &station;
 
 	BarSocketIoSetBroadcastCallback (mock_broadcast);
 	clear_mock ();
+	g_mock_reconnect_stations = &station;
 
 	BarUiPianoCallSetTestHook (mock_reconnect_login_stations);
 	BarUiActPandoraReconnect (&app, NULL, NULL, 1);
 	BarUiPianoCallClearTestHook ();
+	g_mock_reconnect_stations = NULL;
+
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
+	ck_assert_ptr_null (app.lastStationId);
+	g_mock_reconnect_stations = NULL;
+
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	ws_context_destroy (&ctx);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+static bool
+mock_wait_parked_idle_fail (const BarApp_t *app, unsigned int timeoutMs)
+{
+	(void) app;
+	(void) timeoutMs;
+	return false;
+}
+
+START_TEST (test_ui_do_pandora_disconnect_logs_when_manager_not_parked)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t *song;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "resume-station";
+	station.name = "Resume";
+	song = calloc (1, sizeof (*song));
+	ck_assert_ptr_nonnull (song);
+	song->title = strdup ("Queued");
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetNextStation (&app, &station);
+	BarStateSetPlaylist (&app, song);
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+	log_set_debug_mask (DEBUG_UI);
+	BarPlaybackManagerWaitParkedIdleSetTestHook (mock_wait_parked_idle_fail);
+
+	BarUiDoPandoraDisconnect (&app, "user", NULL);
+
+	BarPlaybackManagerWaitParkedIdleClearTestHook ();
+	log_set_debug_mask (0);
+	g_mock_reconnect_stations = NULL;
+
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+START_TEST (test_ui_act_pandora_reconnect_logs_when_manager_not_parked)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t *song;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.wsContext = &ctx;
+	ws_context_init (&ctx);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "resume-station";
+	station.name = "Resume";
+	song = calloc (1, sizeof (*song));
+	ck_assert_ptr_nonnull (song);
+	song->title = strdup ("Queued");
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetNextStation (&app, &station);
+	BarStateSetPlaylist (&app, song);
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+	log_set_debug_mask (DEBUG_UI);
+	g_mock_reconnect_stations = &station;
+	BarPlaybackManagerWaitParkedIdleSetTestHook (mock_wait_parked_idle_fail);
+	BarUiPianoCallSetTestHook (mock_reconnect_login_stations);
+
+	BarUiActPandoraReconnect (&app, NULL, NULL, 1);
+
+	BarUiPianoCallClearTestHook ();
+	BarPlaybackManagerWaitParkedIdleClearTestHook ();
+	log_set_debug_mask (0);
+	g_mock_reconnect_stations = NULL;
 
 	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
 	ck_assert_ptr_null (app.lastStationId);
@@ -579,6 +709,43 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	ws_context_destroy (&ctx);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+START_TEST (test_ui_do_pandora_disconnect_waits_for_running_manager)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+	BarPlaybackManagerWaitParkedIdleClearTestHook ();
+	ck_assert (BarPlaybackManagerStart (&app));
+	usleep (50000);
+
+	BarUiDoPandoraDisconnect (&app, "user", NULL);
+
+	BarPlaybackManagerStop (&app);
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
@@ -1453,6 +1620,9 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_idle_timeout_message);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_clears_playback_state_before_destroy);
 	tcase_add_test (tc, test_ui_act_pandora_reconnect_clears_playback_state);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_logs_when_manager_not_parked);
+	tcase_add_test (tc, test_ui_act_pandora_reconnect_logs_when_manager_not_parked);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_running_manager);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_parked_manager);
 	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
 	tcase_add_test (tc, test_ui_act_song_info_quickmix_resolves_child_station);

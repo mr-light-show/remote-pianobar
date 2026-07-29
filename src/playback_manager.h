@@ -57,3 +57,9 @@ bool BarPlaybackShouldParkIdle(const BarApp_t *app);
  * Returns false on timeout. No-op when the manager thread is not running. */
 bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutMs);
 
+typedef bool (*BarPlaybackManagerWaitParkedIdleTestHook_fn)(const BarApp_t *app,
+		unsigned int timeoutMs);
+void BarPlaybackManagerWaitParkedIdleSetTestHook(
+		BarPlaybackManagerWaitParkedIdleTestHook_fn hook);
+void BarPlaybackManagerWaitParkedIdleClearTestHook(void);
+
