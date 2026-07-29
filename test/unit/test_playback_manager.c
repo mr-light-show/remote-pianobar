@@ -342,6 +342,48 @@ START_TEST(test_wait_parked_idle_when_already_idle) {
 }
 END_TEST
 
+START_TEST(test_wait_parked_idle_when_manager_running_and_parked) {
+	BarApp_t app;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert(BarPlaybackManagerStart(&app));
+	usleep(50000);
+	ck_assert(BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_TIMEOUT_MS));
+
+	BarPlaybackManagerStop(&app);
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+START_TEST(test_wait_parked_idle_times_out_when_not_parked) {
+	BarApp_t app;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_PLAYING;
+
+	ck_assert(BarPlaybackManagerStart(&app));
+	usleep(50000);
+	ck_assert(!BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_POLL_MS));
+
+	BarPlaybackManagerStop(&app);
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
@@ -360,6 +402,8 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_manager_wakes_on_state_signal);
 	tcase_add_test(tc, test_manager_thread_uses_timed_wait_when_not_parked);
 	tcase_add_test(tc, test_wait_parked_idle_when_already_idle);
+	tcase_add_test(tc, test_wait_parked_idle_when_manager_running_and_parked);
+	tcase_add_test(tc, test_wait_parked_idle_times_out_when_not_parked);
 	suite_add_tcase(s, tc);
 	return s;
 }

@@ -13,6 +13,7 @@
 #include "../../src/bar_constants.h"
 #include "../../src/bar_state.h"
 #include "../../src/l10n.h"
+#include "../../src/log.h"
 #include "../../src/main.h"
 #include "../../src/player.h"
 #include "../../src/settings.h"
@@ -22,6 +23,7 @@
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "../../src/websocket_bridge.h"
+#include "../../src/playback_manager.h"
 
 /* Declaration only — avoid ui_dispatch.h (pulls full shortcut table + ui_act.h). */
 void BarUiActPandoraReconnect (BarApp_t *app, PianoStation_t *selStation,
@@ -457,6 +459,164 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	ck_assert (strstr (last_broadcast_msg, "idle_timeout") != NULL);
 
 	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+START_TEST (test_ui_do_pandora_disconnect_clears_playback_state_before_destroy)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t *song;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "resume-station";
+	station.name = "Resume";
+	song = calloc (1, sizeof (*song));
+	ck_assert_ptr_nonnull (song);
+	song->title = strdup ("Queued");
+	ck_assert_ptr_nonnull (song->title);
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetNextStation (&app, &station);
+	BarStateSetPlaylist (&app, song);
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	BarUiDoPandoraDisconnect (&app, "user", NULL);
+
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
+	ck_assert_ptr_nonnull (app.lastStationId);
+	ck_assert_str_eq (app.lastStationId, "resume-station");
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+static bool
+mock_reconnect_login_stations (BarApp_t *app, const PianoRequestType_t type, void *data,
+                               PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_LOGIN || type == PIANO_REQUEST_GET_STATIONS) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t *song;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.wsContext = &ctx;
+	ws_context_init (&ctx);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "resume-station";
+	station.name = "Resume";
+	song = calloc (1, sizeof (*song));
+	ck_assert_ptr_nonnull (song);
+	song->title = strdup ("Queued");
+	ck_assert_ptr_nonnull (song->title);
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetNextStation (&app, &station);
+	BarStateSetPlaylist (&app, song);
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+	app.ph.stations = &station;
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+
+	BarUiPianoCallSetTestHook (mock_reconnect_login_stations);
+	BarUiActPandoraReconnect (&app, NULL, NULL, 1);
+	BarUiPianoCallClearTestHook ();
+
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
+	ck_assert_ptr_null (app.lastStationId);
+
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	ws_context_destroy (&ctx);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+START_TEST (test_ui_do_pandora_disconnect_waits_for_parked_manager)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_PLAYING;
+	station.id = "park-timeout";
+	BarStateSetNextStation (&app, &station);
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+	log_set_debug_mask (DEBUG_UI);
+
+	ck_assert (BarPlaybackManagerStart (&app));
+	usleep (50000);
+	ck_assert (!BarPlaybackManagerWaitParkedIdle (&app, BAR_PLAYER_STOP_POLL_MS));
+	BarPlaybackManagerStop (&app);
+
+	log_set_debug_mask (0);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -1291,6 +1451,9 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_transform_owned_station_skips_pandora_call);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_when_player_already_dead);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_idle_timeout_message);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_clears_playback_state_before_destroy);
+	tcase_add_test (tc, test_ui_act_pandora_reconnect_clears_playback_state);
+	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_parked_manager);
 	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
 	tcase_add_test (tc, test_ui_act_song_info_quickmix_resolves_child_station);
 	tcase_add_test (tc, test_ui_act_print_upcoming_lists_and_broadcasts);
