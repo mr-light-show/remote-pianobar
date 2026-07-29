@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include <unistd.h>
 
 #include "../../src/bar_state.h"
+#include "../../src/bar_constants.h"
 #include "../../src/main.h"
 #include "../../src/player.h"
 #include "../../src/playback_manager.h"
@@ -325,6 +326,22 @@ START_TEST(test_manager_wakes_on_state_signal) {
 }
 END_TEST
 
+START_TEST(test_wait_parked_idle_when_already_idle) {
+	BarApp_t app;
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert(BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_TIMEOUT_MS));
+
+	pthread_mutex_destroy(&app.player.lock);
+	BarStateDestroy(&app);
+}
+END_TEST
+
 Suite *playback_manager_suite(void) {
 	Suite *s = suite_create("PlaybackManager");
 	TCase *tc = tcase_create("State machine");
@@ -342,6 +359,7 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_should_not_park_when_playlist_set);
 	tcase_add_test(tc, test_manager_wakes_on_state_signal);
 	tcase_add_test(tc, test_manager_thread_uses_timed_wait_when_not_parked);
+	tcase_add_test(tc, test_wait_parked_idle_when_already_idle);
 	suite_add_tcase(s, tc);
 	return s;
 }

@@ -65,6 +65,22 @@ bool BarPlaybackShouldParkIdle(const BarApp_t *app)
 	    && BarStateGetNextStation(app) == NULL;
 }
 
+bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutMs) {
+	if (!atomic_load(&g_running)) {
+		return true;
+	}
+
+	unsigned int elapsed = 0;
+	while (elapsed < timeoutMs) {
+		if (BarPlaybackShouldParkIdle(app)) {
+			return true;
+		}
+		usleep((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
+		elapsed += BAR_PLAYER_STOP_POLL_MS;
+	}
+	return BarPlaybackShouldParkIdle(app);
+}
+
 /*	Join thread with timeout - prevents deadlock if player hangs on network
  *	Returns true if thread joined successfully, false if timeout expired
  */

@@ -53,3 +53,7 @@ void BarPlaybackManagerStop(BarApp_t *app);
 /* True when playback manager should block on cond_wait (no 1 Hz poll). */
 bool BarPlaybackShouldParkIdle(const BarApp_t *app);
 
+/* Wait until the playback manager is parked idle (no fetch/start in progress).
+ * Returns false on timeout. No-op when the manager thread is not running. */
+bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutMs);
+
