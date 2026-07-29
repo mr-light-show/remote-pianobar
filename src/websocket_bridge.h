@@ -63,7 +63,7 @@ void BarWsStopPlaybackManager(BarApp_t *app);
 void BarWsRelaunchIfNeeded(BarApp_t *app, int argc, char **argv);
 bool BarWsAcquireSingletonLock(BarApp_t *app);
 void BarWsReleaseSingletonLock(BarApp_t *app);
-void BarWsPrintStartupInfo(BarApp_t *app);
+void BarWsPrintStartupInfo(const BarApp_t *app);
 
 /* Input setup for web-only mode */
 void BarWsConfigureWebOnlyInput(BarApp_t *app);

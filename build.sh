@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Build script for Remote Pianobar
-# Usage: ./build.sh [debug <level>]
+# Usage: ./build.sh [minimal|--minimal] [debug <level>]
 
 set -e  # Exit on error
 
@@ -191,6 +191,13 @@ show_debug_help() {
     exit 1
 }
 
+# Check if minimal build is requested (before debug / default production paths)
+MINIMAL_BUILD=0
+if [ "$1" = "minimal" ] || [ "$1" = "--minimal" ]; then
+    MINIMAL_BUILD=1
+    shift
+fi
+
 # Check if debug mode is requested
 if [ "$1" = "debug" ]; then
     # Require debug level parameter
@@ -234,10 +241,19 @@ else
     
     # Build with optimization
     echo "Building optimized version..."
-    make
+    if [ "$MINIMAL_BUILD" = "1" ]; then
+        echo "Minimal build: runtime debug logging disabled (debug= in config has no effect)."
+        make MINIMAL=1
+    else
+        make
+    fi
     echo ""
     
-    echo "✓ Production build complete!"
+    if [ "$MINIMAL_BUILD" = "1" ]; then
+        echo "✓ Minimal production build complete!"
+    else
+        echo "✓ Production build complete!"
+    fi
     echo ""
     echo "Run with: ./pianobar"
     echo ""

@@ -111,6 +111,7 @@ autostart_station =
 | `max_gain` | `10` | Maximum gain in dB (clamps ReplayGain so volume does not exceed this) |
 | `sample_rate` | `0` (stream default) | Force specific sample rate (Hz) |
 | `buffer_seconds` | `5` | Audio buffer size in seconds |
+| `debug` | `0` | Debug log bitmask (same values as `PIANOBAR_DEBUG`; env overrides config). No output when `0`; requires a **standard** build (`make`). Ignored in **minimal** builds (`make minimal`). |
 | `audio_pipe` | (none) | Path to audio output pipe |
 | `alsa_mixer` | (none) | ALSA mixer control name (e.g., `Digital`, `Master`) for system volume mode when using ALSA backend |
 
@@ -282,7 +283,8 @@ These options are only available when pianobar is compiled with `WEBSOCKET_ENABL
 
 When using `ui_mode = web`, you should also configure:
 - `pid_file`: Location to write process ID (for managing the daemon)
-- `log_file`: Location for log output (since stdout/stderr are redirected)
+- `log_file`: Optional file for log output; when unset, stderr goes to the parent process (e.g. systemd journal)
+- `debug`: Optional debug bitmask when not using `PIANOBAR_DEBUG` in the environment (standard builds only; no effect with `make minimal`)
 
 ### Web UI Example Configuration
 

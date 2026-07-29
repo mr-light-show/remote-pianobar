@@ -255,6 +255,7 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 			"system_volume_player_gain = -12\n"
 			"max_gain = 10\n"
 			"sample_rate = 44100\n"
+			"debug = 15\n"
 			"gain_mul = 1.5\n"
 			"ui_mode = web\n"
 			"websocket_port = 8123\n"
@@ -293,6 +294,7 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 	ck_assert_int_eq (s.systemVolumePlayerGain, -12);
 	ck_assert_int_eq (s.maxGain, 10);
 	ck_assert_int_eq (s.sampleRate, 44100);
+	ck_assert_uint_eq (s.debug, 15);
 	ck_assert (s.gainMul > 1.49f && s.gainMul < 1.51f);
 #ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_WEB);

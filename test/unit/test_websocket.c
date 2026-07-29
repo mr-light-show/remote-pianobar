@@ -32,8 +32,12 @@ THE SOFTWARE.
 #include "../../src/system_volume.h"
 #include "../../src/websocket_bridge.h"
 #include "../../src/websocket/core/websocket.h"
+#include "../../src/websocket/core/websocket_lws_log.h"
 #include "../../src/websocket/protocol/socketio.h"
+#include "../../src/websocket/daemon/daemon.h"
+#include "../../src/log.h"
 #include <json-c/json.h>
+#include <libwebsockets.h>
 #include <pthread.h>
 
 /* Wire-compat capture buffer */
@@ -400,6 +404,207 @@ START_TEST(test_websocket_bridge_print_helpers_and_input_setup) {
 }
 END_TEST
 
+#ifdef HAVE_DEBUGLOG
+
+static void capture_stderr_to_pipe (int pipefd[2], int *saved_stderr)
+{
+	ck_assert_int_eq (pipe (pipefd), 0);
+	*saved_stderr = dup (STDERR_FILENO);
+	ck_assert (*saved_stderr >= 0);
+	ck_assert (dup2 (pipefd[1], STDERR_FILENO) >= 0);
+	close (pipefd[1]);
+}
+
+static void restore_stderr_from_pipe (int pipefd_read, int saved_stderr, char *buf,
+		size_t buf_size, ssize_t *out_len)
+{
+	fflush (stderr);
+	dup2 (saved_stderr, STDERR_FILENO);
+	close (saved_stderr);
+	*out_len = read (pipefd_read, buf, buf_size - 1);
+	close (pipefd_read);
+	if (*out_len < 0) {
+		*out_len = 0;
+	}
+	buf[*out_len] = '\0';
+}
+
+START_TEST (test_lws_log_message_strips_prefix_and_handles_null)
+{
+	ck_assert_str_eq (BarWsLwsLogMessage (NULL), "");
+	ck_assert_str_eq (BarWsLwsLogMessage ("plain message\n"), "plain message\n");
+	ck_assert_str_eq (BarWsLwsLogMessage (
+		"[2026/07/27 15:48:52:2679] N: lws_create_context: ok\n"),
+		"lws_create_context: ok\n");
+}
+END_TEST
+
+START_TEST (test_lws_log_emit_routes_by_level)
+{
+	int pipefd[2];
+	int saved_stderr;
+	char buf[4096];
+	ssize_t n;
+
+	capture_stderr_to_pipe (pipefd, &saved_stderr);
+	log_set_debug_mask (DEBUG_WEBSOCKET);
+
+	BarWsLwsLogEmit (LLL_NOTICE,
+		"[2026/07/27 15:48:52:2679] N: lws_socket_bind: source ads 0.0.0.0\n");
+	BarWsLwsLogEmit (LLL_ERR, "[2026/07/27 15:48:52:2688] E: bind failed\n");
+	BarWsLwsLogEmit (LLL_WARN, "");
+	BarWsLwsConfigureLogging ();
+
+	restore_stderr_from_pipe (pipefd[0], saved_stderr, buf, sizeof (buf), &n);
+	log_set_debug_mask (0);
+
+	ck_assert (n > 0);
+	ck_assert (strstr (buf, "WebSocket") != NULL);
+	ck_assert (strstr (buf, "lws_socket_bind") != NULL);
+	ck_assert (strstr (buf, "Error") != NULL);
+	ck_assert (strstr (buf, "bind failed") != NULL);
+}
+END_TEST
+
+START_TEST (test_websocket_init_destroy_emits_debug_lifecycle_logs)
+{
+	BarApp_t app;
+	int pipefd[2];
+	int saved_stderr;
+	char buf[8192];
+	ssize_t n;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = 18081;
+
+	capture_stderr_to_pipe (pipefd, &saved_stderr);
+	log_set_debug_mask (DEBUG_WEBSOCKET);
+
+	if (BarWebsocketInit (&app)) {
+		BarWebsocketDestroy (&app);
+	}
+
+	restore_stderr_from_pipe (pipefd[0], saved_stderr, buf, sizeof (buf), &n);
+	log_set_debug_mask (0);
+	BarSettingsDestroy (&app.settings);
+
+	ck_assert (n > 0);
+	ck_assert (strstr (buf, "Server started on port 18081") != NULL);
+	ck_assert (strstr (buf, "Server stopped") != NULL);
+}
+END_TEST
+
+#endif /* HAVE_DEBUGLOG */
+
+START_TEST (test_websocket_bridge_print_bind_all_and_startup_info)
+{
+	BarApp_t app;
+	FILE *out;
+	char buf[512];
+	size_t n;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	out = tmpfile ();
+	ck_assert_ptr_nonnull (out);
+
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+	app.settings.websocketHost = strdup ("0.0.0.0");
+	app.settings.websocketPort = 8080;
+	BarWsPrintWebInfo (&app, out);
+	rewind (out);
+	memset (buf, 0, sizeof (buf));
+	n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void) n;
+	ck_assert (strstr (buf, "http://0.0.0.0:8080/") != NULL);
+	{
+		char lan[INET_ADDRSTRLEN];
+
+		BarDaemonGetIPv4Address (lan, sizeof (lan));
+		if (lan[0] != '\0' && strcmp (lan, "127.0.0.1") != 0) {
+			char expect[128];
+
+			snprintf (expect, sizeof (expect), "http://%s:8080/", lan);
+			ck_assert (strstr (buf, expect) != NULL);
+		}
+	}
+
+	free (app.settings.websocketHost);
+	app.settings.websocketHost = NULL;
+	app.settings.websocketPort = 9999;
+	rewind (out);
+	ck_assert_int_eq (ftruncate (fileno (out), 0), 0);
+	BarWsPrintWebInfo (&app, out);
+	rewind (out);
+	memset (buf, 0, sizeof (buf));
+	n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void) n;
+	ck_assert (strstr (buf, "http://127.0.0.1:9999/") != NULL);
+
+	app.settings.webuiPath = strdup ("/custom/webui");
+	rewind (out);
+	ck_assert_int_eq (ftruncate (fileno (out), 0), 0);
+	BarWsPrintWebInfo (&app, out);
+	rewind (out);
+	memset (buf, 0, sizeof (buf));
+	n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void) n;
+	ck_assert (strstr (buf, "Web UI files: /custom/webui") != NULL);
+	free (app.settings.webuiPath);
+	app.settings.webuiPath = NULL;
+
+	rewind (out);
+	ck_assert_int_eq (ftruncate (fileno (out), 0), 0);
+	free (app.settings.websocketHost);
+	app.settings.websocketHost = strdup ("::");
+	app.settings.websocketPort = 8080;
+	BarWsPrintWebInfo (&app, out);
+	rewind (out);
+	memset (buf, 0, sizeof (buf));
+	n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void) n;
+	ck_assert (strstr (buf, "http://:::8080/") != NULL);
+
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.webuiPath = NULL;
+	BarWsPrintWebInfo (&app, out);
+	rewind (out);
+	memset (buf, 0, sizeof (buf));
+	n = fread (buf, 1, sizeof (buf) - 1, out);
+	(void) n;
+	ck_assert (strstr (buf, "Web UI files: (using built-in)") != NULL);
+
+#ifdef HAVE_DEBUGLOG
+	{
+		int pipefd[2];
+		int saved_stderr;
+		char errbuf[2048];
+		ssize_t errlen;
+
+		capture_stderr_to_pipe (pipefd, &saved_stderr);
+		BarWsPrintStartupInfo (&app);
+		restore_stderr_from_pipe (pipefd[0], saved_stderr, errbuf,
+		                         sizeof (errbuf), &errlen);
+		ck_assert (strstr (errbuf, "Welcome") != NULL);
+		ck_assert (strstr (errbuf, "http://:::") != NULL);
+
+		capture_stderr_to_pipe (pipefd, &saved_stderr);
+		app.settings.uiMode = BAR_UI_MODE_BOTH;
+		BarWsPrintStartupInfo (&app);
+		restore_stderr_from_pipe (pipefd[0], saved_stderr, errbuf,
+		                         sizeof (errbuf), &errlen);
+		ck_assert_int_eq (errlen, 0);
+	}
+#endif
+
+	fclose (out);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST(test_websocket_schedule_volume_broadcast_sets_pending_flag) {
 	BarWsContext_t ctx;
 	memset (&ctx, 0, sizeof (ctx));
@@ -597,6 +802,12 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);
 	tcase_add_test(tc_core, test_websocket_bridge_both_mode_is_web_active);
 	tcase_add_test(tc_core, test_websocket_bridge_print_helpers_and_input_setup);
+	tcase_add_test(tc_core, test_websocket_bridge_print_bind_all_and_startup_info);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test(tc_core, test_lws_log_message_strips_prefix_and_handles_null);
+	tcase_add_test(tc_core, test_lws_log_emit_routes_by_level);
+	tcase_add_test(tc_core, test_websocket_init_destroy_emits_debug_lifecycle_logs);
+#endif
 	tcase_add_test(tc_core, test_websocket_bridge_predicates_and_cli_noops);
 	
 	suite_add_tcase(s, tc_core);

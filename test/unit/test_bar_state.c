@@ -72,7 +72,7 @@ START_TEST(test_bar_state_debug_state_no_rwlock_cli) {
 	fclose(null_out);
 
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
-	log_init();
+	log_init(0);
 	memset(&app, 0, sizeof(app));
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	BarStateInit(&app);
@@ -127,7 +127,7 @@ START_TEST(test_bar_state_debug_state_lock_logging) {
 	fclose(null_out);
 
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
-	log_init();
+	log_init(0);
 	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
 
 	BarStateGetPlaylist(&app);
@@ -177,7 +177,7 @@ START_TEST(test_bar_state_debug_state_lock_logging_web) {
 	fclose(null_out);
 
 	ck_assert_int_eq(setenv("PIANOBAR_DEBUG", "64", 1), 0);
-	log_init();
+	log_init(0);
 	bar_state_test_setup(&app, BAR_UI_MODE_WEB);
 
 	BarStateGetPlaylist(&app);

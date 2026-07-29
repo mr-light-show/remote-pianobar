@@ -291,6 +291,7 @@ static const BarConfigKey_t commonKeys[] = {
 	{"system_volume_player_gain", CFG_INT, offsetof (BarSettings_t, systemVolumePlayerGain), -60, 60, NULL},
 	{"max_gain",           CFG_INT,    offsetof (BarSettings_t, maxGain),            0, 100, NULL},
 	{"sample_rate",        CFG_INT,    offsetof (BarSettings_t, sampleRate),         8000, 192000, NULL},
+	{"debug",              CFG_UINT,   offsetof (BarSettings_t, debug),              0, INT_MAX, NULL},
 	/* float field */
 	{"gain_mul",           CFG_FLOAT,  offsetof (BarSettings_t, gainMul),            0, 0, NULL},
 	/* custom enum/complex parsers */

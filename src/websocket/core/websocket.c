@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "../../log.h"
 #include "../../system_volume.h"
 #include "websocket.h"
+#include "websocket_lws_log.h"
 #include "../protocol/socketio.h"
 #include "../http/http_server.h"
 
@@ -498,11 +499,8 @@ bool BarWebsocketInit(BarApp_t *app) {
 	
 	/* Initialize libwebsockets */
 	memset(&info, 0, sizeof(info));
-	
-#ifndef HAVE_DEBUGLOG
-	/* Suppress libwebsockets startup messages - only show errors and warnings */
-	lws_set_log_level(LLL_ERR | LLL_WARN, NULL);
-#endif
+
+	BarWsLwsConfigureLogging();
 	
 	info.port = app->settings.websocketPort;
 	info.iface = app->settings.websocketHost ? app->settings.websocketHost : "0.0.0.0";
@@ -540,7 +538,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	/* Set up Socket.IO broadcast callback */
 	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);
 	
-	log_write(LOG_ERROR, "Server started on port %d\n",
+	log_write(DEBUG_WEBSOCKET, "Server started on port %d\n",
 	        app->settings.websocketPort);
 	
 	/* Start WebSocket thread */
@@ -557,7 +555,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 		return false;
 	}
 	
-	log_write(LOG_ERROR, "Thread created successfully\n");
+	log_write(DEBUG_WEBSOCKET, "Thread created successfully\n");
 	
 	return true;
 }
@@ -568,7 +566,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		return;
 	}
 	
-	log_write(LOG_ERROR, "Stopping server...\n");
+	log_write(DEBUG_WEBSOCKET, "Stopping server...\n");
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
@@ -581,9 +579,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	}
 	
 	/* Wait for thread to finish */
-	log_write(LOG_ERROR, "Waiting for thread to stop...\n");
+	log_write(DEBUG_WEBSOCKET, "Waiting for thread to stop...\n");
 	pthread_join(ctx->thread, NULL);
-	log_write(LOG_ERROR, "Thread stopped\n");
+	log_write(DEBUG_WEBSOCKET, "Thread stopped\n");
 	
 	/* Now safe to cleanup (thread is dead) */
 	if (ctx->context) {
@@ -607,7 +605,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	free(ctx);
 	app->wsContext = NULL;
 	
-	log_write(LOG_ERROR, "Server stopped\n");
+	log_write(DEBUG_WEBSOCKET, "Server stopped\n");
 }
 
 /* Get current elapsed time from player */

@@ -22,10 +22,8 @@ jobs:
           libwebsockets-dev pkg-config build-essential
     - name: Install BLAS/LAPACK (not cached due to symlink issues)
       run: sudo apt-get install -y libblas-dev liblapack-dev
-    # Default CFLAGS (-O2 -DNDEBUG) disables HAVE_DEBUGLOG in src/config.h, so PIANOBAR_DEBUG
-    # has no effect. PR builds omit NDEBUG so debug logging is compiled in; use e.g.
-    # PIANOBAR_DEBUG=6 ./pianobar at runtime.
-    - name: Build pianobar (debug logging for PRs)
+    # Default `make` enables HAVE_DEBUGLOG; use debug=N in config or PIANOBAR_DEBUG at runtime.
+    - name: Build pianobar (debug symbols for PRs)
       if: github.event_name == 'pull_request'
       run: make CFLAGS="-g -O0"
     - name: Build pianobar (release on main)

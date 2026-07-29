@@ -38,8 +38,9 @@ typedef enum {
 	DEBUG_STATE = 64,               /* stateRwlock / BarState* tracing (noisy) */
 } logKind;
 
-/* Initialize log module (reads PIANOBAR_DEBUG for debug mask). Call once at startup. */
-void log_init(void);
+/* Initialize log module. Uses PIANOBAR_DEBUG when set; otherwise config_debug from
+ * settings (debug = N in config). Call once at startup after BarSettingsRead. */
+void log_init(unsigned int config_debug);
 
 /* True after log_init if PIANOBAR_DEBUG was non-zero (HAVE_DEBUGLOG only). */
 bool log_is_any_debug_enabled(void);

@@ -764,12 +764,11 @@ int main (int argc, char **argv) {
 		return 1;
 	}
 
-	/* Output UI path and URL before starting in web or both mode
-	 * Do this AFTER relaunch check so it only prints once (in the final process) */
+	/* Output web-only startup on stderr (journal) after debug mask is ready */
+	log_init(app.settings.debug);
 	BarWsPrintStartupInfo(&app);
 
 	/* NOW do other initialization (after relaunch check, if any) */
-	log_init();
 
 
 	/* Disable Objective-C runtime fork safety check on macOS
@@ -889,7 +888,9 @@ int main (int argc, char **argv) {
 		return 0;
 	}
 	
-	BarPrintStartupInfo(&app, getpid(), false, stdout);
+	if (!BarIsWebOnlyMode (&app)) {
+		BarPrintStartupInfo(&app, getpid(), false, stdout);
+	}
 
 	if (!BarShouldSkipCliOutput(&app)) {
 		if (app.settings.keys[BAR_KS_HELP] == BAR_KS_DISABLED) {

@@ -174,6 +174,15 @@ make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 # The binary will be created as ./pianobar
 ```
 
+### Build variants
+
+| Variant | Command | Notes |
+|---------|---------|-------|
+| **Default** (recommended) | `make` | Optimized (`-O2`); `debug=N` in config and `PIANOBAR_DEBUG` work at runtime |
+| **Minimal** | `make minimal` or `./build.sh minimal` | Same optimization; omits `HAVE_DEBUGLOG` for a slightly smaller binary — `debug=` has no effect |
+| **Dev / symbols** | `make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"` | Debugging with gdb/lldb |
+| **Unified script** | `./build.sh` / `./build.sh --minimal` / `./build.sh debug 15` | Builds backend + web UI |
+
 ### Build with Debug Logging
 
 ```bash
