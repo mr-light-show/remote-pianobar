@@ -54,6 +54,16 @@ static pthread_t g_playbackThread;
 static _Atomic bool g_running = false;
 static _Atomic bool g_idleLogged = false;
 static _Atomic bool g_parkedLogged = false;
+static BarPlaybackManagerWaitParkedIdleTestHook_fn g_waitParkedIdleTestHook = NULL;
+
+void BarPlaybackManagerWaitParkedIdleSetTestHook(
+		BarPlaybackManagerWaitParkedIdleTestHook_fn hook) {
+	g_waitParkedIdleTestHook = hook;
+}
+
+void BarPlaybackManagerWaitParkedIdleClearTestHook(void) {
+	g_waitParkedIdleTestHook = NULL;
+}
 
 bool BarPlaybackShouldParkIdle(const BarApp_t *app)
 {
@@ -63,6 +73,26 @@ bool BarPlaybackShouldParkIdle(const BarApp_t *app)
 	}
 	return BarStateGetPlaylist(app) == NULL
 	    && BarStateGetNextStation(app) == NULL;
+}
+
+bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutMs) {
+	if (g_waitParkedIdleTestHook != NULL) {
+		return g_waitParkedIdleTestHook(app, timeoutMs);
+	}
+
+	if (!atomic_load(&g_running)) {
+		return true;
+	}
+
+	unsigned int elapsed = 0;
+	while (elapsed < timeoutMs) {
+		if (BarPlaybackShouldParkIdle(app)) {
+			return true;
+		}
+		usleep((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
+		elapsed += BAR_PLAYER_STOP_POLL_MS;
+	}
+	return BarPlaybackShouldParkIdle(app);
 }
 
 /*	Join thread with timeout - prevents deadlock if player hangs on network

@@ -41,6 +41,7 @@ THE SOFTWARE.
 #include "log.h"
 #include "system_volume.h"
 #include "station_display.h"
+#include "playback_manager.h"
 
 #ifdef WEBSOCKET_ENABLED
 #include "websocket/protocol/socketio.h"
@@ -768,6 +769,12 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 		app->lastStationId = curStation ? strdup(curStation->id) : NULL;
 	}
 	
+	/* Clear next station first so the playback manager cannot fetch a playlist
+	 * using station pointers that PianoDestroy will free. */
+	BarStateSetNextStation(app, NULL);
+	BarStateDrainPlaylist(app);
+	BarStateSetCurrentStation(app, NULL);
+
 	/* Stop current playback and wait for the playback manager to finish
 	 * cleaning up the player thread.  This prevents a race where we
 	 * destroy the Piano handle while the playback manager is still
@@ -781,10 +788,9 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 		}
 	}
 
-	/* Clear playlist and stations */
-	BarStateDrainPlaylist(app);
-	BarStateSetCurrentStation(app, NULL);
-	BarStateSetNextStation(app, NULL);
+	if (!BarPlaybackManagerWaitParkedIdle (app, BAR_PLAYER_STOP_TIMEOUT_MS)) {
+		log_write (DEBUG_UI, "PlaybackMgr: disconnect proceeding before park idle\n");
+	}
 	
 	/* Free song history */
 	if (app->songHistory != NULL) {
@@ -1266,6 +1272,13 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	free(app->lastStationId);
 	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
 
+	/* Clear next station before stop/destroy so the playback manager cannot
+	 * start BarPlaybackFetchPlaylist with a station pointer that PianoDestroy
+	 * will free. */
+	BarStateSetNextStation(app, NULL);
+	BarStateDrainPlaylist(app);
+	BarStateSetCurrentStation(app, NULL);
+
 	/* Signal player to stop, then wait for the playback manager thread to
 	 * fully clean up (join player thread, restore interrupt target to
 	 * &app->doQuit, set mode to PLAYER_DEAD).  Without this wait, the
@@ -1280,9 +1293,9 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 		}
 	}
 
-	BarStateDrainPlaylist(app);
-	BarStateSetCurrentStation(app, NULL);
-	BarStateSetNextStation(app, NULL);
+	if (!BarPlaybackManagerWaitParkedIdle (app, BAR_PLAYER_STOP_TIMEOUT_MS)) {
+		log_write (DEBUG_UI, "PlaybackMgr: reconnect proceeding before park idle\n");
+	}
 
 	pthread_mutex_lock(&app->pianoHttpMutex);
 	PianoDestroy(&app->ph);
