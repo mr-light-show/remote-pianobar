@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "../../src/main.h"
 #include "../../src/bar_state.h"
 #include "../../src/settings.h"
+#include "../../src/station_display.h"
 #include "../../src/log.h"
 
 #ifdef WEBSOCKET_ENABLED
@@ -478,6 +479,25 @@ START_TEST(test_bar_state_prepare_station_switch_by_id_resolves_under_lock) {
 }
 END_TEST
 
+START_TEST(test_bar_state_truncate_playlist_tail_empty_and_single) {
+	BarApp_t app;
+	PianoSong_t current;
+	memset(&current, 0, sizeof(current));
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateTruncatePlaylistTail(&app);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	app.playlist = &current;
+	BarStateTruncatePlaylistTail(&app);
+	ck_assert_ptr_eq(BarStateGetPlaylist(&app), &current);
+	ck_assert_ptr_null(current.head.next);
+
+	app.playlist = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
 START_TEST(test_bar_state_prepare_station_switch_truncates_tail) {
 	BarApp_t app;
 	PianoStation_t station;
@@ -500,6 +520,41 @@ START_TEST(test_bar_state_prepare_station_switch_truncates_tail) {
 	ck_assert_ptr_null(current.head.next);
 
 	app.playlist = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_prepare_station_switch_without_playlist) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&station, 0, sizeof(station));
+	station.id = (char *)"station";
+	station.name = (char *)"Station";
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStatePrepareStationSwitch(&app, &station);
+
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &station);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_prepare_station_switch_by_id_found_without_name_or_playlist) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&station, 0, sizeof(station));
+	station.id = (char *)"station";
+	station.name = NULL;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &station;
+
+	ck_assert(BarStatePrepareStationSwitchById(&app, "station"));
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &station);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	app.ph.stations = NULL;
 	bar_state_test_teardown(&app);
 }
 END_TEST
@@ -535,6 +590,65 @@ START_TEST(test_bar_state_apply_quickmix_ids_ignores_null_entries) {
 
 	app.ph.stations = NULL;
 	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_apply_quickmix_ids_handles_null_id_list) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	memset(&first, 0, sizeof(first));
+	memset(&second, 0, sizeof(second));
+	first.id = NULL;
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = (char *)"second";
+	second.useQuickMix = true;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &first;
+
+	BarStateApplyQuickMixIds(&app, NULL, 1);
+
+	ck_assert(!first.useQuickMix);
+	ck_assert(!second.useQuickMix);
+
+	app.ph.stations = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_update_station_display_names_handles_null_name) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&station, 0, sizeof(station));
+	station.name = NULL;
+	station.displayName = strdup("old");
+	ck_assert_ptr_nonnull(station.displayName);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &station;
+
+	BarStateUpdateStationDisplayNames(&app);
+
+	ck_assert_ptr_null(station.displayName);
+
+	app.ph.stations = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_update_station_display_names_empty_list) {
+	BarApp_t app;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateUpdateStationDisplayNames(&app);
+	ck_assert_ptr_null(app.ph.stations);
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_update_station_display_names_null_app_noop) {
+	BarUpdateStationDisplayNames(NULL);
+	ck_assert(1);
 }
 END_TEST
 
@@ -887,7 +1001,10 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_race_with_drain);
 	tcase_add_test(tc_playlist, test_bar_state_switch_station);
 	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_by_id_resolves_under_lock);
+	tcase_add_test(tc_playlist, test_bar_state_truncate_playlist_tail_empty_and_single);
 	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_truncates_tail);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_without_playlist);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_by_id_found_without_name_or_playlist);
 	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_by_id_null_returns_false);
 	suite_add_tcase(s, tc_playlist);
 
@@ -902,6 +1019,10 @@ Suite *bar_state_suite(void) {
 	TCase *tc_misc = tcase_create("Misc");
 	tcase_add_test(tc_misc, test_bar_state_is_pandora_connected);
 	tcase_add_test(tc_misc, test_bar_state_apply_quickmix_ids_ignores_null_entries);
+	tcase_add_test(tc_misc, test_bar_state_apply_quickmix_ids_handles_null_id_list);
+	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_handles_null_name);
+	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_empty_list);
+	tcase_add_test(tc_misc, test_bar_update_station_display_names_null_app_noop);
 	tcase_add_test(tc_misc, test_bar_state_piano_request_response_wrappers);
 	suite_add_tcase(s, tc_misc);
 

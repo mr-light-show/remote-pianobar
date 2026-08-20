@@ -21,6 +21,9 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <curl/curl.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +32,9 @@ THE SOFTWARE.
 #include "../../src/settings.h"
 #include "../../src/ui.h"
 #include "../../src/libpiano/piano.h"
+
+int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
+		curl_off_t ultotal, curl_off_t ulnow);
 
 static char *read_tmpfile (FILE *stream)
 {
@@ -203,6 +209,16 @@ START_TEST (test_sorted_stations_orders_by_name_za)
 }
 END_TEST
 
+START_TEST (test_progress_cb_returns_interrupt_state)
+{
+	_Atomic sig_atomic_t interrupted = 0;
+
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 0);
+	atomic_store_explicit (&interrupted, 1, memory_order_relaxed);
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 1);
+}
+END_TEST
+
 static bool
 mock_ui_piano_logged (BarApp_t *app, const PianoRequestType_t type, void *data,
                       PianoReturn_t *pRet, CURLcode *wRet)
@@ -247,6 +263,7 @@ Suite *ui_suite (void)
 #endif
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
+	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
 	suite_add_tcase (s, tc);
 	return s;
