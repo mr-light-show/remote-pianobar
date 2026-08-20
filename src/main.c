@@ -496,7 +496,7 @@ static void BarMainLoop (BarApp_t *app) {
 	bool promptedForStation = false;
 
 
-	while (!app->doQuit) {
+	while (!atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 		/* One-time prompt if no station selected */
 		if (!promptedForStation && BarStateGetNextStation(app) == NULL && 
 		    BarStateGetCurrentStation(app) == NULL) {
@@ -514,8 +514,8 @@ static void BarMainLoop (BarApp_t *app) {
 		/* Original playback state machine for non-WebSocket builds */
 		/* song finished playing, clean up things/scrobble song */
 		if (BarPlayerGetMode (player) == PLAYER_FINISHED) {
-			if (player->interrupted != 0) {
-				app->doQuit = 1;
+			if (atomic_load_explicit (&player->interrupted, memory_order_relaxed) != 0) {
+				atomic_store_explicit (&app->doQuit, 1, memory_order_relaxed);
 			}
 			BarMainPlayerCleanup (app, &playerThread);
 		}
@@ -530,7 +530,8 @@ static void BarMainLoop (BarApp_t *app) {
 			}
 			PianoSong_t *playlist = BarStateGetPlaylist(app);
 			PianoStation_t *nextStation = BarStateGetNextStation(app);
-			if (playlist == NULL && nextStation != NULL && !app->doQuit) {
+			if (playlist == NULL && nextStation != NULL &&
+					!atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 				PianoStation_t *curStation = BarStateGetCurrentStation(app);
 				if (nextStation != curStation) {
 					BarUiPrintStation (&app->settings, nextStation);
@@ -968,6 +969,9 @@ int main (int argc, char **argv) {
 		close (app.input.fds[1]);
 	}
 
+	/* Stop the WebSocket service thread before shared app state is torn down. */
+	BarWsDestroy(&app);
+
 	/* write statefile */
 	BarSettingsWrite (app.curStation, &app.settings);
 
@@ -979,9 +983,6 @@ int main (int argc, char **argv) {
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);
 	free (app.lastStationId);
-	
-	/* Cleanup WebSocket server */
-	BarWsDestroy(&app);
 	
 	/* Release lock file (closes fd which releases flock) */
 	BarWsReleaseSingletonLock(&app);
@@ -1003,4 +1004,3 @@ int main (int argc, char **argv) {
 
 	return 0;
 }
-

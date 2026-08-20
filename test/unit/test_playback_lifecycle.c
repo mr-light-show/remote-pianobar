@@ -36,7 +36,9 @@ THE SOFTWARE.
 static void setup_playback_app (BarApp_t *app) {
 	memset (app, 0, sizeof (*app));
 	BarSettingsInit (&app->settings);
+#ifdef WEBSOCKET_ENABLED
 	app->settings.uiMode = BAR_UI_MODE_CLI;
+#endif
 	app->settings.npSongFormat = strdup ("%t");
 	app->settings.loveIcon = strdup ("+");
 	app->settings.banIcon = strdup ("-");

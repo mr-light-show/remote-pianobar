@@ -24,6 +24,7 @@ THE SOFTWARE.
 /* Station display name transformation */
 
 #include "station_display.h"
+#include "bar_state.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -146,22 +147,8 @@ char* BarApplyStationNameOverrides(const BarSettings_t *settings, const char *or
 
 /* Update displayName for all stations in the list */
 void BarUpdateStationDisplayNames(BarApp_t *app) {
-	if (!app || !app->ph.stations) {
+	if (!app) {
 		return;
 	}
-	
-	PianoStation_t *station = app->ph.stations;
-	while (station) {
-		/* Free old displayName */
-		free(station->displayName);
-		station->displayName = NULL;
-		
-		/* Compute new displayName */
-		if (station->name != NULL) {
-			station->displayName = BarApplyStationNameOverrides(&app->settings, station->name);
-		}
-		
-		station = (PianoStation_t *)station->head.next;
-	}
+	BarStateUpdateStationDisplayNames(app);
 }
-

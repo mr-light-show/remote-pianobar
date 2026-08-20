@@ -419,7 +419,8 @@ static void* BarWebsocketThread(void *arg) {
 	
 	log_write(DEBUG_WEBSOCKET, "Thread started\n");
 	
-	while (ctx->threadRunning && !app->doQuit) {
+	while (atomic_load_explicit (&ctx->threadRunning, memory_order_relaxed) &&
+			!atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 		bool didWork = false;
 		
 		/* Service WebSocket - WEBSOCKET_POLL_MS timeout
@@ -542,7 +543,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	        app->settings.websocketPort);
 	
 	/* Start WebSocket thread */
-	ctx->threadRunning = true;
+	atomic_store_explicit (&ctx->threadRunning, true, memory_order_relaxed);
 	if (pthread_create(&ctx->thread, NULL, BarWebsocketThread, app) != 0) {
 		log_write(LOG_ERROR, "Failed to create thread\n");
 		
@@ -571,7 +572,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
 	/* Signal thread to stop */
-	ctx->threadRunning = false;
+	atomic_store_explicit (&ctx->threadRunning, false, memory_order_relaxed);
 	
 	/* Cancel any ongoing lws_service() calls - safe in multi-threaded mode */
 	if (ctx->context) {
@@ -774,4 +775,3 @@ void BarWebsocketDisconnectAllClients(BarApp_t *app) {
 	
 	log_write(DEBUG_WEBSOCKET, "All clients marked for disconnect\n");
 }
-

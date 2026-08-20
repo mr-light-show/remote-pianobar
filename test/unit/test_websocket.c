@@ -302,7 +302,11 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 
 	g_compatBuf[0] = '\0';
 	BarWsBroadcastPandoraDisconnected (&app, "session_invalid");
-	ck_assert (strstr (g_compatBuf, "session_invalid") != NULL);
+	{
+		const char *payload = test_bucket_payload (&ctx, BUCKET_STATE);
+		ck_assert (strstr (payload, "pandora.disconnected") != NULL);
+		ck_assert (strstr (payload, "session_invalid") != NULL);
+	}
 
 	BarSocketIoSetBroadcastCallback (NULL);
 	test_teardown_web_app (&app, &ctx);
@@ -327,7 +331,10 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 
 	g_compatBuf[0] = '\0';
 	BarWsBroadcastPlayState (&app);
-	ck_assert (g_compatBuf[0] != '\0');
+	{
+		const char *payload = test_bucket_payload (&ctx, BUCKET_STATE);
+		ck_assert (strstr (payload, "playState") != NULL);
+	}
 
 	app.lockFd = dup (STDERR_FILENO);
 	ck_assert_int_ge (app.lockFd, 0);
@@ -821,4 +828,3 @@ Suite *websocket_suite(void) {
 	
 	return s;
 }
-

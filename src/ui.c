@@ -191,7 +191,8 @@ static size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
  */
 int progressCb (void * const data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow) {
-	const sig_atomic_t lint = *((sig_atomic_t *) data);
+	const sig_atomic_t lint = atomic_load_explicit(
+			(_Atomic sig_atomic_t *) data, memory_order_relaxed);
 	if (lint) {
 		return 1;
 	} else {
@@ -227,7 +228,8 @@ static bool temporaryCurlError (const CURLcode code) {
 static CURLcode BarPianoHttpRequest (CURL * const http,
 		const BarSettings_t * const settings, PianoRequest_t * const req) {
 	buffer buffer = {NULL, 0};
-	sig_atomic_t lint = 0, *prevint;
+	_Atomic sig_atomic_t lint = 0;
+	_Atomic sig_atomic_t *prevint;
 
 	char url[BAR_BUF_LARGE];
 	assert (settings->rpcHost != NULL);
@@ -350,6 +352,8 @@ void BarUiPianoCallClearTestHook (void) {
 /*	piano wrapper: prepare/execute http request and pass result back to
  *	libpiano. Holds pianoHttpMutex for the whole call (including nested
  *	re-login) so only one thread uses app->http / overlapping Piano state.
+ *	BarStatePianoRequest/Response take stateRwlock while pianoHttpMutex is held;
+ *	callers must not enter this function while already holding stateRwlock.
  */
 bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
@@ -367,7 +371,7 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 	do {
 		PianoRequest_t req = { .data = data, .responseData = NULL };
 
-		pRetLocal = PianoRequest (&app->ph, &req, type);
+		pRetLocal = BarStatePianoRequest (app, &req, type);
 		if (pRetLocal != PIANO_RET_OK) {
 			BarUiMsg (&app->settings, MSG_NONE, "Error: %s\n",
 					PianoErrorToStr (pRetLocal));
@@ -384,7 +388,7 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 			goto cleanup;
 		}
 
-		pRetLocal = PianoResponse (&app->ph, &req);
+		pRetLocal = BarStatePianoResponse (app, &req);
 		if (pRetLocal != PIANO_RET_CONTINUE_REQUEST) {
 			/* checking for request type avoids infinite loops */
 			if (pRetLocal == PIANO_RET_P_INVALID_AUTH_TOKEN &&

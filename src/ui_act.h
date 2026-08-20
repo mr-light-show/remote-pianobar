@@ -68,6 +68,7 @@ BarUiActCallback(BarUiActPandoraReconnect);
 
 /* Switch to a station programmatically (for WebSocket use) */
 void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station);
+bool BarUiSwitchStationById (BarApp_t * const app, const char *stationId);
 
 /* Disconnect from Pandora - shared by BarUiActPandoraDisconnect, idle timeout, playlist failure
  * @param resume_station_id_override if non-NULL, saved as lastStationId for reconnect; else current station */

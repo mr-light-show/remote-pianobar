@@ -26,7 +26,9 @@ THE SOFTWARE.
 #include "bar_state.h"
 #include "ui.h"
 #include "log.h"
+#include "station_display.h"
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <pthread.h>
@@ -282,6 +284,25 @@ PianoSong_t *BarStateAdvancePlaylist(BarApp_t *app) {
 	return finished;
 }
 
+/*	Destroy queued songs after the current playlist head (thread-safe).
+ *	Keeps the current song available for player cleanup/history.
+ */
+void BarStateTruncatePlaylistTail(BarApp_t *app) {
+	assert(app != NULL);
+
+	PianoSong_t *tail = NULL;
+	WITH_STATE_LOCK(app, "TruncatePlaylistTail", NULL) {
+		if (app->playlist != NULL) {
+			tail = PianoListNextP(app->playlist);
+			app->playlist->head.next = NULL;
+		}
+	}
+	if (tail != NULL) {
+		PianoDestroyPlaylist(tail);
+	}
+	BarStateSignalPlaybackManager(app);
+}
+
 /*	Drain playlist (destroy and clear) (thread-safe)
  */
 void BarStateDrainPlaylist(BarApp_t *app) {
@@ -311,6 +332,150 @@ void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 		app->nextStation = station;
 	}
 	BarStateSignalPlaybackManager(app);
+}
+
+/*	Prepare a station switch while preserving the current song for player
+ *	cleanup/history.  Any queued songs after the current one are detached and
+ *	freed after the lock is released.
+ */
+void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station) {
+	assert(app != NULL);
+	assert(station != NULL);
+
+	PianoSong_t *tail = NULL;
+	WITH_STATE_LOCK(app, "PrepareStationSwitch",
+			"State: PrepareStationSwitch <- %s\n", station->name) {
+		app->nextStation = station;
+		if (app->playlist != NULL) {
+			tail = PianoListNextP(app->playlist);
+			app->playlist->head.next = NULL;
+		}
+	}
+	if (tail != NULL) {
+		PianoDestroyPlaylist(tail);
+	}
+	BarStateSignalPlaybackManager(app);
+}
+
+/*	Prepare a station switch by id. The station pointer is resolved and stored
+ *	while holding the state write lock so it cannot outlive a concurrent
+ *	PianoDestroy/PianoInit reset between lookup and use.
+ */
+bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
+	assert(app != NULL);
+
+	if (stationId == NULL) {
+		return false;
+	}
+
+	bool found = false;
+	PianoSong_t *tail = NULL;
+	WITH_STATE_LOCK(app, "PrepareStationSwitchById", NULL) {
+		PianoStation_t *station = app->ph.stations != NULL ?
+				PianoFindStationById(app->ph.stations, stationId) : NULL;
+		if (station != NULL) {
+			log_write(DEBUG_UI, "State: PrepareStationSwitchById <- %s\n",
+					station->name ? station->name : "null");
+			app->nextStation = station;
+			found = true;
+			if (app->playlist != NULL) {
+				tail = PianoListNextP(app->playlist);
+				app->playlist->head.next = NULL;
+			}
+		}
+	}
+	if (tail != NULL) {
+		PianoDestroyPlaylist(tail);
+	}
+	if (found) {
+		BarStateSignalPlaybackManager(app);
+	}
+	return found;
+}
+
+/*	Update QuickMix membership as one station-list mutation.
+ */
+void BarStateApplyQuickMixIds(BarApp_t *app, const char * const *stationIds,
+		size_t stationIdCount) {
+	assert(app != NULL);
+
+	WITH_STATE_LOCK(app, "ApplyQuickMixIds", NULL) {
+		PianoStation_t *station = app->ph.stations;
+		PianoListForeachP (station) {
+			station->useQuickMix = false;
+		}
+
+		for (size_t i = 0; i < stationIdCount; i++) {
+			const char *stationId = stationIds ? stationIds[i] : NULL;
+			if (stationId == NULL) {
+				continue;
+			}
+
+			station = app->ph.stations;
+			PianoListForeachP (station) {
+				if (station->id != NULL && strcmp(station->id, stationId) == 0) {
+					station->useQuickMix = true;
+					break;
+				}
+			}
+		}
+	}
+}
+
+void BarStateUpdateStationDisplayNames(BarApp_t *app) {
+	assert(app != NULL);
+
+	WITH_STATE_LOCK(app, "UpdateStationDisplayNames", NULL) {
+		PianoStation_t *station = app->ph.stations;
+		PianoListForeachP (station) {
+			free(station->displayName);
+			station->displayName = NULL;
+
+			if (station->name != NULL) {
+				station->displayName =
+						BarApplyStationNameOverrides(&app->settings, station->name);
+			}
+		}
+	}
+}
+
+/*	Serialize libpiano state reads/writes with state snapshots.
+ *	Callers still hold pianoHttpMutex for the shared CURL/Piano request flow.
+ */
+PianoReturn_t BarStatePianoRequest(BarApp_t *app, PianoRequest_t *req,
+		PianoRequestType_t type) {
+	assert(app != NULL);
+	assert(req != NULL);
+
+	PianoReturn_t ret;
+	WITH_STATE_LOCK_RETURN(app, "PianoRequest", ret, NULL) {
+		ret = PianoRequest(&app->ph, req, type);
+	}
+	return ret;
+}
+
+PianoReturn_t BarStatePianoResponse(BarApp_t *app, PianoRequest_t *req) {
+	assert(app != NULL);
+	assert(req != NULL);
+
+	PianoReturn_t ret;
+	WITH_STATE_LOCK_WRITE_RETURN(app, "PianoResponse", ret, NULL) {
+		ret = PianoResponse(&app->ph, req);
+	}
+	return ret;
+}
+
+PianoReturn_t BarStateResetPianoHandle(BarApp_t *app) {
+	assert(app != NULL);
+
+	PianoReturn_t ret;
+	WITH_STATE_LOCK_WRITE_RETURN(app, "ResetPianoHandle", ret, NULL) {
+		PianoDestroy(&app->ph);
+		ret = PianoInit(&app->ph, app->settings.partnerUser,
+				app->settings.partnerPassword, app->settings.device,
+				app->settings.inkey, app->settings.outkey);
+	}
+	return ret;
 }
 
 /*	Get player mode (thread-safe)
@@ -469,4 +634,3 @@ void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap) {
 	free (snap->songStationName);
 	memset (snap, 0, sizeof (*snap));
 }
-

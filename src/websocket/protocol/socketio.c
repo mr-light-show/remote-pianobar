@@ -46,6 +46,8 @@ THE SOFTWARE.
 #include <math.h>
 #include <json-c/json.h>
 
+#define BAR_SOCKETIO_MAX_QUICKMIX_IDS 1024u
+
 /* json-c rejects NULL; Socket.IO payloads treat missing strings as "". */
 static struct json_object *BarJsonStringOrEmpty (const char *s)
 {
@@ -548,50 +550,11 @@ void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
 
 /* Emit 'stations' event (station list) */
 void BarSocketIoEmitStations(BarApp_t *app) {
-	json_object *stations, *station;
-	PianoStation_t **sortedStations;
-	size_t stationCount;
-	
 	if (!app) {
 		return;
 	}
-	
-	/* Check if stations are available */
-	PianoStation_t *stationList = BarStateGetStationList(app);
-	if (!stationList) {
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: No stations available yet\n");
-		/* Send empty stations array */
-		stations = json_object_new_array();
-		BarSocketIoEmit("stations", stations);
-		json_object_put(stations);
-		return;
-	}
-	
-	/* Sort stations using configured sort order */
-	sortedStations = BarSortedStations(stationList, &stationCount,
-	                                   app->settings.sortOrder);
-	if (!sortedStations) {
-		return;
-	}
-	
-	stations = json_object_new_array();
-	
-	/* Emit stations in sorted order */
-	for (size_t i = 0; i < stationCount; i++) {
-		PianoStation_t *curStation = sortedStations[i];
-		const char *displayName = curStation->displayName ? curStation->displayName : curStation->name;
-		
-		station = json_object_new_object();
-		json_object_object_add(station, "id",           BarJsonStringOrEmpty(curStation->id));
-		json_object_object_add(station, "name",         BarJsonStringOrEmpty(displayName));
-		json_object_object_add(station, "isQuickMix",   json_object_new_boolean(curStation->isQuickMix));
-		json_object_object_add(station, "isQuickMixed", json_object_new_boolean(curStation->useQuickMix));
-		
-		json_object_array_add(stations, station);
-	}
-	
-	free(sortedStations);
-	
+
+	json_object *stations = BarSocketIoBuildStationsPayload (app);
 	BarSocketIoEmit("stations", stations);
 	json_object_put(stations);
 }
@@ -1799,24 +1762,16 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 
 /* Handle 'changeStation' event from client */
 void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
-	PianoStation_t *station;
-	
 	if (!app || !stationId) {
 		return;
 	}
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Change station request: %s\n", stationId);
 	
-	/* Find station by ID */
-	station = BarStateFindStationById(app, stationId);
-	
-	if (station) {
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to station: %s\n", station->name);
+	if (BarUiSwitchStationById(app, stationId)) {
 		/* Clear saved station - user made explicit choice */
 		free(app->lastStationId);
 		app->lastStationId = NULL;
-		/* Switch to the new station and drain current playlist */
-		BarUiSwitchStation(app, station);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
@@ -1826,10 +1781,6 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 
 /* Handle 'station.setQuickMix' event from client */
 void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
-	PianoStation_t *station;
-	json_object *stationIdsArray;
-	int arrayLen, i;
-	
 	if (!app || !data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - invalid parameters\n");
 		return;
@@ -1842,38 +1793,43 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 	}
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Setting QuickMix stations...\n");
-	
-	/* First, set all stations to NOT be in QuickMix */
-	station = BarStateGetStationList(app);
-	PianoListForeachP (station) {
-		station->useQuickMix = false;
+
+	const size_t arrayLen = json_object_array_length(data);
+	if (arrayLen > BAR_SOCKETIO_MAX_QUICKMIX_IDS) {
+		log_write(DEBUG_WEBSOCKET,
+				"Socket.IO: setQuickMix - too many station IDs (%zu)\n", arrayLen);
+		return;
 	}
-	
-	/* Now set the selected stations to be in QuickMix */
-	arrayLen = json_object_array_length(data);
-	for (i = 0; i < arrayLen; i++) {
+
+	const char **stationIds = arrayLen > 0 ?
+			calloc(arrayLen, sizeof(*stationIds)) : NULL;
+	if (arrayLen > 0 && stationIds == NULL) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - out of memory\n");
+		return;
+	}
+	size_t stationIdCount = 0;
+	for (size_t i = 0; i < arrayLen; i++) {
 		json_object *stationIdObj = json_object_array_get_idx(data, i);
 		if (stationIdObj && json_object_is_type(stationIdObj, json_type_string)) {
-			const char *stationId = json_object_get_string(stationIdObj);
-			
-			/* Find station by ID */
-			station = BarStateGetStationList(app);
-			PianoListForeachP (station) {
-				if (strcmp(station->id, stationId) == 0) {
-					station->useQuickMix = true;
-					log_write(DEBUG_WEBSOCKET, "Socket.IO: Added '%s' to QuickMix\n", 
-					           station->name);
-					break;
-				}
-			}
+			stationIds[stationIdCount++] = json_object_get_string(stationIdObj);
 		}
 	}
-	
-	/* Call Pandora API to save QuickMix settings */
+	bool updated = false;
 	PianoReturn_t pRet;
 	CURLcode wRet;
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SET_QUICKMIX, NULL,
-			"Setting QuickMix stations", "station.setQuickMix", &pRet, &wRet)) {
+
+	pthread_mutex_lock(&app->pianoHttpMutex);
+	BarStateApplyQuickMixIds(app, stationIds, stationIdCount);
+	free(stationIds);
+
+	/* Save the same local QuickMix state while serialized with other Pandora
+	 * calls. pianoHttpMutex is recursive; BarSocketIoPianoCallLogged delegates
+	 * to BarUiPianoCall, which takes it for the request/response transaction. */
+	updated = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SET_QUICKMIX, NULL,
+			"Setting QuickMix stations", "station.setQuickMix", &pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+
+	if (updated) {
 		BarSocketIoEmitStations(app);
 	}
 }
@@ -2019,4 +1975,3 @@ void BarSocketIoHandleQuery(BarApp_t *app, void *wsi) {
 	BarSocketIoEmitStations(app);
 	BarSocketIoSetUnicastTarget(NULL);
 }
-

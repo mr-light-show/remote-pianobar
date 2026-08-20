@@ -73,6 +73,7 @@ void BarUiActSettings (BarApp_t *app, PianoStation_t *selStation,
 void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
+bool BarUiSwitchStationById (BarApp_t *app, const char *stationId);
 bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 
@@ -152,6 +153,24 @@ ws_context_destroy (BarWsContext_t *ctx)
 		}
 		pthread_mutex_destroy (&ctx->buckets[i].mutex);
 	}
+}
+
+static void
+attach_ws_context_for_test (BarApp_t *app, BarWsContext_t *ctx)
+{
+	app->settings.uiMode = BAR_UI_MODE_WEB;
+	app->wsContext = ctx;
+	ws_context_init (ctx);
+}
+
+static void
+capture_bucket_message (BarWsContext_t *ctx, BarWsBucketType_t bucket)
+{
+	ck_assert_ptr_nonnull (ctx->buckets[bucket].message);
+	ck_assert_ptr_nonnull (ctx->buckets[bucket].message->data);
+	free (last_broadcast_msg);
+	last_broadcast_msg = strdup ((const char *)ctx->buckets[bucket].message->data);
+	ck_assert_ptr_nonnull (last_broadcast_msg);
 }
 
 static void
@@ -398,10 +417,12 @@ read_default_settings (BarSettings_t *settings)
 START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 {
 	BarApp_t app;
+	BarWsContext_t ctx;
 	PianoStation_t station;
 	memset (&app, 0, sizeof (app));
 	memset (&station, 0, sizeof (station));
 	read_default_settings (&app.settings);
+	attach_ws_context_for_test (&app, &ctx);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
 	BarStateInit (&app);
@@ -419,6 +440,7 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "user", NULL);
+	capture_bucket_message (&ctx, BUCKET_STATE);
 
 	ck_assert_ptr_nonnull (app.lastStationId);
 	ck_assert_str_eq (app.lastStationId, "resume-station");
@@ -430,6 +452,7 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
@@ -439,8 +462,10 @@ END_TEST
 START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 {
 	BarApp_t app;
+	BarWsContext_t ctx;
 	memset (&app, 0, sizeof (app));
 	read_default_settings (&app.settings);
+	attach_ws_context_for_test (&app, &ctx);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
 	BarStateInit (&app);
@@ -455,6 +480,7 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "idle_timeout", "override-station");
+	capture_bucket_message (&ctx, BUCKET_STATE);
 
 	ck_assert_ptr_nonnull (app.lastStationId);
 	ck_assert_str_eq (app.lastStationId, "override-station");
@@ -464,6 +490,7 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
@@ -798,14 +825,19 @@ START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
 	BarApp_t app;
 	PianoStation_t from, to;
 	PianoSong_t song;
+	PianoSong_t *tail;
 	memset (&app, 0, sizeof (app));
 	memset (&from, 0, sizeof (from));
 	memset (&to, 0, sizeof (to));
 	memset (&song, 0, sizeof (song));
+	tail = calloc (1, sizeof (*tail));
+	ck_assert_ptr_nonnull (tail);
 	BarSettingsInit (&app.settings);
 	BarStateInit (&app);
+	player_primitives_init (&app);
 	from.id = "from"; from.name = "From";
 	to.id = "to"; to.name = "To";
+	song.head.next = &tail->head;
 	app.curStation = &from;
 	app.playlist = &song;
 
@@ -818,6 +850,38 @@ START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
 		ck_assert_ptr_null (pl->head.next);
 	}
 
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_ui_switch_station_by_id_missing_keeps_playlist)
+{
+	BarApp_t app;
+	PianoStation_t from;
+	PianoSong_t song;
+	PianoSong_t *tail;
+	memset (&app, 0, sizeof (app));
+	memset (&from, 0, sizeof (from));
+	memset (&song, 0, sizeof (song));
+	tail = calloc (1, sizeof (*tail));
+	ck_assert_ptr_nonnull (tail);
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+	BarStateInit (&app);
+	from.id = "from"; from.name = "From";
+	song.head.next = &tail->head;
+	app.ph.stations = &from;
+	app.playlist = &song;
+
+	ck_assert (!BarUiSwitchStationById (&app, "missing"));
+
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+	ck_assert_ptr_eq (BarStateGetPlaylist (&app), &song);
+	ck_assert_ptr_eq (song.head.next, &tail->head);
+
+	free (tail);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 }
@@ -936,10 +1000,12 @@ END_TEST
 START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 {
 	BarApp_t app;
+	BarWsContext_t ctx;
 	PianoStation_t station;
 	memset (&app, 0, sizeof (app));
 	memset (&station, 0, sizeof (station));
 	read_default_settings (&app.settings);
+	attach_ws_context_for_test (&app, &ctx);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
 	BarStateInit (&app);
@@ -956,6 +1022,7 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	clear_mock ();
 
 	BarUiActPandoraDisconnect (&app, NULL, NULL, 1);
+	capture_bucket_message (&ctx, BUCKET_STATE);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 	ck_assert (strstr (last_broadcast_msg, "pandora.disconnected") != NULL);
@@ -964,6 +1031,7 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
@@ -1052,10 +1120,12 @@ set_player_dead_thread (void *arg)
 START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 {
 	BarApp_t app;
+	BarWsContext_t ctx;
 	pthread_t helper;
 	SetDeadArgs_t args;
 	memset (&app, 0, sizeof (app));
 	read_default_settings (&app.settings);
+	attach_ws_context_for_test (&app, &ctx);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
 	BarStateInit (&app);
@@ -1073,12 +1143,14 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 	ck_assert_int_eq (pthread_create (&helper, NULL, set_player_dead_thread, &args), 0);
 	BarUiDoPandoraDisconnect (&app, "user", NULL);
 	ck_assert_int_eq (pthread_join (helper, NULL), 0);
+	capture_bucket_message (&ctx, BUCKET_STATE);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
@@ -1349,8 +1421,10 @@ END_TEST
 START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 {
 	BarApp_t app;
+	BarWsContext_t ctx;
 	memset (&app, 0, sizeof (app));
 	read_default_settings (&app.settings);
+	attach_ws_context_for_test (&app, &ctx);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
 	BarStateInit (&app);
@@ -1365,6 +1439,7 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "playlist_session_error", NULL);
+	capture_bucket_message (&ctx, BUCKET_STATE);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 
@@ -1372,6 +1447,7 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
@@ -1625,6 +1701,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_running_manager);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_parked_manager);
 	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
+	tcase_add_test (tc, test_ui_switch_station_by_id_missing_keeps_playlist);
 	tcase_add_test (tc, test_ui_act_song_info_quickmix_resolves_child_station);
 	tcase_add_test (tc, test_ui_act_print_upcoming_lists_and_broadcasts);
 	tcase_add_test (tc, test_ui_act_print_upcoming_empty_queue_cli_message);

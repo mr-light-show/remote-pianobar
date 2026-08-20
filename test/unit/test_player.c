@@ -302,7 +302,9 @@ static void player_thread_test_setup (player_t *player, BarSettings_t *settings)
 	memset (player, 0, sizeof (*player));
 	memset (settings, 0, sizeof (*settings));
 	BarSettingsInit (settings);
+#ifdef WEBSOCKET_ENABLED
 	settings->uiMode = BAR_UI_MODE_CLI;
+#endif
 	settings->timeout = 2;
 	BarPlayerInit (player, settings);
 }
@@ -669,4 +671,3 @@ Suite *player_suite(void) {
 	
 	return s;
 }
-

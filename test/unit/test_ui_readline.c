@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include <check.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -242,8 +243,8 @@ START_TEST (test_readline_restores_interrupt_target)
 	int pipefd[2];
 	char buf[8];
 	BarReadlineFds_t input;
-	sig_atomic_t saved = 7;
-	sig_atomic_t local = 0;
+	_Atomic sig_atomic_t saved = 7;
+	_Atomic sig_atomic_t local = 0;
 
 	BarInterruptSetTarget (&saved);
 	ck_assert_int_eq (pipe (pipefd), 0);

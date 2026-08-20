@@ -289,13 +289,7 @@ BarUiActCallback(BarUiActAddSharedStation) {
 
 static void drainPlaylist (BarApp_t * const app) {
 	BarUiDoSkipSong (&app->player);
-	PianoSong_t *playlist = BarStateGetPlaylist(app);
-	if (playlist != NULL) {
-		/* drain playlist */
-		PianoDestroyPlaylist (PianoListNextP (playlist));
-		playlist->head.next = NULL;
-		BarStateSetPlaylist(app, playlist);
-	}
+	BarStateTruncatePlaylistTail(app);
 }
 
 /*	Switch to a station (for WebSocket/programmatic use)
@@ -304,8 +298,26 @@ void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station) {
 	assert (app != NULL);
 	assert (station != NULL);
 	
-	BarStateSetNextStation(app, station);
 	drainPlaylist (app);
+	BarStatePrepareStationSwitch(app, station);
+}
+
+/*	Switch to a station by id without exposing station pointers across the
+ *	state lock boundary (for WebSocket/programmatic use).
+ */
+bool BarUiSwitchStationById (BarApp_t * const app, const char *stationId) {
+	assert (app != NULL);
+
+	if (stationId == NULL) {
+		return false;
+	}
+
+	if (!BarStatePrepareStationSwitchById(app, stationId)) {
+		return false;
+	}
+
+	BarUiDoSkipSong (&app->player);
+	return true;
 }
 
 /*	delete current station
@@ -801,10 +813,7 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 	/* Disconnect from Pandora (destroys stations, user info, partner).
 	 * Serialize with BarUiPianoCall — same app->ph. */
 	pthread_mutex_lock(&app->pianoHttpMutex);
-	PianoDestroy(&app->ph);
-	PianoReturn_t piRet = PianoInit(&app->ph, app->settings.partnerUser,
-	          app->settings.partnerPassword, app->settings.device,
-	          app->settings.inkey, app->settings.outkey);
+	PianoReturn_t piRet = BarStateResetPianoHandle(app);
 	if (piRet != PIANO_RET_OK) {
 		pthread_mutex_unlock(&app->pianoHttpMutex);
 		BarUiMsg(&app->settings, MSG_ERR,
@@ -1298,10 +1307,7 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	}
 
 	pthread_mutex_lock(&app->pianoHttpMutex);
-	PianoDestroy(&app->ph);
-	PianoReturn_t piInitRet = PianoInit(&app->ph, app->settings.partnerUser,
-	          app->settings.partnerPassword, app->settings.device,
-	          app->settings.inkey, app->settings.outkey);
+	PianoReturn_t piInitRet = BarStateResetPianoHandle(app);
 	if (piInitRet != PIANO_RET_OK) {
 		pthread_mutex_unlock(&app->pianoHttpMutex);
 		BarUiMsg(&app->settings, MSG_ERR,

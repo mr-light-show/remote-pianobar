@@ -25,6 +25,7 @@ THE SOFTWARE.
 
 #include "bar_constants.h"
 #include <curl/curl.h>
+#include <stdatomic.h>
 
 #include <piano.h>
 
@@ -44,7 +45,7 @@ typedef struct {
 	/* station of current song and station used to fetch songs from if playlist
 	 * is empty */
 	PianoStation_t *curStation, *nextStation;
-	sig_atomic_t doQuit;
+	_Atomic sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
 	char *lastStationId;  /* Station ID to auto-resume after reconnect */
@@ -63,5 +64,4 @@ typedef struct {
 	#endif
 	BarL10nContext_t l10n;
 } BarApp_t;
-
 

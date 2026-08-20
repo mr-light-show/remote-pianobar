@@ -41,8 +41,9 @@ static char *read_tmpfile (FILE *stream)
 	while ((c = fgetc (stream)) != EOF) {
 		if (len + 1 >= cap) {
 			cap = cap == 0 ? 256 : cap * 2;
-			buf = realloc (buf, cap);
-			ck_assert_ptr_nonnull (buf);
+			char *new_buf = realloc (buf, cap);
+			ck_assert_ptr_nonnull (new_buf);
+			buf = new_buf;
 		}
 		buf[len++] = (char) c;
 	}
@@ -62,7 +63,9 @@ START_TEST (test_print_startup_info_cli_mode_omits_web_details)
 
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
+#ifdef WEBSOCKET_ENABLED
 	app.settings.uiMode = BAR_UI_MODE_CLI;
+#endif
 
 	out = tmpfile ();
 	ck_assert_ptr_nonnull (out);
@@ -78,6 +81,7 @@ START_TEST (test_print_startup_info_cli_mode_omits_web_details)
 }
 END_TEST
 
+#ifdef WEBSOCKET_ENABLED
 START_TEST (test_print_startup_info_web_mode_includes_url)
 {
 	BarApp_t app;
@@ -155,6 +159,7 @@ START_TEST (test_print_startup_info_daemon_includes_pid_and_pid_file)
 	BarSettingsDestroy (&app.settings);
 }
 END_TEST
+#endif
 
 START_TEST (test_sorted_stations_orders_by_name_az)
 {
@@ -235,9 +240,11 @@ Suite *ui_suite (void)
 	TCase *tc = tcase_create ("core");
 
 	tcase_add_test (tc, test_print_startup_info_cli_mode_omits_web_details);
+#ifdef WEBSOCKET_ENABLED
 	tcase_add_test (tc, test_print_startup_info_web_mode_includes_url);
 	tcase_add_test (tc, test_print_startup_info_bind_all_shows_bind_address);
 	tcase_add_test (tc, test_print_startup_info_daemon_includes_pid_and_pid_file);
+#endif
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
