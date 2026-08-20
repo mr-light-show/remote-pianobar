@@ -887,6 +887,15 @@ START_TEST (test_ui_switch_station_by_id_missing_keeps_playlist)
 }
 END_TEST
 
+START_TEST (test_ui_switch_station_by_id_null_returns_false)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+
+	ck_assert (!BarUiSwitchStationById (&app, NULL));
+}
+END_TEST
+
 START_TEST (test_ui_act_song_info_quickmix_resolves_child_station)
 {
 	BarApp_t app;
@@ -1702,6 +1711,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_parked_manager);
 	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
 	tcase_add_test (tc, test_ui_switch_station_by_id_missing_keeps_playlist);
+	tcase_add_test (tc, test_ui_switch_station_by_id_null_returns_false);
 	tcase_add_test (tc, test_ui_act_song_info_quickmix_resolves_child_station);
 	tcase_add_test (tc, test_ui_act_print_upcoming_lists_and_broadcasts);
 	tcase_add_test (tc, test_ui_act_print_upcoming_empty_queue_cli_message);
