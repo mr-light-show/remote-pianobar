@@ -72,6 +72,8 @@ void BarUiActSettings (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
+bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
+		const char *resume_station_id_override);
 void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
 bool BarUiSwitchStationById (BarApp_t *app, const char *stationId);
 bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
@@ -189,6 +191,9 @@ setup_web_app_with_station (BarApp_t *app, BarWsContext_t *ctx,
 {
 	memset (app, 0, sizeof (*app));
 	memset (ctx, 0, sizeof (*ctx));
+	/* Callers pass uninitialized stack structs; snapshots read every field. */
+	memset (station, 0, sizeof (*station));
+	memset (song, 0, sizeof (*song));
 	BarSettingsInit (&app->settings);
 	app->settings.uiMode = BAR_UI_MODE_WEB;
 	app->wsContext = ctx;
@@ -614,6 +619,162 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 	ck_assert_ptr_null (app.lastStationId);
 	g_mock_reconnect_stations = NULL;
 
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	ws_context_destroy (&ctx);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+/* Auto-recovery must not undo a stop the user (or the idle timer) asked for */
+START_TEST (test_session_auto_recover_skips_intentional_stops)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+
+	ck_assert (!BarSessionTryAutoRecover (&app, "user", NULL));
+	ck_assert (!BarSessionTryAutoRecover (&app, "idle_timeout", NULL));
+	ck_assert (!atomic_load (&app.autoRecoverFailed));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+/* Shutting down: there is nothing to resume into */
+START_TEST (test_session_auto_recover_skips_while_quitting)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.doQuit = true;
+
+	ck_assert (!BarSessionTryAutoRecover (&app, "playlist_session_error", NULL));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+/* One attempt per session death, whether the last one failed or is running */
+START_TEST (test_session_auto_recover_attempts_once_per_outage)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+
+	atomic_store (&app.autoRecoverFailed, true);
+	ck_assert (!BarSessionTryAutoRecover (&app, "playlist_session_error", NULL));
+
+	atomic_store (&app.autoRecoverFailed, false);
+	atomic_store (&app.autoRecoverInFlight, true);
+	ck_assert (!BarSessionTryAutoRecover (&app, "playlist_session_error", NULL));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+/* A recovered session resumes the station and stays silent about disconnects */
+START_TEST (test_session_auto_recover_resumes_without_disconnect_event)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (&station, 0, sizeof (station));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.wsContext = &ctx;
+	ws_context_init (&ctx);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	station.id = "resume-station";
+	station.name = "Resume";
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+	g_mock_reconnect_stations = &station;
+	BarUiPianoCallSetTestHook (mock_reconnect_login_stations);
+
+	ck_assert (BarSessionTryAutoRecover (&app, "playlist_session_error",
+			"resume-station"));
+
+	BarUiPianoCallClearTestHook ();
+	g_mock_reconnect_stations = NULL;
+
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
+	ck_assert_ptr_null (app.lastStationId);
+	ck_assert (!atomic_load (&app.autoRecoverFailed));
+	ck_assert (!atomic_load (&app.autoRecoverInFlight));
+	/* pandora.disconnected would have landed in BUCKET_STATE */
+	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
+
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	ws_context_destroy (&ctx);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	clear_mock ();
+}
+END_TEST
+
+static bool
+mock_piano_call_fails (BarApp_t *app, const PianoRequestType_t type, void *data,
+                       PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) type;
+	(void) data;
+	*pRet = PIANO_RET_P_INTERNAL;
+	*wRet = CURLE_OK;
+	return false;
+}
+
+/* A failed reconnect reports the failure and blocks further attempts */
+START_TEST (test_session_auto_recover_failure_is_sticky)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.wsContext = &ctx;
+	ws_context_init (&ctx);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	clear_mock ();
+	BarUiPianoCallSetTestHook (mock_piano_call_fails);
+
+	ck_assert (!BarSessionTryAutoRecover (&app, "playlist_session_error", NULL));
+	ck_assert (atomic_load (&app.autoRecoverFailed));
+	ck_assert (!atomic_load (&app.autoRecoverInFlight));
+
+	BarUiPianoCallClearTestHook ();
+
+	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	ws_context_destroy (&ctx);
@@ -1705,6 +1866,11 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_idle_timeout_message);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_clears_playback_state_before_destroy);
 	tcase_add_test (tc, test_ui_act_pandora_reconnect_clears_playback_state);
+	tcase_add_test (tc, test_session_auto_recover_skips_intentional_stops);
+	tcase_add_test (tc, test_session_auto_recover_skips_while_quitting);
+	tcase_add_test (tc, test_session_auto_recover_attempts_once_per_outage);
+	tcase_add_test (tc, test_session_auto_recover_resumes_without_disconnect_event);
+	tcase_add_test (tc, test_session_auto_recover_failure_is_sticky);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_logs_when_manager_not_parked);
 	tcase_add_test (tc, test_ui_act_pandora_reconnect_logs_when_manager_not_parked);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_waits_for_running_manager);

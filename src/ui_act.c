@@ -762,16 +762,20 @@ BarUiActCallback(BarUiActQuit) {
 	BarUiDoSkipSong (&app->player);
 }
 
-/*	Internal stop helper - full reset without quitting
- *	Stops playback, clears station/playlist, disconnects from Pandora
+/*	Tear down the Pandora session so the handle is clean for a fresh login
+ *	Saves the resume station id, stops playback, waits for the playback manager
+ *	to park, then re-initializes the Piano handle.
  *	@param app application handle
- *	@param reason "user" for manual stop, "idle_timeout" for pause timeout,
- *		"playlist_session_error" when getPlaylist returns P_INTERNAL
  *	@param resume_station_id_override if non-NULL/non-empty, used for lastStationId
  *		(e.g. attempted next station); else current station id
+ *	@param context "disconnect" or "reconnect", for the park-idle log line
+ *	@param freeSongHistory drop the song history (disconnect stops for good; a
+ *		reconnect resumes playback and keeps the list)
+ *	@return false when the Piano handle could not be re-initialized
  */
-void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
-		const char *resume_station_id_override) {
+static bool BarSessionTeardown(BarApp_t *app,
+		const char *resume_station_id_override, const char *context,
+		bool freeSongHistory) {
 	/* Save station ID for auto-resume on reconnect */
 	PianoStation_t *curStation = BarStateGetCurrentStation(app);
 	free(app->lastStationId);
@@ -801,11 +805,11 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 	}
 
 	if (!BarPlaybackManagerWaitParkedIdle (app, BAR_PLAYER_STOP_TIMEOUT_MS)) {
-		log_write (DEBUG_UI, "PlaybackMgr: disconnect proceeding before park idle\n");
+		log_write (DEBUG_UI, "PlaybackMgr: %s proceeding before park idle\n",
+		           context);
 	}
 	
-	/* Free song history */
-	if (app->songHistory != NULL) {
+	if (freeSongHistory && app->songHistory != NULL) {
 		PianoDestroyPlaylist(app->songHistory);
 		app->songHistory = NULL;
 	}
@@ -814,15 +818,31 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 	 * Serialize with BarUiPianoCall — same app->ph. */
 	pthread_mutex_lock(&app->pianoHttpMutex);
 	PianoReturn_t piRet = BarStateResetPianoHandle(app);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (piRet != PIANO_RET_OK) {
-		pthread_mutex_unlock(&app->pianoHttpMutex);
 		BarUiMsg(&app->settings, MSG_ERR,
 				BarL10nGet(&app->l10n, "cli.piano_reinit_failed"),
 				PianoErrorToStr (piRet));
 		app->player.interrupted = 1;
+		return false;
+	}
+	return true;
+}
+
+/*	Internal stop helper - full reset without quitting
+ *	Stops playback, clears station/playlist, disconnects from Pandora
+ *	@param app application handle
+ *	@param reason "user" for manual stop, "idle_timeout" for pause timeout,
+ *		"playlist_session_error" when getPlaylist fails and auto-recovery did
+ *		not restore the session
+ *	@param resume_station_id_override if non-NULL/non-empty, used for lastStationId
+ *		(e.g. attempted next station); else current station id
+ */
+void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
+		const char *resume_station_id_override) {
+	if (!BarSessionTeardown(app, resume_station_id_override, "disconnect", true)) {
 		return;
 	}
-	pthread_mutex_unlock(&app->pianoHttpMutex);
 	
 	BarWsBroadcastPandoraDisconnected(app, reason);
 	
@@ -1254,7 +1274,8 @@ BarUiActCallback(BarUiActManageStation) {
 /*	pandora reconnect - re-authenticate and fetch stations
  *	Uses active account credentials (set by BarSocketIoHandleAction for account switches)
  */
-BarUiActCallback(BarUiActPandoraReconnect) {
+bool BarUiDoPandoraReconnect (BarApp_t *app,
+		const char *resume_station_id_override) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataLogin_t reqData;
@@ -1268,7 +1289,7 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 		BarUiMsg(&app->settings, MSG_ERR, 
 			"Cannot reconnect: No credentials configured.\n");
 		BarWsEmitError(app, "app.pandora-reconnect", "No credentials configured");
-		return;
+		return false;
 	}
 
 	reqData.user = (char *)user;
@@ -1277,46 +1298,9 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 
 	/* Clean up existing Pandora session so GET_STATIONS doesn't append
 	 * to the old station list (libpiano appends, never replaces). */
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	free(app->lastStationId);
-	app->lastStationId = curStation ? strdup(curStation->id) : NULL;
-
-	/* Clear next station before stop/destroy so the playback manager cannot
-	 * start BarPlaybackFetchPlaylist with a station pointer that PianoDestroy
-	 * will free. */
-	BarStateSetNextStation(app, NULL);
-	BarStateDrainPlaylist(app);
-	BarStateSetCurrentStation(app, NULL);
-
-	/* Signal player to stop, then wait for the playback manager thread to
-	 * fully clean up (join player thread, restore interrupt target to
-	 * &app->doQuit, set mode to PLAYER_DEAD).  Without this wait, the
-	 * playback manager may start a new song from the old playlist before we
-	 * destroy the Piano handle, causing a use-after-free. */
-	if (BarPlayerGetMode(&app->player) != PLAYER_DEAD) {
-		BarUiDoSkipSong(&app->player);
-		if (!BarPlayerWaitForMode (&app->player, PLAYER_DEAD,
-		                            BAR_PLAYER_STOP_TIMEOUT_MS)) {
-			BarUiMsg (&app->settings, MSG_ERR, "%s",
-			          BarL10nGet (&app->l10n, "cli.player_stop_timeout"));
-		}
+	if (!BarSessionTeardown(app, resume_station_id_override, "reconnect", false)) {
+		return false;
 	}
-
-	if (!BarPlaybackManagerWaitParkedIdle (app, BAR_PLAYER_STOP_TIMEOUT_MS)) {
-		log_write (DEBUG_UI, "PlaybackMgr: reconnect proceeding before park idle\n");
-	}
-
-	pthread_mutex_lock(&app->pianoHttpMutex);
-	PianoReturn_t piInitRet = BarStateResetPianoHandle(app);
-	if (piInitRet != PIANO_RET_OK) {
-		pthread_mutex_unlock(&app->pianoHttpMutex);
-		BarUiMsg(&app->settings, MSG_ERR,
-				BarL10nGet(&app->l10n, "cli.piano_reinit_failed"),
-				PianoErrorToStr (piInitRet));
-		app->player.interrupted = 1;
-		return;
-	}
-	pthread_mutex_unlock(&app->pianoHttpMutex);
 
 	if (acct && acct->label) {
 		BarUiMsg(&app->settings, MSG_INFO, "Reconnecting to Pandora (%s)... ",
@@ -1326,14 +1310,14 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	}
 	if (!BarUiPianoCall(app, PIANO_REQUEST_LOGIN, &reqData, &pRet, &wRet)) {
 		BarUiMsg(&app->settings, MSG_ERR, "Failed to reconnect.\n");
-		return;
+		return false;
 	}
 	
 	/* Fetch stations */
 	BarUiMsg(&app->settings, MSG_INFO, "Get stations... ");
 	if (!BarUiPianoCall(app, PIANO_REQUEST_GET_STATIONS, NULL, &pRet, &wRet)) {
 		BarUiMsg(&app->settings, MSG_ERR, "Failed to get stations.\n");
-		return;
+		return false;
 	}
 	
 	/* Update display names after stations are fetched */
@@ -1366,4 +1350,60 @@ BarUiActCallback(BarUiActPandoraReconnect) {
 	}
 	
 	BarUiMsg(&app->settings, MSG_INFO, "Reconnected to Pandora.\n");
+	/* A working session again: allow auto-recovery for the next failure. */
+	atomic_store (&app->autoRecoverFailed, false);
+	return true;
+}
+
+/*	pandora reconnect (UI/WebSocket action wrapper)
+ */
+BarUiActCallback(BarUiActPandoraReconnect) {
+	(void) BarUiDoPandoraReconnect (app, NULL);
+}
+
+/*	Restore a session that died without the user asking for it
+ *	@param reason disconnect reason that triggered recovery
+ *	@param resume_station_id_override station to resume (station pointers do not
+ *		survive the teardown, so callers pass an owned copy of the id)
+ *	@return true when the session is usable and a station is queued again
+ */
+bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
+		const char *resume_station_id_override) {
+	assert (app != NULL);
+	assert (reason != NULL);
+
+	/* The user asked for silence: stay stopped. */
+	if (strcmp (reason, "user") == 0 || strcmp (reason, "idle_timeout") == 0) {
+		return false;
+	}
+
+	/* Shutting down: nothing to resume into. */
+	if (atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+		return false;
+	}
+
+	/* One attempt per session death (cleared when a song starts) so a Pandora
+	 * outage cannot turn into a reconnect loop. */
+	if (atomic_load (&app->autoRecoverInFlight) ||
+			atomic_load (&app->autoRecoverFailed)) {
+		return false;
+	}
+
+	atomic_store (&app->autoRecoverInFlight, true);
+	log_write (DEBUG_UI, "Session: auto-recovering after %s\n", reason);
+	BarUiMsg (&app->settings, MSG_INFO, "%s",
+	          BarL10nGet (&app->l10n, "cli.session_auto_recover"));
+
+	const bool recovered = BarUiDoPandoraReconnect (app,
+			resume_station_id_override);
+
+	atomic_store (&app->autoRecoverInFlight, false);
+	atomic_store (&app->autoRecoverFailed, !recovered);
+
+	if (!recovered) {
+		log_write (DEBUG_UI, "Session: auto-recovery failed after %s\n", reason);
+		BarUiMsg (&app->settings, MSG_ERR, "%s",
+		          BarL10nGet (&app->l10n, "cli.session_auto_recover_failed"));
+	}
+	return recovered;
 }

@@ -63,5 +63,11 @@ typedef struct {
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
 	#endif
 	BarL10nContext_t l10n;
+	/* Auto-recovery of an unexpectedly dead Pandora session (see
+	 * BarSessionTryAutoRecover): one attempt per session death, cleared once a
+	 * song starts, so an outage cannot become a reconnect loop.  Written by the
+	 * playback manager and the WebSocket thread. */
+	_Atomic bool autoRecoverInFlight;
+	_Atomic bool autoRecoverFailed;
 } BarApp_t;
 

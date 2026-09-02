@@ -27,19 +27,23 @@ THE SOFTWARE.
 #include "player.h"
 #include "l10n.h"
 #include "websocket_bridge.h"
+#include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
-/* Forward declaration to avoid pulling in ui_dispatch.h's static dispatch table */
+/* Forward declarations to avoid pulling in ui_dispatch.h's static dispatch table */
 extern void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
+extern bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
+		const char *resume_station_id_override);
 
-/*	Fetch the next playlist for the current station.
- *	Logic extracted from BarMainGetPlaylist in main.c.
+/*	One getPlaylist attempt for the next station.
+ *	@param pRet libpiano status of the attempt
+ *	@param wRet curl status of the attempt
+ *	@return true when the request succeeded (the playlist may still be empty)
  */
-bool BarPlaybackFetchPlaylist (BarApp_t *app) {
-	PianoReturn_t pRet;
-	CURLcode wRet;
+static bool BarPlaybackFetchPlaylistOnce (BarApp_t *app, PianoReturn_t *pRet,
+		CURLcode *wRet) {
 	PianoRequestDataGetPlaylist_t reqData;
 	reqData.station = BarStateGetNextStation (app);
 	reqData.quality = app->settings.audioQuality;
@@ -47,24 +51,57 @@ bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 	BarUiMsg (&app->settings, MSG_INFO, "%s",
 	          BarL10nGet (&app->l10n, "cli.receiving_playlist"));
 	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
-	                     &reqData, &pRet, &wRet)) {
-		if (pRet == PIANO_RET_P_INTERNAL) {
-			const char *resumeId = NULL;
-			if (reqData.station != NULL && reqData.station->id != NULL) {
-				resumeId = reqData.station->id;
-			}
-			BarUiDoPandoraDisconnect (app, "playlist_session_error", resumeId);
-		} else {
-			BarStateSetNextStation (app, NULL);
-		}
-	} else {
-		BarStateSetPlaylist (app, reqData.retPlaylist);
-		if (BarStateGetPlaylist (app) == NULL) {
-			BarUiMsg (&app->settings, MSG_INFO, "%s",
-			          BarL10nGet (&app->l10n, "cli.no_tracks_left"));
-			BarStateSetNextStation (app, NULL);
-		}
+	                     &reqData, pRet, wRet)) {
+		return false;
 	}
+
+	BarStateSetPlaylist (app, reqData.retPlaylist);
+	if (BarStateGetPlaylist (app) == NULL) {
+		BarUiMsg (&app->settings, MSG_INFO, "%s",
+		          BarL10nGet (&app->l10n, "cli.no_tracks_left"));
+		BarStateSetNextStation (app, NULL);
+	}
+	return true;
+}
+
+/*	Fetch the next playlist for the current station.
+ *	Logic extracted from BarMainGetPlaylist in main.c.
+ *	A failed request usually means the Pandora session died while we were
+ *	streaming (hours of audio never refresh the RPC session), so try one
+ *	automatic reconnect and one more fetch before giving up and asking the user
+ *	to reconnect.
+ */
+bool BarPlaybackFetchPlaylist (BarApp_t *app) {
+	PianoReturn_t pRet = PIANO_RET_OK;
+	CURLcode wRet = CURLE_OK;
+
+	if (!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet)) {
+		/* Station pointers do not survive the session teardown: keep our own
+		 * copy of the id we were fetching so it can be resumed. */
+		const PianoStation_t * const station = BarStateGetNextStation (app);
+		char *resumeId = (station != NULL && station->id != NULL) ?
+				strdup (station->id) : NULL;
+
+		if (wRet == CURLE_ABORTED_BY_CALLBACK ||
+				atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+			/* Interrupted or shutting down: leave the session alone. */
+			BarStateSetNextStation (app, NULL);
+		} else if (BarSessionTryAutoRecover (app, "playlist_session_error",
+				resumeId)) {
+			/* Session is healthy again.  Retry the fetch when a station was
+			 * resumed; otherwise stay connected and let the user pick one. */
+			if (BarStateGetNextStation (app) != NULL &&
+					!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet)) {
+				BarUiDoPandoraDisconnect (app, "playlist_session_error",
+						resumeId);
+			}
+		} else {
+			BarUiDoPandoraDisconnect (app, "playlist_session_error", resumeId);
+		}
+
+		free (resumeId);
+	}
+
 	PianoStation_t *nextStation = BarStateGetNextStation (app);
 	BarStateSetCurrentStation (app, nextStation);
 	BarUiStartEventCmd (&app->settings, "stationfetchplaylist",
@@ -125,5 +162,8 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 		BarPlayerSetMode (&app->player, PLAYER_DEAD);
 		return false;
 	}
+
+	/* Playback is alive: re-arm auto-recovery for the next session failure. */
+	atomic_store (&app->autoRecoverFailed, false);
 	return true;
 }
