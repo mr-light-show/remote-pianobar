@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -543,6 +544,29 @@ END_TEST
 
 #endif /* HAVE_DEBUGLOG */
 
+START_TEST (test_websocket_init_destroy_stops_when_app_quits)
+{
+	BarApp_t app;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = 18082;
+
+	if (!BarWebsocketInit (&app)) {
+		BarSettingsDestroy (&app.settings);
+		return;
+	}
+
+	usleep (80000);
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	usleep (80000);
+	BarWebsocketDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_websocket_bridge_print_bind_all_and_startup_info)
 {
 	BarApp_t app;
@@ -829,6 +853,7 @@ Suite *websocket_suite(void) {
 	tc_core = tcase_create("Core");
 	
 	tcase_add_test(tc_core, test_websocket_init_null);
+	tcase_add_test(tc_core, test_websocket_init_destroy_stops_when_app_quits);
 	tcase_add_test(tc_core, test_websocket_destroy_null);
 	tcase_add_test(tc_core, test_websocket_elapsed_null);
 	tcase_add_test(tc_core, test_websocket_broadcast_null);

@@ -72,6 +72,8 @@ void BarUiActSettings (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiDoPandoraDisconnect (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
+bool BarUiDoPandoraReconnect (BarApp_t *app,
+		const char *resume_station_id_override);
 bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
@@ -1057,6 +1059,29 @@ START_TEST (test_ui_switch_station_by_id_null_returns_false)
 }
 END_TEST
 
+START_TEST (test_ui_switch_station_by_id_found_sets_next)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	station.id = "live";
+	station.name = "Live";
+	app.ph.stations = &station;
+
+	ck_assert (BarUiSwitchStationById (&app, "live"));
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
+
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_ui_act_song_info_quickmix_resolves_child_station)
 {
 	BarApp_t app;
@@ -1657,6 +1682,84 @@ START_TEST (test_ui_do_pandora_disconnect_piano_reinit_failure)
 }
 END_TEST
 
+START_TEST (test_ui_do_pandora_reconnect_piano_reinit_failure)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	free (app.settings.inkey);
+	free (app.settings.outkey);
+	app.settings.inkey = strdup ("");
+	app.settings.outkey = strdup ("");
+
+	ck_assert (!BarUiDoPandoraReconnect (&app, NULL));
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static bool
+mock_reconnect_login_ok_stations_fail (BarApp_t *app, const PianoRequestType_t type,
+		void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_LOGIN) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	if (type == PIANO_REQUEST_GET_STATIONS) {
+		*pRet = PIANO_RET_P_INTERNAL;
+		*wRet = CURLE_OK;
+		return false;
+	}
+	return false;
+}
+
+START_TEST (test_ui_do_pandora_reconnect_get_stations_failure)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	ck_assert_int_eq (pthread_mutex_init (&app.pianoHttpMutex, NULL), 0);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	app.player.mode = PLAYER_DEAD;
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	BarUiPianoCallSetTestHook (mock_reconnect_login_ok_stations_fail);
+	ck_assert (!BarUiDoPandoraReconnect (&app, NULL));
+	BarUiPianoCallClearTestHook ();
+
+	free (app.lastStationId);
+	pthread_mutex_destroy (&app.pianoHttpMutex);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 static bool
 mock_delete_station_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
                         PianoReturn_t *pRet, CURLcode *wRet)
@@ -1878,6 +1981,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_switch_station_sets_next_and_drains_playlist);
 	tcase_add_test (tc, test_ui_switch_station_by_id_missing_keeps_playlist);
 	tcase_add_test (tc, test_ui_switch_station_by_id_null_returns_false);
+	tcase_add_test (tc, test_ui_switch_station_by_id_found_sets_next);
 	tcase_add_test (tc, test_ui_act_song_info_quickmix_resolves_child_station);
 	tcase_add_test (tc, test_ui_act_print_upcoming_lists_and_broadcasts);
 	tcase_add_test (tc, test_ui_act_print_upcoming_empty_queue_cli_message);
@@ -1900,6 +2004,8 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_settings_change_username);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_playlist_session_error_message);
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_piano_reinit_failure);
+	tcase_add_test (tc, test_ui_do_pandora_reconnect_piano_reinit_failure);
+	tcase_add_test (tc, test_ui_do_pandora_reconnect_get_stations_failure);
 	suite_add_tcase (s, tc);
 	return s;
 }

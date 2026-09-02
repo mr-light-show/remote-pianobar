@@ -214,8 +214,7 @@ BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
 	 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
 	 * This prevents disconnect (power button) from terminating the process. */
 	pthread_mutex_lock(&app->player.lock);
-	if (atomic_load_explicit (&app->player.interrupted, memory_order_relaxed) != 0 &&
-			atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+	if (atomic_load_explicit (&app->player.interrupted, memory_order_relaxed) != 0 && atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 		log_write(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
 	}
 	pthread_mutex_unlock(&app->player.lock);
@@ -244,8 +243,7 @@ static void *BarPlaybackManagerThread(void *data) {
 	
 	log_write(DEBUG_UI, "PlaybackMgr: Thread started\n");
 	
-	while (!atomic_load_explicit (&app->doQuit, memory_order_relaxed) &&
-			atomic_load_explicit (&g_running, memory_order_relaxed)) {
+	while (!atomic_load_explicit (&app->doQuit, memory_order_relaxed) && atomic_load_explicit (&g_running, memory_order_relaxed)) {
 		const bool park_idle = BarPlaybackShouldParkIdle(app);
 
 		pthread_mutex_lock(&app->player.lock);
@@ -312,8 +310,7 @@ static void *BarPlaybackManagerThread(void *data) {
 			PianoSong_t *playlist = BarStateGetPlaylist(app);
 			PianoStation_t *nextStation = BarStateGetNextStation(app);
 			
-			if (playlist == NULL && nextStation != NULL &&
-					!atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+			if (playlist == NULL && nextStation != NULL && !atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 				PianoStation_t *curStation = BarStateGetCurrentStation(app);
 				
 				if (nextStation != curStation) {

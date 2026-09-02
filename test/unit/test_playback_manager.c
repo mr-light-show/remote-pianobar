@@ -23,7 +23,9 @@ THE SOFTWARE.
 #include <check.h>
 #include <pthread.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <unistd.h>
+#include "../../src/ui.h"
 
 #include "../../src/bar_state.h"
 #include "../../src/bar_constants.h"
@@ -133,7 +135,7 @@ START_TEST(test_complete_song_cleanup_interrupt_on_quit) {
 	app.doQuit = true;
 	BarStateInit(&app);
 	pthread_mutex_init(&app.player.lock, NULL);
-	app.player.interrupted = 1;
+	atomic_store_explicit (&app.player.interrupted, 1, memory_order_relaxed);
 	ck_assert(pthread_create(&playerThread, NULL, test_player_thread_ok, NULL) == 0);
 
 	mode = BarPlaybackManagerCompleteSongCleanup(&app, &playerThread,
@@ -221,6 +223,51 @@ START_TEST(test_manager_idle_advances_playlist) {
 
 	ck_assert_ptr_null(BarStateGetPlaylist(&app));
 	ck_assert_ptr_eq(app.songHistory, &song);
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+}
+END_TEST
+
+static bool
+mock_get_playlist_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                      PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	(void) type;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+START_TEST(test_manager_fetches_playlist_when_next_station_set) {
+	BarApp_t app;
+	PianoStation_t st;
+
+	memset(&st, 0, sizeof(st));
+	st.id = "fetch-st";
+	st.name = "Fetch";
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+	BarStateSetNextStation(&app, &st);
+	BarUiPianoCallSetTestHook (mock_get_playlist_ok);
+
+	ck_assert(BarPlaybackManagerStart(&app));
+	pthread_mutex_lock(&app.player.lock);
+	pthread_cond_broadcast(&app.player.cond);
+	pthread_mutex_unlock(&app.player.lock);
+	usleep(150000);
+
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarPlaybackManagerStop(&app);
+	BarUiPianoCallClearTestHook ();
 
 	pthread_mutex_destroy(&app.player.lock);
 	pthread_cond_destroy(&app.player.cond);
@@ -395,6 +442,7 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_complete_song_cleanup_no_interrupt_log_when_not_quitting);
 	tcase_add_test(tc, test_manager_thread_one_loop_iteration);
 	tcase_add_test(tc, test_manager_idle_advances_playlist);
+	tcase_add_test(tc, test_manager_fetches_playlist_when_next_station_set);
 	tcase_add_test(tc, test_should_park_idle_when_dead_and_empty);
 	tcase_add_test(tc, test_should_not_park_when_next_station_set);
 	tcase_add_test(tc, test_should_not_park_when_not_dead);

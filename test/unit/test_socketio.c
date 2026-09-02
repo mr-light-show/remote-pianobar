@@ -676,7 +676,14 @@ START_TEST (test_socketio_handle_change_station_switches_when_found) {
 	memset (&app, 0, sizeof (app));
 	memset (&station, 0, sizeof (station));
 	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
 	BarStateInit (&app);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.decoderLock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.decoderCond, NULL), 0);
+	app.player.settings = &app.settings;
+	app.lastStationId = strdup ("old-station");
 	station.id = "live-station";
 	station.name = "Live Station";
 	app.ph.stations = &station;
@@ -685,7 +692,12 @@ START_TEST (test_socketio_handle_change_station_switches_when_found) {
 
 	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
 	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+	ck_assert_ptr_null (app.lastStationId);
 
+	pthread_cond_destroy (&app.player.decoderCond);
+	pthread_mutex_destroy (&app.player.decoderLock);
+	pthread_cond_destroy (&app.player.cond);
+	pthread_mutex_destroy (&app.player.lock);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 }
