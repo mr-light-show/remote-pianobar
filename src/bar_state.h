@@ -187,8 +187,20 @@ PianoSong_t *BarStateGetPlaylist(const BarApp_t *app);
 void BarStateSetPlaylist(BarApp_t *app, PianoSong_t *playlist);
 /* Pop head song for history; NULL if playlist empty or already drained. */
 PianoSong_t *BarStateAdvancePlaylist(BarApp_t *app);
+void BarStateTruncatePlaylistTail(BarApp_t *app);
 void BarStateDrainPlaylist(BarApp_t *app);
 void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station);
+void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station);
+bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId);
+void BarStateApplyQuickMixIds(BarApp_t *app, const char * const *stationIds,
+		size_t stationIdCount);
+void BarStateUpdateStationDisplayNames(BarApp_t *app);
+
+/* Serialize libpiano request/response operations that touch shared Piano state. */
+PianoReturn_t BarStatePianoRequest(BarApp_t *app, PianoRequest_t *req,
+		PianoRequestType_t type);
+PianoReturn_t BarStatePianoResponse(BarApp_t *app, PianoRequest_t *req);
+PianoReturn_t BarStateResetPianoHandle(BarApp_t *app);
 
 /* Player state access (thread-safe) */
 BarPlayerMode BarStateGetPlayerMode(const BarApp_t *app);
@@ -199,4 +211,3 @@ bool BarStateGetPlayerPaused(const BarApp_t *app);
 
 /* Check if logged in to Pandora */
 bool BarStateIsPandoraConnected(const BarApp_t *app);
-

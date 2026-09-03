@@ -138,8 +138,15 @@ void BarWsBroadcastProgress(BarApp_t *app) {
 }
 
 void BarWsBroadcastPlayState(BarApp_t *app) {
-	if (app && app->wsContext) {
-		BarSocketIoEmitPlayState(app);
+	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
+		struct json_object *data = json_object_new_object ();
+		pthread_mutex_lock (&app->player.lock);
+		json_object_object_add(data, "paused",
+				json_object_new_boolean(app->player.doPause));
+		pthread_mutex_unlock (&app->player.lock);
+		char *msg = BarSocketIoFormatEventMessage ("playState", data);
+		json_object_put (data);
+		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
 	}
 }
 
@@ -262,8 +269,14 @@ void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
 
 /* Pandora disconnect notification */
 void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
-	(void)app;
-	BarSocketIoEmitPandoraDisconnected(reason);
+	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
+		struct json_object *data = json_object_new_object ();
+		json_object_object_add(data, "reason",
+				json_object_new_string(reason ? reason : "unknown"));
+		char *msg = BarSocketIoFormatEventMessage ("pandora.disconnected", data);
+		json_object_put (data);
+		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+	}
 }
 
 /* Web info printing (web or both mode) */
@@ -358,12 +371,11 @@ void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
 void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
 	(void)app; (void)reason;
 }
-void BarWsPrintWebInfo(BarApp_t *app, FILE *stream) { (void)app; (void)stream; }
+void BarWsPrintWebInfo(const BarApp_t *app, FILE *stream) { (void)app; (void)stream; }
 void BarWsConfigureWebOnlyInput(BarApp_t *app) { (void)app; }
 bool BarWsSettingsIsWebActive(const BarSettings_t *s) { (void)s; return false; }
-void BarWsPrintPidFileInfo(BarApp_t *app, bool is_daemon, FILE *stream) {
+void BarWsPrintPidFileInfo(const BarApp_t *app, bool is_daemon, FILE *stream) {
 	(void)app; (void)is_daemon; (void)stream;
 }
 void BarWsPrintStartupInfo(const BarApp_t *app) { (void)app; }
 #endif
-

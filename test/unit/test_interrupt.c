@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include <check.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 #include "../../src/interrupt.h"
 
@@ -35,12 +36,12 @@ END_TEST
 
 START_TEST (test_interrupt_increment_updates_target)
 {
-	sig_atomic_t flag = 0;
+	_Atomic sig_atomic_t flag = 0;
 	BarInterruptSetTarget (&flag);
 	BarInterruptIncrement ();
-	ck_assert_int_eq (flag, 1);
+	ck_assert_int_eq (atomic_load (&flag), 1);
 	BarInterruptIncrement ();
-	ck_assert_int_eq (flag, 2);
+	ck_assert_int_eq (atomic_load (&flag), 2);
 	BarInterruptSetTarget (NULL);
 }
 END_TEST

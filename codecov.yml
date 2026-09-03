@@ -27,3 +27,4 @@ ignore:
   - "src/**/*.md"
   - "test/**"
   - "webui/test/**"
+  - "webui/src/locales/**"

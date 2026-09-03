@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -193,6 +194,12 @@ START_TEST(test_websocket_bridge_broadcasts_real_player_state_buckets) {
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "\"progress\"") != NULL);
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "\"elapsed\"") != NULL);
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "45") != NULL);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.songPlayed = 46;
+	app.player.songDuration = 0;
+	pthread_mutex_unlock (&app.player.lock);
+	BarWsBroadcastProgress (&app);
+	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_PROGRESS), "\"percentage\"") != NULL);
 
 	BarWsBroadcastSongStart (&app);
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_STATE), "\"start\"") != NULL);
@@ -302,10 +309,45 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 
 	g_compatBuf[0] = '\0';
 	BarWsBroadcastPandoraDisconnected (&app, "session_invalid");
-	ck_assert (strstr (g_compatBuf, "session_invalid") != NULL);
+	{
+		const char *payload = test_bucket_payload (&ctx, BUCKET_STATE);
+		ck_assert (strstr (payload, "pandora.disconnected") != NULL);
+		ck_assert (strstr (payload, "session_invalid") != NULL);
+	}
+	BarWsBroadcastPandoraDisconnected (&app, NULL);
+	{
+		const char *payload = test_bucket_payload (&ctx, BUCKET_STATE);
+		ck_assert (strstr (payload, "pandora.disconnected") != NULL);
+		ck_assert (strstr (payload, "unknown") != NULL);
+	}
 
 	BarSocketIoSetBroadcastCallback (NULL);
 	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST(test_websocket_bridge_guarded_broadcasts_noop_without_web_context) {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.wsContext = &ctx;
+
+	BarWsBroadcastPlayState (NULL);
+	BarWsBroadcastPlayState (&app);
+	BarWsBroadcastPandoraDisconnected (NULL, "ignored");
+	BarWsBroadcastPandoraDisconnected (&app, "ignored");
+	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
+
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.wsContext = NULL;
+	BarWsBroadcastPlayState (&app);
+	BarWsBroadcastPandoraDisconnected (&app, "ignored");
+	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
+
+	BarSettingsDestroy (&app.settings);
 }
 END_TEST
 
@@ -327,7 +369,10 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 
 	g_compatBuf[0] = '\0';
 	BarWsBroadcastPlayState (&app);
-	ck_assert (g_compatBuf[0] != '\0');
+	{
+		const char *payload = test_bucket_payload (&ctx, BUCKET_STATE);
+		ck_assert (strstr (payload, "playState") != NULL);
+	}
 
 	app.lockFd = dup (STDERR_FILENO);
 	ck_assert_int_ge (app.lockFd, 0);
@@ -498,6 +543,29 @@ START_TEST (test_websocket_init_destroy_emits_debug_lifecycle_logs)
 END_TEST
 
 #endif /* HAVE_DEBUGLOG */
+
+START_TEST (test_websocket_init_destroy_stops_when_app_quits)
+{
+	BarApp_t app;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = 18082;
+
+	if (!BarWebsocketInit (&app)) {
+		BarSettingsDestroy (&app.settings);
+		return;
+	}
+
+	usleep (80000);
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	usleep (80000);
+	BarWebsocketDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
 
 START_TEST (test_websocket_bridge_print_bind_all_and_startup_info)
 {
@@ -785,6 +853,7 @@ Suite *websocket_suite(void) {
 	tc_core = tcase_create("Core");
 	
 	tcase_add_test(tc_core, test_websocket_init_null);
+	tcase_add_test(tc_core, test_websocket_init_destroy_stops_when_app_quits);
 	tcase_add_test(tc_core, test_websocket_destroy_null);
 	tcase_add_test(tc_core, test_websocket_elapsed_null);
 	tcase_add_test(tc_core, test_websocket_broadcast_null);
@@ -795,6 +864,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
 	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
+	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_without_unicast_target);
 	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
@@ -821,4 +891,3 @@ Suite *websocket_suite(void) {
 	
 	return s;
 }
-

@@ -25,6 +25,7 @@ THE SOFTWARE.
 
 #include "bar_constants.h"
 #include <curl/curl.h>
+#include <stdatomic.h>
 
 #include <piano.h>
 
@@ -44,7 +45,7 @@ typedef struct {
 	/* station of current song and station used to fetch songs from if playlist
 	 * is empty */
 	PianoStation_t *curStation, *nextStation;
-	sig_atomic_t doQuit;
+	_Atomic sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
 	char *lastStationId;  /* Station ID to auto-resume after reconnect */
@@ -62,6 +63,11 @@ typedef struct {
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
 	#endif
 	BarL10nContext_t l10n;
+	/* Auto-recovery of an unexpectedly dead Pandora session (see
+	 * BarSessionTryAutoRecover): one attempt per session death, cleared once a
+	 * song starts, so an outage cannot become a reconnect loop.  Written by the
+	 * playback manager and the WebSocket thread. */
+	_Atomic bool autoRecoverInFlight;
+	_Atomic bool autoRecoverFailed;
 } BarApp_t;
-
 

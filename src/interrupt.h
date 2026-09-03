@@ -22,12 +22,13 @@ THE SOFTWARE.
 
 #pragma once
 #include <signal.h>
+#include <stdatomic.h>
 
 /* Register the sig_atomic_t target that signal handlers increment.
    Call once at startup; may be called again to redirect the interrupt target
    (e.g. from app->doQuit to player->interrupted during playback). */
-void          BarInterruptSetTarget (sig_atomic_t *target);
-sig_atomic_t *BarInterruptGetTarget (void);
+void                   BarInterruptSetTarget (_Atomic sig_atomic_t *target);
+_Atomic sig_atomic_t  *BarInterruptGetTarget (void);
 
 /* Atomically increment the current target; safe to call from a signal handler. */
 void          BarInterruptIncrement (void);
