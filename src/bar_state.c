@@ -45,13 +45,18 @@ THE SOFTWARE.
  *	See src/THREAD_SAFETY.md for complete documentation
  */
 static bool state_needs_lock (const BarApp_t *app) {
-	#ifdef WEBSOCKET_ENABLED
-	return app->settings.uiMode == BAR_UI_MODE_BOTH ||
-	       app->settings.uiMode == BAR_UI_MODE_WEB;
-	#else
+#ifdef WEBSOCKET_ENABLED
+	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
+		return true;
+	}
+	if (app->settings.uiMode == BAR_UI_MODE_WEB) {
+		return true;
+	}
+	return false;
+#else
 	(void) app;
 	return false;
-	#endif
+#endif
 }
 
 void BarStateSignalPlaybackManager(BarApp_t *app)
@@ -371,11 +376,17 @@ bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
 	bool found = false;
 	PianoSong_t *tail = NULL;
 	WITH_STATE_LOCK(app, "PrepareStationSwitchById", NULL) {
-		PianoStation_t *station = app->ph.stations != NULL ?
-				PianoFindStationById(app->ph.stations, stationId) : NULL;
+		PianoStation_t *station = NULL;
+		if (app->ph.stations != NULL) {
+			station = PianoFindStationById(app->ph.stations, stationId);
+		}
 		if (station != NULL) {
+			const char *stationName = "null";
+			if (station->name != NULL) {
+				stationName = station->name;
+			}
 			log_write(DEBUG_UI, "State: PrepareStationSwitchById <- %s\n",
-					station->name ? station->name : "null");
+					stationName);
 			app->nextStation = station;
 			found = true;
 			if (app->playlist != NULL) {
@@ -406,14 +417,20 @@ void BarStateApplyQuickMixIds(BarApp_t *app, const char * const *stationIds,
 		}
 
 		for (size_t i = 0; i < stationIdCount; i++) {
-			const char *stationId = stationIds ? stationIds[i] : NULL;
+			const char *stationId = NULL;
+			if (stationIds != NULL) {
+				stationId = stationIds[i];
+			}
 			if (stationId == NULL) {
 				continue;
 			}
 
 			station = app->ph.stations;
 			PianoListForeachP (station) {
-				if (station->id != NULL && strcmp(station->id, stationId) == 0) {
+				if (station->id == NULL) {
+					continue;
+				}
+				if (strcmp(station->id, stationId) == 0) {
 					station->useQuickMix = true;
 					break;
 				}

@@ -191,12 +191,16 @@ static size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
  */
 int progressCb (void * const data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow) {
-	const sig_atomic_t lint = atomic_load_explicit ((_Atomic sig_atomic_t *) data, memory_order_relaxed);
-	if (lint) {
+	(void) dltotal;
+	(void) dlnow;
+	(void) ultotal;
+	(void) ulnow;
+	const _Atomic sig_atomic_t *flag = data;
+	const sig_atomic_t lint = atomic_load_explicit (flag, memory_order_relaxed);
+	if (lint != 0) {
 		return 1;
-	} else {
-		return 0;
 	}
+	return 0;
 }
 
 /*	Error codes from libcurl, which may be temporary and should be retried.

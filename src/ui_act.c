@@ -809,9 +809,11 @@ static bool BarSessionTeardown(BarApp_t *app,
 		           context);
 	}
 	
-	if (freeSongHistory && app->songHistory != NULL) {
-		PianoDestroyPlaylist(app->songHistory);
-		app->songHistory = NULL;
+	if (freeSongHistory) {
+		if (app->songHistory != NULL) {
+			PianoDestroyPlaylist(app->songHistory);
+			app->songHistory = NULL;
+		}
 	}
 	
 	/* Disconnect from Pandora (destroys stations, user info, partner).
@@ -1384,8 +1386,10 @@ bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
 
 	/* One attempt per session death (cleared when a song starts) so a Pandora
 	 * outage cannot turn into a reconnect loop. */
-	if (atomic_load (&app->autoRecoverInFlight) ||
-			atomic_load (&app->autoRecoverFailed)) {
+	if (atomic_load (&app->autoRecoverInFlight)) {
+		return false;
+	}
+	if (atomic_load (&app->autoRecoverFailed)) {
 		return false;
 	}
 

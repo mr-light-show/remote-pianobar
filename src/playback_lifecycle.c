@@ -79,11 +79,14 @@ bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 		/* Station pointers do not survive the session teardown: keep our own
 		 * copy of the id we were fetching so it can be resumed. */
 		const PianoStation_t * const station = BarStateGetNextStation (app);
-		char *resumeId = (station != NULL && station->id != NULL) ?
-				strdup (station->id) : NULL;
+		char *resumeId = NULL;
+		if (station != NULL && station->id != NULL) {
+			resumeId = strdup (station->id);
+		}
 
-		if (wRet == CURLE_ABORTED_BY_CALLBACK ||
-				atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+		if (wRet == CURLE_ABORTED_BY_CALLBACK) {
+			BarStateSetNextStation (app, NULL);
+		} else if (atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 			/* Interrupted or shutting down: leave the session alone. */
 			BarStateSetNextStation (app, NULL);
 		} else if (BarSessionTryAutoRecover (app, "playlist_session_error",

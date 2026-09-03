@@ -312,6 +312,34 @@ START_TEST (test_playback_fetch_playlist_interrupted_skips_recovery)
 }
 END_TEST
 
+START_TEST (test_playback_fetch_playlist_doquit_skips_recovery)
+{
+	BarApp_t app;
+	PianoStation_t *station;
+
+	setup_playback_app_with_piano (&app);
+	station = alloc_station ("station-doquit", "Quit Station");
+	app.ph.stations = station;
+	BarStateSetNextStation (&app, station);
+	BarStateSetCurrentStation (&app, station);
+	atomic_store_explicit (&app.doQuit, 1, memory_order_relaxed);
+
+	reset_session_mocks ();
+	g_fetch_failures = UINT_MAX;
+	g_fetch_pRet = PIANO_RET_OK;
+	g_fetch_wRet = CURLE_COULDNT_CONNECT;
+	BarUiPianoCallSetTestHook (mock_session_recovery);
+
+	ck_assert (!BarPlaybackFetchPlaylist (&app));
+
+	ck_assert_uint_eq (g_login_attempts, 0);
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+	ck_assert_ptr_null (app.lastStationId);
+
+	teardown_playback_app_with_piano (&app);
+}
+END_TEST
+
 /* Reconnect worked but the station is gone: stay connected, play nothing */
 START_TEST (test_playback_fetch_playlist_recovers_without_station)
 {
@@ -539,6 +567,7 @@ Suite *playback_lifecycle_suite (void) {
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_only_once);
 	tcase_add_test (tc, test_playback_fetch_playlist_disconnects_when_retry_fails);
 	tcase_add_test (tc, test_playback_fetch_playlist_interrupted_skips_recovery);
+	tcase_add_test (tc, test_playback_fetch_playlist_doquit_skips_recovery);
 	tcase_add_test (tc, test_playback_fetch_playlist_recovers_without_station);
 	suite_add_tcase (s, tc);
 	return s;
