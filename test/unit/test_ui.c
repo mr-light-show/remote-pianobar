@@ -30,6 +30,7 @@ THE SOFTWARE.
 
 #include "../../src/main.h"
 #include "../../src/settings.h"
+#include "../../src/bar_state.h"
 #include "../../src/ui.h"
 #include "../../src/libpiano/piano.h"
 
@@ -250,6 +251,54 @@ START_TEST (test_ui_piano_call_logged_delegates_to_hook)
 }
 END_TEST
 
+/* Real BarUiPianoCall path (no test hook): PianoRequest + HTTP, which
+ * exercises progressCb and the atomic interrupt snapshot in BarPianoHttpRequest. */
+START_TEST (test_ui_piano_call_http_hits_progress_cb)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t loginData;
+	PianoReturn_t pRet = PIANO_RET_OK;
+	CURLcode wRet = CURLE_OK;
+
+	memset (&app, 0, sizeof (app));
+	memset (&loginData, 0, sizeof (loginData));
+	BarSettingsInit (&app.settings);
+#ifdef WEBSOCKET_ENABLED
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+#endif
+	free (app.settings.rpcHost);
+	free (app.settings.rpcTlsPort);
+	app.settings.rpcHost = strdup ("127.0.0.1");
+	app.settings.rpcTlsPort = strdup ("1");
+	app.settings.timeout = 1;
+	app.settings.maxRetry = 1;
+	app.settings.username = strdup ("user");
+	app.settings.password = strdup ("pass");
+	ck_assert_ptr_nonnull (app.settings.rpcHost);
+	ck_assert_ptr_nonnull (app.settings.rpcTlsPort);
+
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	app.http = curl_easy_init ();
+	ck_assert_ptr_nonnull (app.http);
+	ck_assert_int_eq (PianoInit (&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+
+	loginData.user = app.settings.username;
+	loginData.password = app.settings.password;
+	loginData.step = 0;
+	BarUiPianoCallClearTestHook ();
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &loginData, &pRet, &wRet));
+
+	curl_easy_cleanup (app.http);
+	app.http = NULL;
+	PianoDestroy (&app.ph);
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -265,6 +314,8 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
 	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
+	tcase_add_test (tc, test_ui_piano_call_http_hits_progress_cb);
+	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
 }

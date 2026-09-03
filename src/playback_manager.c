@@ -214,8 +214,10 @@ BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
 	 * Skip/disconnect operations set player.interrupted but should NOT quit the app.
 	 * This prevents disconnect (power button) from terminating the process. */
 	pthread_mutex_lock(&app->player.lock);
-	if (atomic_load_explicit (&app->player.interrupted, memory_order_relaxed) != 0 && atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
-		log_write(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
+	if (atomic_load_explicit (&app->player.interrupted, memory_order_relaxed) != 0) {
+		if (atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+			log_write(DEBUG_UI, "PlaybackMgr: Interrupt detected during quit\n");
+		}
 	}
 	pthread_mutex_unlock(&app->player.lock);
 

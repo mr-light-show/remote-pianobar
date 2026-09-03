@@ -687,6 +687,115 @@ START_TEST(test_bar_state_piano_request_response_wrappers) {
 }
 END_TEST
 
+/* Exercise every new lock site in CLI (no rwlock) and WEB (rwlock, no BOTH
+ * short-circuit) so gcc branch coverage on state_needs_lock() is complete. */
+static void
+exercise_new_bar_state_apis(BarUiMode_t mode)
+{
+	BarApp_t app;
+	PianoStation_t first, second;
+	PianoSong_t current;
+	PianoSong_t *tail;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t loginData;
+	PianoSettings_t pianoSettings;
+	const char *ids[] = { NULL, "second" };
+
+	memset(&first, 0, sizeof(first));
+	memset(&second, 0, sizeof(second));
+	memset(&current, 0, sizeof(current));
+	memset(&req, 0, sizeof(req));
+	memset(&loginData, 0, sizeof(loginData));
+	memset(&pianoSettings, 0, sizeof(pianoSettings));
+	first.id = (char *)"first";
+	first.name = (char *)"First";
+	first.head.next = &second.head;
+	second.id = (char *)"second";
+	second.name = (char *)"Second";
+
+	bar_state_test_setup(&app, mode);
+	ck_assert_int_eq(pthread_mutex_init(&app.player.lock, NULL), 0);
+	ck_assert_int_eq(pthread_cond_init(&app.player.cond, NULL), 0);
+	app.ph.stations = &first;
+
+	BarStateTruncatePlaylistTail(&app);
+
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	current.head.next = &tail->head;
+	app.playlist = &current;
+	BarStateTruncatePlaylistTail(&app);
+	ck_assert_ptr_null(current.head.next);
+
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	current.head.next = &tail->head;
+	app.playlist = &current;
+	BarStatePrepareStationSwitch(&app, &second);
+	ck_assert_ptr_null(current.head.next);
+
+	current.head.next = NULL;
+	app.playlist = NULL;
+	BarStatePrepareStationSwitch(&app, &first);
+
+	ck_assert(!BarStatePrepareStationSwitchById(&app, NULL));
+	ck_assert(!BarStatePrepareStationSwitchById(&app, "missing"));
+	app.ph.stations = NULL;
+	ck_assert(!BarStatePrepareStationSwitchById(&app, "first"));
+	app.ph.stations = &first;
+	second.name = NULL;
+	ck_assert(BarStatePrepareStationSwitchById(&app, "second"));
+	second.name = (char *)"Second";
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	current.head.next = &tail->head;
+	app.playlist = &current;
+	ck_assert(BarStatePrepareStationSwitchById(&app, "first"));
+	ck_assert_ptr_null(current.head.next);
+
+	BarStateApplyQuickMixIds(&app, ids, 2);
+	BarStateApplyQuickMixIds(&app, NULL, 0);
+	BarStateUpdateStationDisplayNames(&app);
+	free(first.displayName);
+	first.displayName = NULL;
+	free(second.displayName);
+	second.displayName = NULL;
+
+	app.ph.stations = NULL;
+	app.playlist = NULL;
+	ck_assert_int_eq(PianoInit(&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	loginData.step = 0;
+	req.data = &loginData;
+	(void)BarStatePianoRequest(&app, &req, PIANO_REQUEST_LOGIN);
+	PianoDestroyRequest(&req);
+
+	req.type = PIANO_REQUEST_GET_SETTINGS;
+	req.data = &pianoSettings;
+	req.responseData = "{\"stat\":\"ok\",\"result\":{\"username\":\"tester\","
+			"\"isExplicitContentFilterEnabled\":true}}";
+	(void)BarStatePianoResponse(&app, &req);
+	free(pianoSettings.username);
+
+	app.settings.partnerUser = (char *)"partner-user";
+	app.settings.partnerPassword = (char *)"partner-pass";
+	app.settings.device = (char *)"device";
+	app.settings.inkey = (char *)"0123456789abcdef";
+	app.settings.outkey = (char *)"0123456789abcdef";
+	ck_assert_int_eq(BarStateResetPianoHandle(&app), PIANO_RET_OK);
+	PianoDestroy(&app.ph);
+
+	pthread_cond_destroy(&app.player.cond);
+	pthread_mutex_destroy(&app.player.lock);
+	bar_state_test_teardown(&app);
+}
+
+START_TEST(test_bar_state_new_apis_cli_and_web) {
+	exercise_new_bar_state_apis(BAR_UI_MODE_CLI);
+	exercise_new_bar_state_apis(BAR_UI_MODE_WEB);
+}
+END_TEST
+
 /* Player state getters use player.lock, not stateRwlock */
 START_TEST(test_bar_state_player_mode_time_paused) {
 	BarApp_t app;
@@ -1024,6 +1133,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_empty_list);
 	tcase_add_test(tc_misc, test_bar_update_station_display_names_null_app_noop);
 	tcase_add_test(tc_misc, test_bar_state_piano_request_response_wrappers);
+	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 
 	TCase *tc_web = tcase_create("WEB mode locking");
