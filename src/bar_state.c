@@ -296,12 +296,12 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 	assert(app != NULL);
 
 	PianoSong_t *tail = NULL;
-	WITH_STATE_LOCK(app, "TruncatePlaylistTail", NULL) {
-		if (app->playlist != NULL) {
-			tail = PianoListNextP(app->playlist);
-			app->playlist->head.next = NULL;
-		}
+	state_rwlock_wrlock_internal(app, "TruncatePlaylistTail");
+	if (app->playlist != NULL) {
+		tail = PianoListNextP(app->playlist);
+		app->playlist->head.next = NULL;
 	}
+	state_rwlock_unlock_internal(app, "TruncatePlaylistTail", NULL);
 	if (tail != NULL) {
 		PianoDestroyPlaylist(tail);
 	}
@@ -348,14 +348,14 @@ void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station) {
 	assert(station != NULL);
 
 	PianoSong_t *tail = NULL;
-	WITH_STATE_LOCK(app, "PrepareStationSwitch",
-			"State: PrepareStationSwitch <- %s\n", station->name) {
-		app->nextStation = station;
-		if (app->playlist != NULL) {
-			tail = PianoListNextP(app->playlist);
-			app->playlist->head.next = NULL;
-		}
+	state_rwlock_wrlock_internal(app, "PrepareStationSwitch");
+	log_write(DEBUG_UI, "State: PrepareStationSwitch <- %s\n", station->name);
+	app->nextStation = station;
+	if (app->playlist != NULL) {
+		tail = PianoListNextP(app->playlist);
+		app->playlist->head.next = NULL;
 	}
+	state_rwlock_unlock_internal(app, "PrepareStationSwitch", NULL);
 	if (tail != NULL) {
 		PianoDestroyPlaylist(tail);
 	}
@@ -375,26 +375,26 @@ bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
 
 	bool found = false;
 	PianoSong_t *tail = NULL;
-	WITH_STATE_LOCK(app, "PrepareStationSwitchById", NULL) {
-		PianoStation_t *station = NULL;
-		if (app->ph.stations != NULL) {
-			station = PianoFindStationById(app->ph.stations, stationId);
+	state_rwlock_wrlock_internal(app, "PrepareStationSwitchById");
+	PianoStation_t *station = NULL;
+	if (app->ph.stations != NULL) {
+		station = PianoFindStationById(app->ph.stations, stationId);
+	}
+	if (station != NULL) {
+		const char *stationName = "null";
+		if (station->name != NULL) {
+			stationName = station->name;
 		}
-		if (station != NULL) {
-			const char *stationName = "null";
-			if (station->name != NULL) {
-				stationName = station->name;
-			}
-			log_write(DEBUG_UI, "State: PrepareStationSwitchById <- %s\n",
-					stationName);
-			app->nextStation = station;
-			found = true;
-			if (app->playlist != NULL) {
-				tail = PianoListNextP(app->playlist);
-				app->playlist->head.next = NULL;
-			}
+		log_write(DEBUG_UI, "State: PrepareStationSwitchById <- %s\n",
+				stationName);
+		app->nextStation = station;
+		found = true;
+		if (app->playlist != NULL) {
+			tail = PianoListNextP(app->playlist);
+			app->playlist->head.next = NULL;
 		}
 	}
+	state_rwlock_unlock_internal(app, "PrepareStationSwitchById", NULL);
 	if (tail != NULL) {
 		PianoDestroyPlaylist(tail);
 	}
@@ -410,50 +410,50 @@ void BarStateApplyQuickMixIds(BarApp_t *app, const char * const *stationIds,
 		size_t stationIdCount) {
 	assert(app != NULL);
 
-	WITH_STATE_LOCK(app, "ApplyQuickMixIds", NULL) {
-		PianoStation_t *station = app->ph.stations;
-		PianoListForeachP (station) {
-			station->useQuickMix = false;
+	state_rwlock_wrlock_internal(app, "ApplyQuickMixIds");
+	PianoStation_t *station = app->ph.stations;
+	PianoListForeachP (station) {
+		station->useQuickMix = false;
+	}
+
+	for (size_t i = 0; i < stationIdCount; i++) {
+		const char *stationId = NULL;
+		if (stationIds != NULL) {
+			stationId = stationIds[i];
+		}
+		if (stationId == NULL) {
+			continue;
 		}
 
-		for (size_t i = 0; i < stationIdCount; i++) {
-			const char *stationId = NULL;
-			if (stationIds != NULL) {
-				stationId = stationIds[i];
-			}
-			if (stationId == NULL) {
+		station = app->ph.stations;
+		PianoListForeachP (station) {
+			if (station->id == NULL) {
 				continue;
 			}
-
-			station = app->ph.stations;
-			PianoListForeachP (station) {
-				if (station->id == NULL) {
-					continue;
-				}
-				if (strcmp(station->id, stationId) == 0) {
-					station->useQuickMix = true;
-					break;
-				}
+			if (strcmp(station->id, stationId) == 0) {
+				station->useQuickMix = true;
+				break;
 			}
 		}
 	}
+	state_rwlock_unlock_internal(app, "ApplyQuickMixIds", NULL);
 }
 
 void BarStateUpdateStationDisplayNames(BarApp_t *app) {
 	assert(app != NULL);
 
-	WITH_STATE_LOCK(app, "UpdateStationDisplayNames", NULL) {
-		PianoStation_t *station = app->ph.stations;
-		PianoListForeachP (station) {
-			free(station->displayName);
-			station->displayName = NULL;
+	state_rwlock_wrlock_internal(app, "UpdateStationDisplayNames");
+	PianoStation_t *station = app->ph.stations;
+	PianoListForeachP (station) {
+		free(station->displayName);
+		station->displayName = NULL;
 
-			if (station->name != NULL) {
-				station->displayName =
-						BarApplyStationNameOverrides(&app->settings, station->name);
-			}
+		if (station->name != NULL) {
+			station->displayName =
+					BarApplyStationNameOverrides(&app->settings, station->name);
 		}
 	}
+	state_rwlock_unlock_internal(app, "UpdateStationDisplayNames", NULL);
 }
 
 /*	Serialize libpiano state reads/writes with state snapshots.
@@ -465,9 +465,9 @@ PianoReturn_t BarStatePianoRequest(BarApp_t *app, PianoRequest_t *req,
 	assert(req != NULL);
 
 	PianoReturn_t ret;
-	WITH_STATE_LOCK_RETURN(app, "PianoRequest", ret, NULL) {
-		ret = PianoRequest(&app->ph, req, type);
-	}
+	state_rwlock_rdlock_internal(app, "PianoRequest");
+	ret = PianoRequest(&app->ph, req, type);
+	state_rwlock_unlock_internal(app, "PianoRequest", NULL);
 	return ret;
 }
 
@@ -476,9 +476,9 @@ PianoReturn_t BarStatePianoResponse(BarApp_t *app, PianoRequest_t *req) {
 	assert(req != NULL);
 
 	PianoReturn_t ret;
-	WITH_STATE_LOCK_WRITE_RETURN(app, "PianoResponse", ret, NULL) {
-		ret = PianoResponse(&app->ph, req);
-	}
+	state_rwlock_wrlock_internal(app, "PianoResponse");
+	ret = PianoResponse(&app->ph, req);
+	state_rwlock_unlock_internal(app, "PianoResponse", NULL);
 	return ret;
 }
 
@@ -486,12 +486,12 @@ PianoReturn_t BarStateResetPianoHandle(BarApp_t *app) {
 	assert(app != NULL);
 
 	PianoReturn_t ret;
-	WITH_STATE_LOCK_WRITE_RETURN(app, "ResetPianoHandle", ret, NULL) {
-		PianoDestroy(&app->ph);
-		ret = PianoInit(&app->ph, app->settings.partnerUser,
-				app->settings.partnerPassword, app->settings.device,
-				app->settings.inkey, app->settings.outkey);
-	}
+	state_rwlock_wrlock_internal(app, "ResetPianoHandle");
+	PianoDestroy(&app->ph);
+	ret = PianoInit(&app->ph, app->settings.partnerUser,
+			app->settings.partnerPassword, app->settings.device,
+			app->settings.inkey, app->settings.outkey);
+	state_rwlock_unlock_internal(app, "ResetPianoHandle", NULL);
 	return ret;
 }
 

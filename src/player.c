@@ -1262,12 +1262,8 @@ void *BarPlayerThread(void *data) {
 					break;
 				}
 
-				retry = false;
-				if (ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) {
-					if (atomic_load_explicit (&player->interrupted, memory_order_relaxed) == 0) {
-						retry = true;
-					}
-				}
+				retry = (ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) &&
+						(atomic_load_explicit (&player->interrupted, memory_order_relaxed) == 0);
 			} else {
 				pret = PLAYER_RET_HARDFAIL;
 			}

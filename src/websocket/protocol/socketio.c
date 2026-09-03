@@ -1801,13 +1801,11 @@ void BarSocketIoHandleSetQuickMix(BarApp_t *app, json_object *data) {
 		return;
 	}
 
-	const char **stationIds = NULL;
-	if (arrayLen > 0) {
-		stationIds = calloc(arrayLen, sizeof(*stationIds));
-		if (stationIds == NULL) {
-			log_write(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - out of memory\n");
-			return;
-		}
+	const char **stationIds = arrayLen > 0 ?
+			calloc(arrayLen, sizeof(*stationIds)) : NULL;
+	if (arrayLen > 0 && stationIds == NULL) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: setQuickMix - out of memory\n");
+		return;
 	}
 	size_t stationIdCount = 0;
 	for (size_t i = 0; i < arrayLen; i++) {
