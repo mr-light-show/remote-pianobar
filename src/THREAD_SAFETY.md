@@ -57,7 +57,7 @@ Pianobar uses **several synchronization primitives**:
 | Lock | Purpose | Scope | File |
 |------|---------|-------|------|
 | `app->pianoHttpMutex` | **Recursive** mutex: serializes all of [`BarUiPianoCall`](ui.c) (shared `CURL *`, `PianoRequest`/`PianoResponse` on `app->ph`) so only one thread performs Pandora HTTP at a time | Always (after init in `main`) | [`main.h`](main.h), [`ui.c`](ui.c) |
-| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters (playlist/station pointers, not Piano HTTP) | `BAR_UI_MODE_WEB` and `BAR_UI_MODE_BOTH` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
+| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | `BAR_UI_MODE_WEB` and `BAR_UI_MODE_BOTH` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
@@ -66,7 +66,7 @@ Pianobar uses **several synchronization primitives**:
 
 **Session teardown (`PianoDestroy` / `PianoInit`):** [`BarUiDoPandoraDisconnect`](ui_act.c) and [`BarUiActPandoraReconnect`](ui_act.c) reset `app->ph` under the same **`pianoHttpMutex`**, so no thread can run [`BarUiPianoCall`](ui.c) concurrently while the handle is destroyed or re-initialized.
 
-**Key design:** `stateRwlock` and `pianoHttpMutex` address different concerns: quick pointer consistency (web/both) vs **libcurl thread-safety** and serial application of API responses to `app->ph`.
+**Key design:** `stateRwlock` and `pianoHttpMutex` address different concerns: quick pointer consistency (web/both) vs **libcurl thread-safety** and serial application of Pandora RPCs. The only intentional overlap is the short libpiano request/response/reset critical section, where `pianoHttpMutex` is already held and `stateRwlock` protects shared station/playlist pointers while libpiano reads or mutates `app->ph`.
 
 ### Player Lock Architecture
 
@@ -135,7 +135,11 @@ When **`stateRwlock`** and **`player.lock`** must both be acquired, **always fol
 
 **Never reverse this order.** Violating lock ordering is the #1 cause of deadlocks.
 
-**Do not** acquire `stateRwlock` while holding `pianoHttpMutex`, or vice versa. In normal codepaths Pandora HTTP runs only inside [`BarUiPianoCall`](ui.c), which takes **`pianoHttpMutex` only** — not `stateRwlock`.
+When Pandora RPCs need both `pianoHttpMutex` and `stateRwlock`, the order is
+**`pianoHttpMutex` first, then `stateRwlock`**. This order is limited to the
+short libpiano request/response/reset critical sections in
+[`BarUiPianoCall`](ui.c) and [`BarStateResetPianoHandle`](bar_state.c); callers
+must not call Pandora RPC helpers while already holding `stateRwlock`.
 
 ### Lock Duration Guidelines
 

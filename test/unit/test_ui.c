@@ -21,14 +21,21 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <curl/curl.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../src/main.h"
 #include "../../src/settings.h"
+#include "../../src/bar_state.h"
 #include "../../src/ui.h"
 #include "../../src/libpiano/piano.h"
+
+int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
+		curl_off_t ultotal, curl_off_t ulnow);
 
 static char *read_tmpfile (FILE *stream)
 {
@@ -41,8 +48,9 @@ static char *read_tmpfile (FILE *stream)
 	while ((c = fgetc (stream)) != EOF) {
 		if (len + 1 >= cap) {
 			cap = cap == 0 ? 256 : cap * 2;
-			buf = realloc (buf, cap);
-			ck_assert_ptr_nonnull (buf);
+			char *new_buf = realloc (buf, cap);
+			ck_assert_ptr_nonnull (new_buf);
+			buf = new_buf;
 		}
 		buf[len++] = (char) c;
 	}
@@ -62,7 +70,9 @@ START_TEST (test_print_startup_info_cli_mode_omits_web_details)
 
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
+#ifdef WEBSOCKET_ENABLED
 	app.settings.uiMode = BAR_UI_MODE_CLI;
+#endif
 
 	out = tmpfile ();
 	ck_assert_ptr_nonnull (out);
@@ -78,6 +88,7 @@ START_TEST (test_print_startup_info_cli_mode_omits_web_details)
 }
 END_TEST
 
+#ifdef WEBSOCKET_ENABLED
 START_TEST (test_print_startup_info_web_mode_includes_url)
 {
 	BarApp_t app;
@@ -155,6 +166,7 @@ START_TEST (test_print_startup_info_daemon_includes_pid_and_pid_file)
 	BarSettingsDestroy (&app.settings);
 }
 END_TEST
+#endif
 
 START_TEST (test_sorted_stations_orders_by_name_az)
 {
@@ -198,6 +210,16 @@ START_TEST (test_sorted_stations_orders_by_name_za)
 }
 END_TEST
 
+START_TEST (test_progress_cb_returns_interrupt_state)
+{
+	_Atomic sig_atomic_t interrupted = 0;
+
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 0);
+	atomic_store_explicit (&interrupted, 1, memory_order_relaxed);
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 1);
+}
+END_TEST
+
 static bool
 mock_ui_piano_logged (BarApp_t *app, const PianoRequestType_t type, void *data,
                       PianoReturn_t *pRet, CURLcode *wRet)
@@ -229,18 +251,71 @@ START_TEST (test_ui_piano_call_logged_delegates_to_hook)
 }
 END_TEST
 
+/* Real BarUiPianoCall path (no test hook): PianoRequest + HTTP, which
+ * exercises progressCb and the atomic interrupt snapshot in BarPianoHttpRequest. */
+START_TEST (test_ui_piano_call_http_hits_progress_cb)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t loginData;
+	PianoReturn_t pRet = PIANO_RET_OK;
+	CURLcode wRet = CURLE_OK;
+
+	memset (&app, 0, sizeof (app));
+	memset (&loginData, 0, sizeof (loginData));
+	BarSettingsInit (&app.settings);
+#ifdef WEBSOCKET_ENABLED
+	app.settings.uiMode = BAR_UI_MODE_BOTH;
+#endif
+	free (app.settings.rpcHost);
+	free (app.settings.rpcTlsPort);
+	app.settings.rpcHost = strdup ("127.0.0.1");
+	app.settings.rpcTlsPort = strdup ("1");
+	app.settings.timeout = 1;
+	app.settings.maxRetry = 1;
+	app.settings.username = strdup ("user");
+	app.settings.password = strdup ("pass");
+	ck_assert_ptr_nonnull (app.settings.rpcHost);
+	ck_assert_ptr_nonnull (app.settings.rpcTlsPort);
+
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	app.http = curl_easy_init ();
+	ck_assert_ptr_nonnull (app.http);
+	ck_assert_int_eq (PianoInit (&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+
+	loginData.user = app.settings.username;
+	loginData.password = app.settings.password;
+	loginData.step = 0;
+	BarUiPianoCallClearTestHook ();
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &loginData, &pRet, &wRet));
+
+	curl_easy_cleanup (app.http);
+	app.http = NULL;
+	PianoDestroy (&app.ph);
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
 	TCase *tc = tcase_create ("core");
 
 	tcase_add_test (tc, test_print_startup_info_cli_mode_omits_web_details);
+#ifdef WEBSOCKET_ENABLED
 	tcase_add_test (tc, test_print_startup_info_web_mode_includes_url);
 	tcase_add_test (tc, test_print_startup_info_bind_all_shows_bind_address);
 	tcase_add_test (tc, test_print_startup_info_daemon_includes_pid_and_pid_file);
+#endif
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
+	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
+	tcase_add_test (tc, test_ui_piano_call_http_hits_progress_cb);
+	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
 }

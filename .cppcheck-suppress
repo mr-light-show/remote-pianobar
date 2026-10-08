@@ -30,7 +30,6 @@ constParameterCallback:src/ui_act.c
 constVariablePointer:src/ui_act.c
 staticFunction:src/ui_act.c
 constParameterPointer:src/ui_readline.c
-staticFunction:src/station_display.c
 nullPointerOutOfMemory:src/libpiano/crypt.c
 constParameterPointer:src/libpiano/list.c
 variableScope:src/libpiano/piano.c

@@ -678,16 +678,18 @@ bool BarIsAvErrStaleCdnUrl(int av_err) {
 }
 
 /* ffmpeg callback for blocking functions */
-static int intCb(void * const data) {
+int BarPlayerFfmpegInterruptCb (void * const data) {
 	player_t * const player = data;
-	assert(player != NULL);
-	if (player->interrupted > 1) {
+	assert (player != NULL);
+	const sig_atomic_t interrupted = atomic_load_explicit (&player->interrupted, memory_order_relaxed);
+	if (interrupted > 1) {
 		pthread_mutex_lock(&player->lock);
 		player->doQuit = true;
 		pthread_mutex_unlock(&player->lock);
 		return 1;
-	} else if (player->interrupted != 0) {
-		player->interrupted = 0;
+	} else if (interrupted != 0) {
+		sig_atomic_t expected = interrupted;
+		atomic_compare_exchange_strong_explicit (&player->interrupted, &expected, 0, memory_order_relaxed, memory_order_relaxed);
 		return 1;
 	} else {
 		return 0;
@@ -707,7 +709,7 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 	AVDictionary *options = NULL;
 
 	player->fctx = avformat_alloc_context();
-	player->fctx->interrupt_callback.callback = intCb;
+	player->fctx->interrupt_callback.callback = BarPlayerFfmpegInterruptCb;
 	player->fctx->interrupt_callback.opaque = player;
 
 	unsigned long int timeout = player->settings->timeout * 1000000;
@@ -1260,9 +1262,8 @@ void *BarPlayerThread(void *data) {
 					break;
 				}
 
-				retry = (ret == AVERROR_INVALIDDATA ||
-				         ret == -ECONNRESET) &&
-				        !player->interrupted;
+				retry = (ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) &&
+						(atomic_load_explicit (&player->interrupted, memory_order_relaxed) == 0);
 			} else {
 				pret = PLAYER_RET_HARDFAIL;
 			}

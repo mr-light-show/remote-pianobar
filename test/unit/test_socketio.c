@@ -676,7 +676,14 @@ START_TEST (test_socketio_handle_change_station_switches_when_found) {
 	memset (&app, 0, sizeof (app));
 	memset (&station, 0, sizeof (station));
 	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
 	BarStateInit (&app);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.decoderLock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.decoderCond, NULL), 0);
+	app.player.settings = &app.settings;
+	app.lastStationId = strdup ("old-station");
 	station.id = "live-station";
 	station.name = "Live Station";
 	app.ph.stations = &station;
@@ -685,7 +692,226 @@ START_TEST (test_socketio_handle_change_station_switches_when_found) {
 
 	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
 	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+	ck_assert_ptr_null (app.lastStationId);
 
+	pthread_cond_destroy (&app.player.decoderCond);
+	pthread_mutex_destroy (&app.player.decoderLock);
+	pthread_cond_destroy (&app.player.cond);
+	pthread_mutex_destroy (&app.player.lock);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static bool
+mock_set_quickmix_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                      PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void)data;
+	ck_assert_int_eq (type, PIANO_REQUEST_SET_QUICKMIX);
+	ck_assert_ptr_nonnull (app->ph.stations);
+	PianoStation_t *first = app->ph.stations;
+	PianoStation_t *second = (PianoStation_t *)first->head.next;
+	ck_assert_ptr_nonnull (second);
+	ck_assert (!first->useQuickMix);
+	ck_assert (second->useQuickMix);
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+static bool
+mock_set_quickmix_unexpected (BarApp_t *app, const PianoRequestType_t type,
+                              void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void)app;
+	(void)type;
+	(void)data;
+	(void)pRet;
+	(void)wRet;
+	ck_abort_msg ("oversized QuickMix payload must not reach Pandora save");
+	return false;
+}
+
+static bool
+mock_set_quickmix_empty_ok (BarApp_t *app, const PianoRequestType_t type,
+                            void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void)data;
+	ck_assert_int_eq (type, PIANO_REQUEST_SET_QUICKMIX);
+	ck_assert_ptr_nonnull (app->ph.stations);
+	PianoStation_t *first = app->ph.stations;
+	PianoStation_t *second = (PianoStation_t *)first->head.next;
+	ck_assert_ptr_nonnull (second);
+	ck_assert (!first->useQuickMix);
+	ck_assert (!second->useQuickMix);
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+START_TEST (test_socketio_handle_set_quickmix_applies_before_save) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&first, 0, sizeof (first));
+	memset (&second, 0, sizeof (second));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	first.id = "S1";
+	first.name = "Station One";
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = "S2";
+	second.name = "Station Two";
+	second.useQuickMix = false;
+	app.ph.stations = &first;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarUiPianoCallSetTestHook (mock_set_quickmix_ok);
+	data = json_object_new_array ();
+	json_object_array_add (data, json_object_new_string ("S2"));
+	BarSocketIoHandleSetQuickMix (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	ck_assert (!first.useQuickMix);
+	ck_assert (second.useQuickMix);
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+
+	clearBroadcastMock ();
+	app.ph.stations = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_handle_set_quickmix_empty_clears_all) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&first, 0, sizeof (first));
+	memset (&second, 0, sizeof (second));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	first.id = "S1";
+	first.name = "Station One";
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = "S2";
+	second.name = "Station Two";
+	second.useQuickMix = true;
+	app.ph.stations = &first;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarUiPianoCallSetTestHook (mock_set_quickmix_empty_ok);
+	data = json_object_new_array ();
+	ck_assert_ptr_nonnull (data);
+	BarSocketIoHandleSetQuickMix (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	ck_assert (!first.useQuickMix);
+	ck_assert (!second.useQuickMix);
+	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+
+	clearBroadcastMock ();
+	app.ph.stations = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_handle_set_quickmix_rejects_too_many_ids) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&first, 0, sizeof (first));
+	memset (&second, 0, sizeof (second));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	first.id = "S1";
+	first.name = "Station One";
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = "S2";
+	second.name = "Station Two";
+	second.useQuickMix = false;
+	app.ph.stations = &first;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarUiPianoCallSetTestHook (mock_set_quickmix_unexpected);
+	data = json_object_new_array ();
+	ck_assert_ptr_nonnull (data);
+	for (size_t i = 0; i < 1025; i++) {
+		char stationId[32];
+		snprintf (stationId, sizeof (stationId), "S%zu", i);
+		json_object_array_add (data, json_object_new_string (stationId));
+	}
+	BarSocketIoHandleSetQuickMix (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	ck_assert (first.useQuickMix);
+	ck_assert (!second.useQuickMix);
+	ck_assert_ptr_null (lastBroadcastMessage);
+
+	clearBroadcastMock ();
+	app.ph.stations = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_socketio_handle_set_quickmix_skips_non_string_ids) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&first, 0, sizeof (first));
+	memset (&second, 0, sizeof (second));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	first.id = "S1";
+	first.name = "Station One";
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = "S2";
+	second.name = "Station Two";
+	second.useQuickMix = false;
+	app.ph.stations = &first;
+
+	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	clearBroadcastMock ();
+	BarUiPianoCallSetTestHook (mock_set_quickmix_ok);
+	data = json_object_new_array ();
+	json_object_array_add (data, json_object_new_int (1));
+	json_object_array_add (data, json_object_new_string ("S2"));
+	BarSocketIoHandleSetQuickMix (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	ck_assert (!first.useQuickMix);
+	ck_assert (second.useQuickMix);
+
+	clearBroadcastMock ();
+	app.ph.stations = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 }
@@ -1891,6 +2117,10 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_emit_play_state_reports_paused_flag);
 	tcase_add_test(tc_handle, test_socketio_emit_pandora_disconnected_includes_reason);
 	tcase_add_test(tc_handle, test_socketio_handle_change_station_switches_when_found);
+	tcase_add_test(tc_handle, test_socketio_handle_set_quickmix_applies_before_save);
+	tcase_add_test(tc_handle, test_socketio_handle_set_quickmix_empty_clears_all);
+	tcase_add_test(tc_handle, test_socketio_handle_set_quickmix_rejects_too_many_ids);
+	tcase_add_test(tc_handle, test_socketio_handle_set_quickmix_skips_non_string_ids);
 	tcase_add_test(tc_handle, test_socketio_volume_set_action_updates_player_volume);
 	tcase_add_test(tc_handle, test_socketio_volume_set_clamps_out_of_range);
 	tcase_add_test(tc_handle, test_socketio_volume_set_system_mode);

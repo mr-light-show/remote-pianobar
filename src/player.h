@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include <stdbool.h>
 #include <stdint.h>
 #include <signal.h>
+#include <stdatomic.h>
 
 #include "miniaudio.h"
 #include <libavformat/avformat.h>
@@ -94,7 +95,7 @@ struct player {
 	AVFilterContext *fbufsink, *fabuf;
 	int streamIdx;
 	int64_t lastTimestamp;
-	sig_atomic_t interrupted;
+	_Atomic sig_atomic_t interrupted;
 
 	/* miniaudio - high-level engine and sound */
 	ma_engine engine;
@@ -122,6 +123,8 @@ enum {PLAYER_RET_OK = 0, PLAYER_RET_HARDFAIL = 1, PLAYER_RET_SOFTFAIL = 2,
 bool BarIsAvErrStaleCdnUrl(int av_err);
 
 void *BarPlayerThread (void *data);
+/* ffmpeg interrupt callback; tests call this directly to cover skip vs quit. */
+int BarPlayerFfmpegInterruptCb (void *data);
 void BarPlayerSetVolume (player_t * const player);
 void BarPlayerInit (player_t * const p, const BarSettings_t * const settings);
 void BarPlayerReset (player_t * const p);
@@ -138,4 +141,3 @@ bool BarPlayerIsPaused (player_t * const player);
 bool BarPlayerWaitForMode (player_t * const player,
                             BarPlayerMode mode,
                             unsigned int timeoutMs);
-

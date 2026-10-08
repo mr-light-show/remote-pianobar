@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include "../../src/main.h"
 #include "../../src/bar_state.h"
 #include "../../src/settings.h"
+#include "../../src/station_display.h"
 #include "../../src/log.h"
 
 #ifdef WEBSOCKET_ENABLED
@@ -446,6 +447,355 @@ START_TEST(test_bar_state_switch_station) {
 }
 END_TEST
 
+START_TEST(test_bar_state_prepare_station_switch_by_id_resolves_under_lock) {
+	BarApp_t app;
+	PianoStation_t from, to;
+	PianoSong_t current;
+	PianoSong_t *tail;
+	memset(&from, 0, sizeof(from));
+	memset(&to, 0, sizeof(to));
+	memset(&current, 0, sizeof(current));
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	from.id = (char *)"from";
+	from.name = (char *)"From";
+	from.head.next = &to.head;
+	to.id = (char *)"to";
+	to.name = (char *)"To";
+	current.head.next = &tail->head;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &from;
+	app.playlist = &current;
+
+	ck_assert(BarStatePrepareStationSwitchById(&app, "to"));
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &to);
+	ck_assert_ptr_eq(BarStateGetPlaylist(&app), &current);
+	ck_assert_ptr_null(current.head.next);
+	ck_assert(!BarStatePrepareStationSwitchById(&app, "missing"));
+
+	app.ph.stations = NULL;
+	app.playlist = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_truncate_playlist_tail_empty_and_single) {
+	BarApp_t app;
+	PianoSong_t current;
+	memset(&current, 0, sizeof(current));
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateTruncatePlaylistTail(&app);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	app.playlist = &current;
+	BarStateTruncatePlaylistTail(&app);
+	ck_assert_ptr_eq(BarStateGetPlaylist(&app), &current);
+	ck_assert_ptr_null(current.head.next);
+
+	app.playlist = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_prepare_station_switch_truncates_tail) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t current;
+	PianoSong_t *tail;
+	memset(&station, 0, sizeof(station));
+	memset(&current, 0, sizeof(current));
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	station.id = (char *)"station";
+	station.name = (char *)"Station";
+	current.head.next = &tail->head;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.playlist = &current;
+
+	BarStatePrepareStationSwitch(&app, &station);
+
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &station);
+	ck_assert_ptr_eq(BarStateGetPlaylist(&app), &current);
+	ck_assert_ptr_null(current.head.next);
+
+	app.playlist = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_prepare_station_switch_without_playlist) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&station, 0, sizeof(station));
+	station.id = (char *)"station";
+	station.name = (char *)"Station";
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStatePrepareStationSwitch(&app, &station);
+
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &station);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_prepare_station_switch_by_id_found_without_name_or_playlist) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&station, 0, sizeof(station));
+	station.id = (char *)"station";
+	station.name = NULL;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &station;
+
+	ck_assert(BarStatePrepareStationSwitchById(&app, "station"));
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &station);
+	ck_assert_ptr_null(BarStateGetPlaylist(&app));
+
+	app.ph.stations = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_prepare_station_switch_by_id_null_returns_false) {
+	BarApp_t app;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	ck_assert(!BarStatePrepareStationSwitchById(&app, NULL));
+	ck_assert_ptr_null(BarStateGetNextStation(&app));
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_apply_quickmix_ids_ignores_null_entries) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	const char *stationIds[] = { NULL, "second" };
+	memset(&first, 0, sizeof(first));
+	memset(&second, 0, sizeof(second));
+	first.id = (char *)"first";
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = (char *)"second";
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &first;
+
+	BarStateApplyQuickMixIds(&app, stationIds, 2);
+
+	ck_assert(!first.useQuickMix);
+	ck_assert(second.useQuickMix);
+
+	app.ph.stations = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_apply_quickmix_ids_handles_null_id_list) {
+	BarApp_t app;
+	PianoStation_t first, second;
+	memset(&first, 0, sizeof(first));
+	memset(&second, 0, sizeof(second));
+	first.id = NULL;
+	first.useQuickMix = true;
+	first.head.next = &second.head;
+	second.id = (char *)"second";
+	second.useQuickMix = true;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &first;
+
+	BarStateApplyQuickMixIds(&app, NULL, 1);
+
+	ck_assert(!first.useQuickMix);
+	ck_assert(!second.useQuickMix);
+
+	app.ph.stations = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_update_station_display_names_handles_null_name) {
+	BarApp_t app;
+	PianoStation_t station;
+	memset(&station, 0, sizeof(station));
+	station.name = NULL;
+	station.displayName = strdup("old");
+	ck_assert_ptr_nonnull(station.displayName);
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.ph.stations = &station;
+
+	BarStateUpdateStationDisplayNames(&app);
+
+	ck_assert_ptr_null(station.displayName);
+
+	app.ph.stations = NULL;
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_state_update_station_display_names_empty_list) {
+	BarApp_t app;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+
+	BarStateUpdateStationDisplayNames(&app);
+	ck_assert_ptr_null(app.ph.stations);
+
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+START_TEST(test_bar_update_station_display_names_null_app_noop) {
+	BarUpdateStationDisplayNames(NULL);
+	ck_assert(1);
+}
+END_TEST
+
+START_TEST(test_bar_state_piano_request_response_wrappers) {
+	BarApp_t app;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t loginData;
+	PianoSettings_t settings;
+	memset(&app, 0, sizeof(app));
+	memset(&req, 0, sizeof(req));
+	memset(&loginData, 0, sizeof(loginData));
+	memset(&settings, 0, sizeof(settings));
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	ck_assert_int_eq(PianoInit(&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	loginData.step = 0;
+	req.data = &loginData;
+
+	ck_assert_int_eq(BarStatePianoRequest(&app, &req, PIANO_REQUEST_LOGIN),
+			PIANO_RET_OK);
+	ck_assert_int_eq(req.type, PIANO_REQUEST_LOGIN);
+	ck_assert_ptr_nonnull(req.postData);
+	PianoDestroyRequest(&req);
+
+	req.type = PIANO_REQUEST_GET_SETTINGS;
+	req.data = &settings;
+	req.responseData = "{\"stat\":\"ok\",\"result\":{\"username\":\"tester\","
+			"\"isExplicitContentFilterEnabled\":true}}";
+	ck_assert_int_eq(BarStatePianoResponse(&app, &req), PIANO_RET_OK);
+	ck_assert(settings.explicitContentFilter);
+	ck_assert_str_eq(settings.username, "tester");
+
+	free(settings.username);
+	PianoDestroy(&app.ph);
+	bar_state_test_teardown(&app);
+}
+END_TEST
+
+/* Exercise every new lock site in CLI (no rwlock) and WEB (rwlock, no BOTH
+ * short-circuit) so gcc branch coverage on state_needs_lock() is complete. */
+static void
+exercise_new_bar_state_apis(BarUiMode_t mode)
+{
+	BarApp_t app;
+	PianoStation_t first, second;
+	PianoSong_t current;
+	PianoSong_t *tail;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t loginData;
+	PianoSettings_t pianoSettings;
+	const char *ids[] = { NULL, "second" };
+
+	memset(&first, 0, sizeof(first));
+	memset(&second, 0, sizeof(second));
+	memset(&current, 0, sizeof(current));
+	memset(&req, 0, sizeof(req));
+	memset(&loginData, 0, sizeof(loginData));
+	memset(&pianoSettings, 0, sizeof(pianoSettings));
+	first.id = (char *)"first";
+	first.name = (char *)"First";
+	first.head.next = &second.head;
+	second.id = (char *)"second";
+	second.name = (char *)"Second";
+
+	bar_state_test_setup(&app, mode);
+	ck_assert_int_eq(pthread_mutex_init(&app.player.lock, NULL), 0);
+	ck_assert_int_eq(pthread_cond_init(&app.player.cond, NULL), 0);
+	app.ph.stations = &first;
+
+	BarStateTruncatePlaylistTail(&app);
+
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	current.head.next = &tail->head;
+	app.playlist = &current;
+	BarStateTruncatePlaylistTail(&app);
+	ck_assert_ptr_null(current.head.next);
+
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	current.head.next = &tail->head;
+	app.playlist = &current;
+	BarStatePrepareStationSwitch(&app, &second);
+	ck_assert_ptr_null(current.head.next);
+
+	current.head.next = NULL;
+	app.playlist = NULL;
+	BarStatePrepareStationSwitch(&app, &first);
+
+	ck_assert(!BarStatePrepareStationSwitchById(&app, NULL));
+	ck_assert(!BarStatePrepareStationSwitchById(&app, "missing"));
+	app.ph.stations = NULL;
+	ck_assert(!BarStatePrepareStationSwitchById(&app, "first"));
+	app.ph.stations = &first;
+	second.name = NULL;
+	ck_assert(BarStatePrepareStationSwitchById(&app, "second"));
+	second.name = (char *)"Second";
+	tail = calloc(1, sizeof(*tail));
+	ck_assert_ptr_nonnull(tail);
+	current.head.next = &tail->head;
+	app.playlist = &current;
+	ck_assert(BarStatePrepareStationSwitchById(&app, "first"));
+	ck_assert_ptr_null(current.head.next);
+
+	BarStateApplyQuickMixIds(&app, ids, 2);
+	BarStateApplyQuickMixIds(&app, NULL, 0);
+	BarStateUpdateStationDisplayNames(&app);
+	free(first.displayName);
+	first.displayName = NULL;
+	free(second.displayName);
+	second.displayName = NULL;
+
+	app.ph.stations = NULL;
+	app.playlist = NULL;
+	ck_assert_int_eq(PianoInit(&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	loginData.step = 0;
+	req.data = &loginData;
+	(void)BarStatePianoRequest(&app, &req, PIANO_REQUEST_LOGIN);
+	PianoDestroyRequest(&req);
+
+	req.type = PIANO_REQUEST_GET_SETTINGS;
+	req.data = &pianoSettings;
+	req.responseData = "{\"stat\":\"ok\",\"result\":{\"username\":\"tester\","
+			"\"isExplicitContentFilterEnabled\":true}}";
+	(void)BarStatePianoResponse(&app, &req);
+	free(pianoSettings.username);
+
+	app.settings.partnerUser = (char *)"partner-user";
+	app.settings.partnerPassword = (char *)"partner-pass";
+	app.settings.device = (char *)"device";
+	app.settings.inkey = (char *)"0123456789abcdef";
+	app.settings.outkey = (char *)"0123456789abcdef";
+	ck_assert_int_eq(BarStateResetPianoHandle(&app), PIANO_RET_OK);
+	PianoDestroy(&app.ph);
+
+	pthread_cond_destroy(&app.player.cond);
+	pthread_mutex_destroy(&app.player.lock);
+	bar_state_test_teardown(&app);
+}
+
+START_TEST(test_bar_state_new_apis_cli_and_web) {
+	exercise_new_bar_state_apis(BAR_UI_MODE_CLI);
+	exercise_new_bar_state_apis(BAR_UI_MODE_WEB);
+}
+END_TEST
+
 /* Player state getters use player.lock, not stateRwlock */
 START_TEST(test_bar_state_player_mode_time_paused) {
 	BarApp_t app;
@@ -759,6 +1109,12 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_both);
 	tcase_add_test(tc_playlist, test_bar_state_advance_playlist_race_with_drain);
 	tcase_add_test(tc_playlist, test_bar_state_switch_station);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_by_id_resolves_under_lock);
+	tcase_add_test(tc_playlist, test_bar_state_truncate_playlist_tail_empty_and_single);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_truncates_tail);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_without_playlist);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_by_id_found_without_name_or_playlist);
+	tcase_add_test(tc_playlist, test_bar_state_prepare_station_switch_by_id_null_returns_false);
 	suite_add_tcase(s, tc_playlist);
 
 	TCase *tc_player = tcase_create("Player state (player.lock)");
@@ -771,6 +1127,13 @@ Suite *bar_state_suite(void) {
 
 	TCase *tc_misc = tcase_create("Misc");
 	tcase_add_test(tc_misc, test_bar_state_is_pandora_connected);
+	tcase_add_test(tc_misc, test_bar_state_apply_quickmix_ids_ignores_null_entries);
+	tcase_add_test(tc_misc, test_bar_state_apply_quickmix_ids_handles_null_id_list);
+	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_handles_null_name);
+	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_empty_list);
+	tcase_add_test(tc_misc, test_bar_update_station_display_names_null_app_noop);
+	tcase_add_test(tc_misc, test_bar_state_piano_request_response_wrappers);
+	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 
 	TCase *tc_web = tcase_create("WEB mode locking");

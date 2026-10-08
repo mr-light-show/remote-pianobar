@@ -148,6 +148,13 @@ coordinator and Lovelace card depend on:
 | `error` | `2["error",{"operation":"query.history","message":"..."}]` | object |
 | `pandora.disconnected` | `2["pandora.disconnected",{"reason":"idle"}]` | object |
 
+**`pandora.disconnected` reasons:** `user` (stop action), `idle_timeout` (pause
+timeout), and `playlist_session_error` (the Pandora session died while
+streaming). The server reconnects and resumes the station automatically once per
+session failure, so a recovered session emits no `pandora.disconnected` at all —
+clients only see it when recovery was skipped or failed and a manual
+`app.pandora-reconnect` is required.
+
 **Breaking change rule:** any field rename, type change (e.g. `volume` payload
 from integer to object), or event name rename is a **breaking change** for all
 consumers. Add a compatibility assertion test before renaming anything.

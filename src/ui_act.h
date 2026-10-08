@@ -68,10 +68,28 @@ BarUiActCallback(BarUiActPandoraReconnect);
 
 /* Switch to a station programmatically (for WebSocket use) */
 void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station);
+bool BarUiSwitchStationById (BarApp_t * const app, const char *stationId);
 
 /* Disconnect from Pandora - shared by BarUiActPandoraDisconnect, idle timeout, playlist failure
  * @param resume_station_id_override if non-NULL, saved as lastStationId for reconnect; else current station */
 void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
+		const char *resume_station_id_override);
+
+/* Reset the Pandora session, log in again, fetch stations and resume the
+ * account's autostart station or lastStationId.  Shared by
+ * BarUiActPandoraReconnect and BarSessionTryAutoRecover.
+ * @param resume_station_id_override if non-NULL, saved as lastStationId; else current station
+ * @return true when the session is usable again */
+bool BarUiDoPandoraReconnect (BarApp_t *app,
+		const char *resume_station_id_override);
+
+/* Try to restore a session that died without the user asking for it (e.g.
+ * getPlaylist returning P_INTERNAL after hours of playback).  Never recovers
+ * "user" or "idle_timeout", and attempts at most one reconnect per session
+ * death until a song starts.  Callers report the failure themselves (usually
+ * via BarUiDoPandoraDisconnect) when this returns false.
+ * @return true when playback can continue on the resumed station */
+bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
 
 /* Transform station if shared — false on error, true on success */

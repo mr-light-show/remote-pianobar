@@ -69,7 +69,8 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 
 	/* not actually used here. just stops the player from receiving the
 	 * signal */
-	sig_atomic_t *prevInt = BarInterruptGetTarget (), localInt = 0;
+	_Atomic sig_atomic_t *prevInt = BarInterruptGetTarget ();
+	_Atomic sig_atomic_t localInt = 0;
 	if (!(flags & BAR_RL_NOINT)) {
 		BarInterruptSetTarget (&localInt);
 	}
@@ -244,4 +245,3 @@ bool BarReadlineYesNo (bool def, BarReadlineFds_t *input) {
 		return false;
 	}
 }
-

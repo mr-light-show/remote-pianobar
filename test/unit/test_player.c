@@ -21,6 +21,7 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -302,7 +303,9 @@ static void player_thread_test_setup (player_t *player, BarSettings_t *settings)
 	memset (player, 0, sizeof (*player));
 	memset (settings, 0, sizeof (*settings));
 	BarSettingsInit (settings);
+#ifdef WEBSOCKET_ENABLED
 	settings->uiMode = BAR_UI_MODE_CLI;
+#endif
 	settings->timeout = 2;
 	BarPlayerInit (player, settings);
 }
@@ -626,6 +629,32 @@ START_TEST (test_player_thread_truncated_mp3_fixture_fails_open)
 }
 END_TEST
 
+START_TEST (test_player_ffmpeg_interrupt_cb_skip_and_quit)
+{
+	player_t player;
+	BarSettings_t settings;
+
+	player_thread_test_setup (&player, &settings);
+
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+
+	atomic_store_explicit (&player.interrupted, 1, memory_order_relaxed);
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert_int_eq (atomic_load_explicit (&player.interrupted, memory_order_relaxed), 0);
+	pthread_mutex_lock (&player.lock);
+	ck_assert (!player.doQuit);
+	pthread_mutex_unlock (&player.lock);
+
+	atomic_store_explicit (&player.interrupted, 2, memory_order_relaxed);
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	pthread_mutex_lock (&player.lock);
+	ck_assert (player.doQuit);
+	pthread_mutex_unlock (&player.lock);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -665,8 +694,8 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_thread, test_player_thread_video_only_container);
 	tcase_add_test (tc_thread, test_player_thread_double_interrupt_during_playback);
 	tcase_add_test (tc_thread, test_player_thread_truncated_mp3_fixture_fails_open);
+	tcase_add_test (tc_thread, test_player_ffmpeg_interrupt_cb_skip_and_quit);
 	suite_add_tcase (s, tc_thread);
 	
 	return s;
 }
-

@@ -23,12 +23,13 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <check.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <pthread.h>
 
 #include "../src/main.h"
 
 /* Global interrupted variable stub for tests */
-sig_atomic_t *interrupted = NULL;
+_Atomic sig_atomic_t *interrupted = NULL;
 
 /* Stub implementations for playback_manager dependencies */
 void BarMainGetPlaylist(BarApp_t *app) {
