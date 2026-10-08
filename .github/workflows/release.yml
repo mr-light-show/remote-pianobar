@@ -458,12 +458,13 @@ jobs:
           gh release upload "$RELEASE_TAG" "$f" --clobber --repo "${{ github.repository }}"
 
   build-macos:
-    name: Build macOS 14 Package
-    runs-on: macos-14
+    name: Build macOS 15 Package
+    runs-on: macos-15
     needs: prepare
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
       # Homebrew paths for M1 (/opt/homebrew) and Intel (/usr/local)
       PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
       CPATH: /opt/homebrew/include:/usr/local/include
@@ -528,7 +529,7 @@ jobs:
           fi
           
           make WEBSOCKET=1 clean
-          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED $DEBUG_FLAGS"
+          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -mmacosx-version-min=12.0 $DEBUG_FLAGS"
           
       - name: Build Web UI
         run: |
