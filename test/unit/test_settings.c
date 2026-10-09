@@ -28,6 +28,8 @@ THE SOFTWARE.
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "../test_tmp.h"
+
 #include "../../src/main.h"
 #include "../../src/settings.h"
 #include "../../src/parse_utils.h"
@@ -90,8 +92,8 @@ START_TEST (test_settings_expand_tilde) {
 END_TEST
 
 START_TEST (test_settings_file_backed_account_only) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
@@ -123,8 +125,8 @@ START_TEST (test_settings_file_backed_account_only) {
 END_TEST
 
 START_TEST (test_settings_main_plus_file_accounts_default) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -165,8 +167,8 @@ START_TEST (test_settings_main_plus_file_accounts_default) {
 END_TEST
 
 START_TEST (test_settings_set_active_account_by_id) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char a1[512], a2[512];
@@ -206,8 +208,8 @@ START_TEST (test_settings_get_active_account_empty) {
 END_TEST
 
 START_TEST (test_settings_locale_from_config) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -228,8 +230,8 @@ START_TEST (test_settings_locale_from_config) {
 END_TEST
 
 START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -312,8 +314,8 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 END_TEST
 
 START_TEST (test_settings_table_dispatch_handles_typical_user_overrides_and_typos) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -353,8 +355,8 @@ START_TEST (test_settings_table_dispatch_handles_typical_user_overrides_and_typo
 END_TEST
 
 START_TEST (test_settings_table_dispatch_remaining_backends_sorts_and_accounts) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -407,8 +409,8 @@ START_TEST (test_settings_table_dispatch_remaining_backends_sorts_and_accounts) 
 END_TEST
 
 START_TEST (test_settings_table_dispatch_auto_and_pulseaudio_backends) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -434,8 +436,8 @@ START_TEST (test_settings_table_dispatch_auto_and_pulseaudio_backends) {
 END_TEST
 
 START_TEST (test_settings_table_dispatch_invalid_websocket_port_ignored) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -453,8 +455,8 @@ START_TEST (test_settings_table_dispatch_invalid_websocket_port_ignored) {
 END_TEST
 
 START_TEST (test_settings_table_dispatch_rejects_malformed_account_line) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -476,8 +478,8 @@ START_TEST (test_settings_table_dispatch_rejects_malformed_account_line) {
 END_TEST
 
 START_TEST (test_settings_table_dispatch_all_sort_orders) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -594,8 +596,8 @@ END_TEST
 
 START_TEST (test_settings_audio_quality_dispatch)
 {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -616,8 +618,8 @@ START_TEST (test_settings_audio_quality_dispatch)
 END_TEST
 
 START_TEST (test_settings_rejects_missing_account_file_with_primary) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -641,8 +643,8 @@ START_TEST (test_settings_rejects_missing_account_file_with_primary) {
 END_TEST
 
 START_TEST (test_settings_rejects_missing_account_file_only) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -661,8 +663,8 @@ START_TEST (test_settings_rejects_missing_account_file_only) {
 END_TEST
 
 START_TEST (test_settings_rejects_duplicate_credentials_explicit) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -692,8 +694,8 @@ START_TEST (test_settings_rejects_duplicate_credentials_explicit) {
 END_TEST
 
 START_TEST (test_settings_rejects_duplicate_credentials_inherited) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -719,8 +721,8 @@ START_TEST (test_settings_rejects_duplicate_credentials_inherited) {
 END_TEST
 
 START_TEST (test_settings_rejects_duplicate_username_different_password) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -750,8 +752,8 @@ START_TEST (test_settings_rejects_duplicate_username_different_password) {
 END_TEST
 
 START_TEST (test_settings_rejects_duplicate_credentials_between_files) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char a1[512], a2[512];
@@ -778,8 +780,8 @@ START_TEST (test_settings_rejects_duplicate_credentials_between_files) {
 END_TEST
 
 START_TEST (test_settings_accepts_distinct_file_credentials) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -822,8 +824,8 @@ START_TEST (test_settings_account_usernames_equal_edges) {
 END_TEST
 
 START_TEST (test_settings_primary_password_command_autostart_with_file) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -857,8 +859,8 @@ START_TEST (test_settings_primary_password_command_autostart_with_file) {
 END_TEST
 
 START_TEST (test_settings_append_realloc_fail_on_primary) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];
@@ -882,8 +884,8 @@ START_TEST (test_settings_append_realloc_fail_on_primary) {
 END_TEST
 
 START_TEST (test_settings_append_realloc_fail_on_file_backed) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -915,8 +917,8 @@ START_TEST (test_settings_append_realloc_fail_on_file_backed) {
 END_TEST
 
 START_TEST (test_settings_resolve_account_path_fail) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char accpath[512];
@@ -947,8 +949,8 @@ START_TEST (test_settings_resolve_account_path_fail) {
 END_TEST
 
 START_TEST (test_settings_default_account_not_found_after_reject) {
-	char tmpl[] = "/tmp/piano_set_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
 	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
 
 	char cfg[512];

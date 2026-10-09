@@ -27,6 +27,7 @@ THE SOFTWARE.
 #include <pthread.h>
 
 #include "../src/main.h"
+#include "test_tmp.h"
 
 /* Global interrupted variable stub for tests */
 _Atomic sig_atomic_t *interrupted = NULL;
@@ -72,6 +73,8 @@ int main(void) {
 	int number_failed;
 	SRunner *sr;
 
+	TestTmpRootInit ();
+
 #ifdef WEBSOCKET_ENABLED
 	/* Start with WebSocket suite; add remaining WebSocket suites */
 	sr = srunner_create(websocket_suite());
@@ -108,6 +111,7 @@ int main(void) {
 	srunner_run_all(sr, CK_NORMAL);
 	number_failed = srunner_ntests_failed(sr);
 	srunner_free(sr);
+	TestTmpRootCleanup ();
 
 	return (number_failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
