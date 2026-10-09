@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include <stdlib.h>
 
 #include "../../src/bar_state.h"
+#include "../test_tmp.h"
 #include "../../src/interrupt.h"
 #include "../../src/playback_lifecycle.h"
 #include "../../src/settings.h"
@@ -101,8 +102,8 @@ END_TEST
  *	point it at a throwaway config instead of the developer's own.
  */
 static void setup_playback_app_with_piano (BarApp_t *app) {
-	char tmpl[] = "/tmp/piano_lifecycle_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_lifecycle"));
 	char sub[512];
 	snprintf (sub, sizeof (sub), "%s/pianobar", tmpl);
 	ck_assert_int_eq (mkdir (sub, 0700), 0);
