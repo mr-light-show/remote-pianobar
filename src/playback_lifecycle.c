@@ -144,7 +144,7 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 	}
 
 	player_t * const player = &app->player;
-	BarPlayerReset (player);
+	if (!BarPlayerReset (player)) { return false; }
 
 	app->player.url = curSong->audioUrl;
 	app->player.gain = curSong->fileGain;
@@ -160,7 +160,13 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 
 	/* Prevent race condition: mode must not be DEAD when thread starts */
 	BarPlayerSetMode (&app->player, PLAYER_WAITING);
+	pthread_mutex_lock (&player->lock);
+	player->threadJoinPending = true;
+	pthread_mutex_unlock (&player->lock);
 	if (pthread_create (playerThread, NULL, BarPlayerThread, &app->player) != 0) {
+		pthread_mutex_lock (&player->lock);
+		player->threadJoinPending = false;
+		pthread_mutex_unlock (&player->lock);
 		BarInterruptSetTarget (&app->doQuit);
 		BarPlayerSetMode (&app->player, PLAYER_DEAD);
 		return false;

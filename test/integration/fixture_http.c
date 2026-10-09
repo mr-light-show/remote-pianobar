@@ -78,7 +78,7 @@ static void serve_client (BarFixtureHttp_t *srv, int client_fd) {
 static void *fixture_http_thread (void *arg) {
 	BarFixtureHttp_t *srv = arg;
 
-	while (!srv->stop) {
+	while (!atomic_load (&srv->stop)) {
 		struct pollfd pfd = {
 			.fd = srv->listen_fd,
 			.events = POLLIN,
@@ -86,7 +86,7 @@ static void *fixture_http_thread (void *arg) {
 		const int poll_ms = 100;
 		const int ready = poll (&pfd, 1, poll_ms);
 
-		if (srv->stop) {
+		if (atomic_load (&srv->stop)) {
 			break;
 		}
 		if (ready < 0) {
@@ -105,7 +105,7 @@ static void *fixture_http_thread (void *arg) {
 		                              (struct sockaddr *)&client,
 		                              &client_len);
 		if (client_fd < 0) {
-			if (srv->stop || errno == EINTR) {
+			if (atomic_load (&srv->stop) || errno == EINTR) {
 				break;
 			}
 			continue;
@@ -120,6 +120,7 @@ static void *fixture_http_thread (void *arg) {
 bool BarFixtureHttpStart (BarFixtureHttp_t *srv, const char *filepath,
                           uint16_t *port_out) {
 	memset (srv, 0, sizeof (*srv));
+	atomic_init (&srv->stop, false);
 	srv->listen_fd = -1;
 	srv->mode = BAR_FIXTURE_HTTP_OK;
 	strncpy (srv->filepath, filepath, sizeof (srv->filepath) - 1);
@@ -175,11 +176,15 @@ void BarFixtureHttpStop (BarFixtureHttp_t *srv) {
 		return;
 	}
 
-	srv->stop = 1;
+	atomic_store (&srv->stop, true);
 	if (srv->listen_fd >= 0) {
 		(void)shutdown (srv->listen_fd, SHUT_RDWR);
+	}
+	/* The server reads this descriptor until it exits. Do not mutate or
+	 * recycle it before joining, even after shutdown woke its poll. */
+	pthread_join (srv->thread, NULL);
+	if (srv->listen_fd >= 0) {
 		close (srv->listen_fd);
 		srv->listen_fd = -1;
 	}
-	pthread_join (srv->thread, NULL);
 }

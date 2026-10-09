@@ -74,6 +74,9 @@ typedef struct {
 	
 	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
 	BarWsBucket_t buckets[BUCKET_COUNT];
+	/* Internal play-state watermark, protected by the existing STATE mutex. */
+	uint64_t playStateEpoch;
+	bool playStateEpochValid;
 	
 	/* Progress tracking - single-threaded access from playback manager */
 	BarWsProgress_t progress;
@@ -110,6 +113,12 @@ void BarWebsocketDestroy(BarApp_t *app);
 void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
                                             BarWsBucketType_t bucket,
                                             char *message);
+/* Same ownership contract; rejects older completed play-state epochs under
+ * STATE's mutex. The watermark survives consumption and generic messages.
+ * Callers snapshot stable player state, then release every application lock.
+ * Epoch is internal metadata, never wire content. */
+void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
+                                             uint64_t epoch);
 
 /* Get current elapsed time */
 unsigned int BarWebsocketGetElapsed(BarApp_t *app);
@@ -120,6 +129,8 @@ void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
 
 /* Schedule delayed volume broadcast (for debouncing) */
 void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs);
+/* Execute a due debounced volume event using the current canonical value. */
+void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
 /* Disconnect all WebSocket clients (used by app.stop) */
 void BarWebsocketDisconnectAllClients(BarApp_t *app);

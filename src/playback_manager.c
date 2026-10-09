@@ -75,6 +75,40 @@ bool BarPlaybackShouldParkIdle(const BarApp_t *app)
 	    && BarStateGetNextStation(app) == NULL;
 }
 
+BarPlaybackWait BarPlaybackManagerSelectWait (const player_t *player,
+		bool parkIdle, unsigned int pauseTimeout, bool stopping,
+		struct timespec now, struct timespec *deadline) {
+	if (stopping || player->mode == PLAYER_FINISHED) {
+		return BAR_PLAYBACK_WAIT_READY;
+	}
+	if (player->mode == PLAYER_DEAD) {
+		return parkIdle ? BAR_PLAYBACK_WAIT_INDEFINITE : BAR_PLAYBACK_WAIT_READY;
+	}
+	if (player->doQuit) {
+		/* Skip already requested: wait for the worker's terminal mode wake. */
+		return BAR_PLAYBACK_WAIT_INDEFINITE;
+	}
+	now.tv_sec += now.tv_nsec / 1000000000L;
+	now.tv_nsec %= 1000000000L;
+	if (now.tv_nsec < 0) {
+		--now.tv_sec;
+		now.tv_nsec += 1000000000L;
+	}
+	if (player->doPause) {
+		if (pauseTimeout == 0 || player->pauseStartTime <= 0) {
+			return BAR_PLAYBACK_WAIT_INDEFINITE;
+		}
+		*deadline = (struct timespec) {
+			player->pauseStartTime + (time_t) pauseTimeout * 60, 0
+		};
+		return now.tv_sec >= deadline->tv_sec ? BAR_PLAYBACK_WAIT_PAUSE_EXPIRED :
+				BAR_PLAYBACK_WAIT_TIMED;
+	}
+	*deadline = now;
+	deadline->tv_sec += PROGRESS_BROADCAST_INTERVAL_SECS;
+	return BAR_PLAYBACK_WAIT_TIMED;
+}
+
 bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutMs) {
 	if (g_waitParkedIdleTestHook != NULL) {
 		return g_waitParkedIdleTestHook(app, timeoutMs);
@@ -95,68 +129,22 @@ bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutM
 	return BarPlaybackShouldParkIdle(app);
 }
 
-/*	Join thread with timeout - prevents deadlock if player hangs on network
- *	Returns true if thread joined successfully, false if timeout expired
- */
-static bool join_thread_with_timeout(pthread_t thread, void **retval, int timeout_secs) {
-#ifdef __linux__
-	/* Linux: Use pthread_timedjoin_np for proper timeout support.
-	 * pthread_kill() doesn't reliably detect exited threads in zombie state on Linux.
-	 * The thread may have exited but pthread_kill returns 0 until pthread_join is called. */
-	
-	struct timespec deadline;
-	clock_gettime(CLOCK_REALTIME, &deadline);
-	deadline.tv_sec += timeout_secs;
-	
-	int ret = pthread_timedjoin_np(thread, retval, &deadline);
-	if (ret == 0) {
-		return true;
-	} else if (ret == ETIMEDOUT) {
-		return false;
-	} else {
-		return false;
-	}
-#else
-	/* macOS/BSD: Use pthread_kill polling.
-	 * pthread_kill() works reliably on macOS to detect exited threads. */
-	
-	for (int i = 0; i < timeout_secs * 10; i++) {
-		/* Check if thread is still alive using pthread_kill with signal 0 */
-		int ret = pthread_kill(thread, 0);
-		if (ret == ESRCH) {
-			/* Thread no longer exists - join to clean up */
-			pthread_join(thread, retval);
-			return true;
-		} else if (ret != 0) {
-			/* Error checking thread status */
-			log_write(DEBUG_UI, "PlaybackMgr: pthread_kill error %d\n", ret);
-			return false;
-		}
-		usleep ((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
-	}
-	return false;  /* Timeout */
-#endif
-}
-
 /*	Force join player thread with timeout, interrupt if needed
- *	Returns true if thread joined successfully, false if had to detach
+ *	A returning test fatal hook leaves the app terminal and intact.
  */
 static bool force_join_player_thread(BarApp_t *app, pthread_t *playerThread, 
                                       void **retval, const char *context) {
-	if (!join_thread_with_timeout(*playerThread, retval, PLAYER_JOIN_TIMEOUT_SECS)) {
+	if (!BarPlayerJoinThreadWithTimeout (&app->player, *playerThread, retval, PLAYER_JOIN_TIMEOUT_SECS)) {
 		log_write(DEBUG_UI, "PlaybackMgr: WARNING - %s did not exit within %ds\n",
 		           context, PLAYER_JOIN_TIMEOUT_SECS);
 		
 		/* Force interrupt and try again */
-		pthread_mutex_lock(&app->player.lock);
-		app->player.interrupted = 2;
-		app->player.doQuit = true;
-		pthread_cond_broadcast(&app->player.cond);
-		pthread_mutex_unlock(&app->player.lock);
+		atomic_store (&app->player.interrupted, 2);
+		BarPlayerRequestStop (&app->player);
 		
-		if (!join_thread_with_timeout(*playerThread, retval, PLAYER_FORCE_JOIN_TIMEOUT_SECS)) {
-			log_write(DEBUG_UI, "PlaybackMgr: ERROR - %s hung, detaching\n", context);
-			pthread_detach(*playerThread);
+		if (!BarPlayerJoinThreadWithTimeout (&app->player, *playerThread, retval, PLAYER_FORCE_JOIN_TIMEOUT_SECS)) {
+			BarPlayerFatalShutdown (&app->player, context);
+			atomic_store (&app->doQuit, 1);
 			return false;
 		}
 	}
@@ -165,7 +153,7 @@ static bool force_join_player_thread(BarApp_t *app, pthread_t *playerThread,
 
 /*	Player cleanup after song finishes
  */
-static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread) {
+static bool PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread) {
 	void *threadRet = (void *)PLAYER_RET_HARDFAIL;
 
 	BarUiStartEventCmd(&app->settings, "songfinish", BarStateGetCurrentStation(app),
@@ -176,7 +164,7 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 
 	/* Wait for player thread to complete with timeout to prevent deadlock */
 	if (!force_join_player_thread(app, playerThread, &threadRet, "player thread")) {
-		threadRet = (void *)PLAYER_RET_HARDFAIL;
+		return false;
 	}
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
@@ -198,6 +186,7 @@ static void PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread)
 	BarInterruptSetTarget (&app->doQuit);
 
 	BarPlayerSetMode (&app->player, PLAYER_DEAD);
+	return true;
 }
 
 BarPlayerMode BarPlaybackManagerRefreshCachedModeAfterCleanup(
@@ -221,7 +210,7 @@ BarPlayerMode BarPlaybackManagerCompleteSongCleanup(
 	}
 	pthread_mutex_unlock(&app->player.lock);
 
-	PlaybackManagerPlayerCleanup(app, playerThread);
+	if (!PlaybackManagerPlayerCleanup(app, playerThread)) { return mode; }
 	*playerStarted = false;
 	return BarPlaybackManagerRefreshCachedModeAfterCleanup(app, mode);
 }
@@ -249,24 +238,34 @@ static void *BarPlaybackManagerThread(void *data) {
 		const bool park_idle = BarPlaybackShouldParkIdle(app);
 
 		pthread_mutex_lock(&app->player.lock);
-		if (park_idle) {
-			if (!atomic_load(&g_parkedLogged)) {
+		struct timespec waitNow, deadline;
+		clock_gettime (CLOCK_REALTIME, &waitNow);
+		bool stopping = atomic_load_explicit (&app->doQuit, memory_order_relaxed) ||
+				!atomic_load_explicit (&g_running, memory_order_relaxed);
+		BarPlaybackWait wait = BarPlaybackManagerSelectWait (&app->player,
+				park_idle, app->settings.pauseTimeout, stopping, waitNow, &deadline);
+		if (wait == BAR_PLAYBACK_WAIT_INDEFINITE) {
+			if (park_idle && app->player.mode == PLAYER_DEAD && !atomic_load(&g_parkedLogged)) {
 				atomic_store(&g_parkedLogged, true);
 				log_write(DEBUG_UI, "PlaybackMgr: Parked (waiting for station)\n");
 			}
 			pthread_cond_wait(&app->player.cond, &app->player.lock);
 		} else {
 			atomic_store(&g_parkedLogged, false);
-			struct timespec timeout;
-			clock_gettime(CLOCK_REALTIME, &timeout);
-			timeout.tv_sec += PROGRESS_BROADCAST_INTERVAL_SECS;
-			pthread_cond_timedwait(&app->player.cond, &app->player.lock, &timeout);
+			if (wait == BAR_PLAYBACK_WAIT_TIMED) {
+				pthread_cond_timedwait (&app->player.cond, &app->player.lock, &deadline);
+			}
 		}
-		/* Cache mode, pause state, and pause start time while holding lock */
+		/* Every wake, including broadcasts, must recheck the current controls. */
+		clock_gettime (CLOCK_REALTIME, &waitNow);
+		stopping = atomic_load_explicit (&app->doQuit, memory_order_relaxed) ||
+				!atomic_load_explicit (&g_running, memory_order_relaxed);
+		wait = BarPlaybackManagerSelectWait (&app->player, park_idle,
+				app->settings.pauseTimeout, stopping, waitNow, &deadline);
 		BarPlayerMode mode = app->player.mode;
 		bool isPaused = app->player.doPause;
-		time_t pauseStart = app->player.pauseStartTime;
 		pthread_mutex_unlock(&app->player.lock);
+		if (stopping) { break; }
 		
 		/* Broadcast progress updates every ~1 second while playing (and not paused) */
 		{
@@ -282,13 +281,11 @@ static void *BarPlaybackManagerThread(void *data) {
 		}
 		
 		/* Check for pause timeout (auto-stop after configured minutes of pause) */
-		if (app->settings.pauseTimeout > 0 && isPaused && pauseStart > 0) {
-			time_t elapsed = time(NULL) - pauseStart;
-			if (elapsed >= (time_t)(app->settings.pauseTimeout * 60)) {
-				log_write(DEBUG_UI, "PlaybackMgr: Pause timeout expired (%u minutes), stopping\n",
-				           app->settings.pauseTimeout);
-				BarUiDoPandoraDisconnect(app, "idle_timeout", NULL);
-			}
+		if (wait == BAR_PLAYBACK_WAIT_PAUSE_EXPIRED) {
+			log_write(DEBUG_UI, "PlaybackMgr: Pause timeout expired (%u minutes), stopping\n",
+					app->settings.pauseTimeout);
+			BarUiDoPandoraDisconnect(app, "idle_timeout", NULL);
+			continue;
 		}
 		
 		/* Song finished playing - cleanup */
