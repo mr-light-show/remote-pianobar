@@ -120,10 +120,14 @@ static void test_setup_web_app (BarApp_t *app, BarWsContext_t *ctx) {
 	BarStateInit (app);
 	pthread_mutex_init (&app->player.lock, NULL);
 	pthread_cond_init (&app->player.cond, NULL);
+	pthread_cond_init (&app->player.audioCond, NULL);
+	app->player.settings = &app->settings;
+	app->player.requestedVolume = 40;
 }
 
 static void test_teardown_web_app (BarApp_t *app, BarWsContext_t *ctx) {
 	pthread_cond_destroy (&app->player.cond);
+	pthread_cond_destroy (&app->player.audioCond);
 	pthread_mutex_destroy (&app->player.lock);
 	BarStateDestroy (app);
 	test_ws_context_destroy_buckets (ctx);
@@ -177,7 +181,7 @@ START_TEST(test_websocket_bridge_broadcasts_real_player_state_buckets) {
 	BarWsBroadcastVolume (&app);
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "\"volume\"") != NULL);
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "40") != NULL);
-	app.settings.volume = 41;
+	ck_assert (BarPlayerSetVolume (&app.player, 41));
 	BarWsBroadcastVolume (&app);
 	ck_assert (strstr (test_bucket_payload (&ctx, BUCKET_VOLUME), "41") != NULL);
 
@@ -335,15 +339,21 @@ START_TEST(test_websocket_bridge_guarded_broadcasts_noop_without_web_context) {
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	app.wsContext = &ctx;
 
+	const BarPlayerPlayStateSnapshot snapshot = {true, 1};
 	BarWsBroadcastPlayState (NULL);
 	BarWsBroadcastPlayState (&app);
+	BarWsBroadcastPlayStateSnapshot (NULL, &snapshot);
+	BarWsBroadcastPlayStateSnapshot (&app, &snapshot);
 	BarWsBroadcastPandoraDisconnected (NULL, "ignored");
 	BarWsBroadcastPandoraDisconnected (&app, "ignored");
 	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
 
 	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarWsBroadcastPlayStateSnapshot (&app, NULL);
+	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
 	app.wsContext = NULL;
 	BarWsBroadcastPlayState (&app);
+	BarWsBroadcastPlayStateSnapshot (&app, &snapshot);
 	BarWsBroadcastPandoraDisconnected (&app, "ignored");
 	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
 
@@ -689,6 +699,39 @@ START_TEST(test_websocket_schedule_volume_broadcast_sets_pending_flag) {
 }
 END_TEST
 
+/* Break caught: immediate/delayed messages use a stale settings mirror or
+ * sample at schedule time rather than at event dispatch. */
+START_TEST (test_websocket_immediate_and_delayed_volume_read_current_player_value)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL);
+	ck_assert (BarPlayerSetVolume (&app.player, 72));
+	app.settings.volume = 3; /* Deliberately stale mirror distinguishes the reader. */
+	BarWsBroadcastVolume (&app);
+	json_object *event = json_tokener_parse (test_bucket_payload (&ctx, BUCKET_VOLUME) + 1);
+	ck_assert_ptr_nonnull (event);
+	ck_assert_int_eq (json_object_get_int (json_object_array_get_idx (event, 1)), 72);
+	json_object_put (event);
+	BarWsScheduleVolumeBroadcast (&ctx, 0);
+	ck_assert (BarPlayerSetVolume (&app.player, 84));
+	app.settings.volume = 3;
+	BarSocketIoSetBroadcastCallback (compatCapture);
+	g_compatBuf[0] = '\0';
+	BarWsProcessVolumeBroadcast (&ctx, &app);
+	event = json_tokener_parse (g_compatBuf + 1);
+	ck_assert_ptr_nonnull (event);
+	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (event, 0)), "volume");
+	ck_assert_int_eq (json_object_get_int (json_object_array_get_idx (event, 1)), 84);
+	ck_assert (!ctx.delayedVolumeBroadcast.pending);
+	json_object_put (event);
+	BarSocketIoSetBroadcastCallback (NULL);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_upcoming_skips_without_unicast_target) {
 	BarApp_t app;
 	BarWsContext_t ctx;
@@ -870,6 +913,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);
+	tcase_add_test(tc_core, test_websocket_immediate_and_delayed_volume_read_current_player_value);
 	tcase_add_test(tc_core, test_websocket_bridge_both_mode_is_web_active);
 	tcase_add_test(tc_core, test_websocket_bridge_print_helpers_and_input_setup);
 	tcase_add_test(tc_core, test_websocket_bridge_print_bind_all_and_startup_info);

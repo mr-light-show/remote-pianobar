@@ -57,7 +57,6 @@ static BarWsContext_t *g_wsContext = NULL;
 static void BarWebsocketBroadcast(const char *message, size_t len);
 static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *msg);
 static void* BarWebsocketThread(void *arg);
-static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
 /*	Bucket Pattern for WebSocket Broadcasts
  *
@@ -325,7 +324,7 @@ void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs) {
 }
 
 /* Check and execute pending volume broadcast if timer expired */
-static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
+void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
 	if (!ctx || !app) {
 		return;
 	}
@@ -355,7 +354,7 @@ static void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app) {
 			           volumePercent);
 		} else {
 			/* Player mode: volume is already 0-100 linear */
-			volumePercent = app->settings.volume;
+			volumePercent = BarPlayerGetVolume (&app->player);
 			log_write(DEBUG_WEBSOCKET, "Executing delayed volume broadcast - %d%% (player volume)\n", 
 			           volumePercent);
 		}
@@ -623,9 +622,8 @@ unsigned int BarWebsocketGetElapsed(BarApp_t *app) {
 }
 
 /* Enqueue a pre-formatted Socket.IO message; takes ownership of message */
-void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
-                                            BarWsBucketType_t bucket,
-                                            char *message) {
+static void broadcastSocketIoMessage (BarApp_t *app, BarWsBucketType_t bucket,
+                                       char *message, const uint64_t *playStateEpoch) {
 	if (!app || !app->wsContext || !message) {
 		free (message);
 		return;
@@ -655,6 +653,15 @@ void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
 	msg->next = NULL;
 
 	pthread_mutex_lock (&ctx->buckets[bucket].mutex);
+	if (playStateEpoch != NULL) {
+		if (ctx->playStateEpochValid && *playStateEpoch < ctx->playStateEpoch) {
+			pthread_mutex_unlock (&ctx->buckets[bucket].mutex);
+			BarWsMessageFree (msg);
+			return;
+		}
+		ctx->playStateEpoch = *playStateEpoch;
+		ctx->playStateEpochValid = true;
+	}
 	if (ctx->buckets[bucket].message) {
 		BarWsMessageFree (ctx->buckets[bucket].message); /* free older message */
 	}
@@ -664,6 +671,17 @@ void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
 	if (ctx->context) {
 		lws_cancel_service ((struct lws_context *)ctx->context);
 	}
+}
+
+void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
+                                            BarWsBucketType_t bucket,
+                                            char *message) {
+	broadcastSocketIoMessage (app, bucket, message, NULL);
+}
+
+void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
+                                             uint64_t epoch) {
+	broadcastSocketIoMessage (app, BUCKET_STATE, message, &epoch);
 }
 
 /* Broadcast message to all connected WebSocket clients */

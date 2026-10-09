@@ -334,6 +334,7 @@ TEST_SRC:=${BASE_TEST_SRC} ${WS_TEST_SRC}
 endif
 
 TEST_OBJ:=${TEST_SRC:.c=.o}
+-include $(TEST_OBJ:.o=.d)
 
 # Objects common to both test variants (no WebSocket objects)
 BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/station_sort.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}

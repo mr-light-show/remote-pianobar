@@ -63,28 +63,7 @@ THE SOFTWARE.
  */
 static inline void BarUiDoSkipSong (player_t * const player) {
 	assert (player != NULL);
-
-	/* CRITICAL RULE: player.lock and player.decoderLock must NEVER be held simultaneously.
-	 * This function acquires them sequentially to signal both threads.
-	 * See src/THREAD_SAFETY.md for detailed explanation of two-lock player design. */
-	
-	ASSERT_DECODER_LOCK_NOT_HELD(player);  /* Verify decoderLock is free before acquiring lock */
-	pthread_mutex_lock (&player->lock);
-	player->doQuit = true;
-	player->doPause = false;
-	player->pauseStartTime = 0;  /* Clear pause timer */
-	pthread_cond_broadcast (&player->cond);
-	pthread_mutex_unlock (&player->lock);
-	
-	/* Immediately stop audio to clear buffered frames */
-	if (player->soundInitialized) {
-		ma_sound_stop(&player->sound);
-	}
-	
-	ASSERT_PLAYER_LOCK_NOT_HELD(player);  /* Verify lock is free before acquiring decoderLock */
-	pthread_mutex_lock (&player->decoderLock);
-	pthread_cond_broadcast (&player->decoderCond);
-	pthread_mutex_unlock (&player->decoderLock);
+	BarPlayerRequestStop (player);
 }
 
 /* Feedback mode for transform: UI (BarUiMsg + BarUiPianoCall) vs log (log_write + BarUiPianoCallLogged) */
@@ -547,56 +526,28 @@ BarUiActCallback(BarUiActSkipSong) {
 /*	play
  */
 BarUiActCallback(BarUiActPlay) {
-	/* LOCK HIERARCHY: player.lock is Lock #2 in the hierarchy
-	 * PROTECTS: player.doPause, player.pauseStartTime
-	 * DURATION: Held for microseconds (just to set flags)
-	 * BROADCAST: BarWsBroadcastPlayState() called AFTER lock is released
-	 * See src/THREAD_SAFETY.md for details */
-	pthread_mutex_lock (&app->player.lock);
-	app->player.doPause = false;
-	app->player.pauseStartTime = 0;  /* Clear pause timer */
-	pthread_cond_broadcast (&app->player.cond);
-	pthread_mutex_unlock (&app->player.lock);
-	
-	/* Notify WebSocket clients of state change */
-	BarWsBroadcastPlayState(app);
+	BarPlayerPlayStateSnapshot snapshot;
+	if (BarPlayerSetPausedWithSnapshot (&app->player, false, &snapshot)) {
+		BarWsBroadcastPlayStateSnapshot (app, &snapshot);
+	}
 }
 
 /*	pause
  */
 BarUiActCallback(BarUiActPause) {
-	/* LOCK HIERARCHY: player.lock is Lock #2 in the hierarchy
-	 * PROTECTS: player.doPause, player.pauseStartTime
-	 * See src/THREAD_SAFETY.md for details */
-	pthread_mutex_lock (&app->player.lock);
-	app->player.doPause = true;
-	app->player.pauseStartTime = time(NULL);  /* Start pause timer */
-	pthread_cond_broadcast (&app->player.cond);
-	pthread_mutex_unlock (&app->player.lock);
-	
-	/* Notify WebSocket clients of state change */
-	BarWsBroadcastPlayState(app);
+	BarPlayerPlayStateSnapshot snapshot;
+	if (BarPlayerSetPausedWithSnapshot (&app->player, true, &snapshot)) {
+		BarWsBroadcastPlayStateSnapshot (app, &snapshot);
+	}
 }
 
 /*	toggle pause
  */
 BarUiActCallback(BarUiActTogglePause) {
-	/* LOCK HIERARCHY: player.lock is Lock #2 in the hierarchy
-	 * PROTECTS: player.doPause, player.pauseStartTime
-	 * See src/THREAD_SAFETY.md for details */
-	pthread_mutex_lock (&app->player.lock);
-	app->player.doPause = !app->player.doPause;
-	/* Update pause timer */
-	if (app->player.doPause) {
-		app->player.pauseStartTime = time(NULL);
-	} else {
-		app->player.pauseStartTime = 0;
+	BarPlayerPlayStateSnapshot snapshot;
+	if (BarPlayerTogglePausedWithSnapshot (&app->player, &snapshot)) {
+		BarWsBroadcastPlayStateSnapshot (app, &snapshot);
 	}
-	pthread_cond_broadcast (&app->player.cond);
-	pthread_mutex_unlock (&app->player.lock);
-	
-	/* Notify WebSocket clients of state change */
-	BarWsBroadcastPlayState(app);
 }
 
 /*	rename current station
@@ -752,12 +703,6 @@ BarUiActCallback(BarUiActSelectQuickMix) {
 BarUiActCallback(BarUiActQuit) {
 	BarUiMsg(&app->settings, MSG_INFO, "Exiting...\n");
 	app->doQuit = true;
-	
-	/* Wake up player thread immediately to exit fast */
-	pthread_mutex_lock(&app->player.lock);
-	app->player.doQuit = true;
-	pthread_cond_broadcast(&app->player.cond);
-	pthread_mutex_unlock(&app->player.lock);
 	
 	BarUiDoSkipSong (&app->player);
 }
@@ -938,8 +883,7 @@ BarUiActCallback(BarUiActVolDown) {
 			/* Don't modify settings.volume - it stays at 0dB for player */
 		}
 	} else {
-		--app->settings.volume;
-		BarPlayerSetVolume (&app->player);
+		BarPlayerAdjustVolume (&app->player, -1);
 	}
 	BarWsBroadcastVolume(app);
 }
@@ -956,8 +900,7 @@ BarUiActCallback(BarUiActVolUp) {
 			/* Don't modify settings.volume - it stays at 0dB for player */
 		}
 	} else {
-		++app->settings.volume;
-		BarPlayerSetVolume (&app->player);
+		BarPlayerAdjustVolume (&app->player, 1);
 	}
 	BarWsBroadcastVolume(app);
 }
@@ -968,8 +911,7 @@ BarUiActCallback(BarUiActVolReset) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM) {
 		BarSystemVolumeSet(DEFAULT_VOLUME_PERCENT);  /* Reset for system volume */
 	} else {
-		app->settings.volume = DEFAULT_VOLUME_PERCENT;
-		BarPlayerSetVolume (&app->player);
+		BarPlayerSetVolume (&app->player, DEFAULT_VOLUME_PERCENT);
 	}
 	BarWsBroadcastVolume(app);
 }

@@ -45,6 +45,7 @@ THE SOFTWARE.
 #include <math.h>
 #include <stdint.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
@@ -86,6 +87,244 @@ const enum AVSampleFormat avformat = AV_SAMPLE_FMT_S16;
  */
 static atomic_long g_framesAllocated = 0;
 static atomic_long g_framesFreed = 0;
+static void ffmpeg_data_source_uninit (ffmpeg_data_source_t *source);
+static void audioTerminal (player_t *player, const char *operation);
+
+/* One owner protects sound/device lifetime without holding an application
+ * mutex across backend calls. Controls take priority over observations. */
+enum { BAR_AUDIO_WAIT_TIMEOUT_SECONDS = 1 };
+typedef enum { AUDIO_NORMAL, AUDIO_TEARDOWN, AUDIO_OBSERVATION, AUDIO_PLAYBACK_CONTROL } AudioPolicy;
+static BarPlayerAudioFatalHook audioFatalHook;
+static BarPlayerJoinTestHook joinTestHook;
+
+void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook) {
+	joinTestHook = hook;
+}
+
+bool BarPlayerJoinThreadWithTimeout (player_t *player, pthread_t thread, void **retval, unsigned int timeoutSeconds) {
+	bool joined = false;
+	if (joinTestHook != NULL) { joined = joinTestHook (thread, retval, timeoutSeconds); }
+	else {
+#ifdef __linux__
+	struct timespec deadline;
+	clock_gettime (CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += timeoutSeconds;
+	joined = pthread_timedjoin_np (thread, retval, &deadline) == 0;
+#else
+	for (unsigned int i = 0; i < timeoutSeconds * 10; ++i) {
+		const int ret = pthread_kill (thread, 0);
+		if (ret == ESRCH) { joined = pthread_join (thread, retval) == 0; break; }
+		if (ret != 0) { break; }
+		usleep ((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
+	}
+#endif
+	}
+	if (joined) {
+		pthread_mutex_lock (&player->lock);
+		player->threadJoinPending = false;
+		pthread_mutex_unlock (&player->lock);
+	}
+	return joined;
+}
+
+static bool playbackControlMode (BarPlayerMode mode) {
+	return mode == PLAYER_WAITING || mode == PLAYER_PLAYING;
+}
+
+static bool audioEligibleLocked (const player_t *player, AudioPolicy policy) {
+	return !player->audioTerminalFailure && (policy == AUDIO_TEARDOWN || !player->doQuit) &&
+		(policy != AUDIO_PLAYBACK_CONTROL || playbackControlMode (player->mode));
+}
+
+void BarPlayerSetAudioFatalTestHook (BarPlayerAudioFatalHook hook) {
+	audioFatalHook = hook;
+}
+
+static void audioFatal (player_t *player, const char *operation) {
+	if (audioFatalHook != NULL) {
+		audioFatalHook (player, operation);
+		return;
+	}
+	_Exit (EXIT_FAILURE);
+}
+
+void BarPlayerFatalShutdown (player_t *player, const char *operation) {
+	pthread_mutex_lock (&player->lock);
+	player->audioTerminalFailure = true;
+	player->doQuit = true;
+	++player->controlEpoch;
+	pthread_cond_broadcast (&player->cond);
+	pthread_cond_broadcast (&player->audioCond);
+	pthread_mutex_unlock (&player->lock);
+	log_write (LOG_ERROR, "Terminal player shutdown: %s; shared resources retained\n", operation);
+	audioFatal (player, operation);
+}
+
+static bool monotonicExpired (const struct timespec *deadline) {
+	struct timespec now;
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	return now.tv_sec > deadline->tv_sec ||
+		(now.tv_sec == deadline->tv_sec && now.tv_nsec >= deadline->tv_nsec);
+}
+
+/* Only this function handles platform-specific condition clocks. */
+static int audioTimedWait (player_t *player, const struct timespec *deadline) {
+#ifdef __APPLE__
+	struct timespec now, remaining;
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	remaining.tv_sec = deadline->tv_sec - now.tv_sec;
+	remaining.tv_nsec = deadline->tv_nsec - now.tv_nsec;
+	if (remaining.tv_nsec < 0) {
+		--remaining.tv_sec;
+		remaining.tv_nsec += 1000000000L;
+	}
+	if (remaining.tv_sec < 0) { return ETIMEDOUT; }
+	return pthread_cond_timedwait_relative_np (&player->audioCond, &player->lock, &remaining);
+#else
+	return pthread_cond_timedwait (&player->audioCond, &player->lock, deadline);
+#endif
+}
+
+/* All results leave player.lock held. Fatal diagnostics/callbacks run only
+ * after the caller unlocks. A timeout never transfers the current ownership. */
+static bool BarPlayerAudioReserveLocked (player_t *player, AudioPolicy policy,
+		const char *operation) {
+	if (!audioEligibleLocked (player, policy)) {
+		return false;
+	}
+	if (player->audioBusy && player->audioOwnerValid &&
+			pthread_equal (player->audioOwner, pthread_self ())) {
+		/* Defer logging until no application mutex is held. */
+		return false;
+	}
+	if (policy == AUDIO_OBSERVATION &&
+			(player->audioBusy || player->audioControlWaiters != 0)) {
+		return false;
+	}
+	struct timespec deadline;
+	clock_gettime (CLOCK_MONOTONIC, &deadline);
+	deadline.tv_sec += BAR_AUDIO_WAIT_TIMEOUT_SECONDS;
+	const bool control = policy != AUDIO_OBSERVATION;
+	if (control) { ++player->audioControlWaiters; }
+	bool claimed = false;
+	while (audioEligibleLocked (player, policy)) {
+		if (!player->audioBusy) {
+			player->audioBusy = true;
+			player->audioOwner = pthread_self ();
+			player->audioOwnerValid = true;
+			player->audioOperation = operation;
+			clock_gettime (CLOCK_MONOTONIC, &player->audioBusySince);
+			claimed = true;
+			break;
+		}
+		const int rc = audioTimedWait (player, &deadline);
+		/* Recheck eligibility and availability before deciding a wait timed out. */
+		if (!audioEligibleLocked (player, policy)) {
+			break;
+		}
+		if (!player->audioBusy) { continue; }
+		if ((rc == ETIMEDOUT && monotonicExpired (&deadline)) ||
+				(rc != 0 && rc != ETIMEDOUT)) {
+			if (policy == AUDIO_TEARDOWN) {
+				player->audioTerminalFailure = true;
+				player->doQuit = true;
+				++player->controlEpoch;
+				pthread_cond_broadcast (&player->cond);
+			}
+			break;
+		}
+	}
+	if (control) { --player->audioControlWaiters; }
+	if (!claimed) { pthread_cond_broadcast (&player->audioCond); }
+	return claimed;
+}
+
+/* Wrapper owns the unlock for failed claims, including fatal-hook returns. */
+static bool audioReserve (player_t *player, AudioPolicy policy, const char *operation) {
+	pthread_mutex_lock (&player->lock);
+	const bool alreadyTerminal = player->audioTerminalFailure;
+	if (BarPlayerAudioReserveLocked (player, policy, operation)) { return true; }
+	const bool terminal = !alreadyTerminal && player->audioTerminalFailure;
+	const bool recursive = player->audioBusy && player->audioOwnerValid &&
+		pthread_equal (player->audioOwner, pthread_self ());
+	const char *ownerOperation = player->audioOperation;
+	const pthread_t owner = player->audioOwner;
+	struct timespec now;
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	const double elapsed = (double)(now.tv_sec - player->audioBusySince.tv_sec) +
+		(double)(now.tv_nsec - player->audioBusySince.tv_nsec) / 1e9;
+	pthread_mutex_unlock (&player->lock);
+	if (recursive) {
+		log_write (LOG_ERROR, "Recursive audio reservation rejected: %s\n", operation);
+	}
+	if (terminal) {
+		log_write (LOG_ERROR, "Audio reservation failure: %s; owner=%lu operation=%s elapsed=%.3fs\n",
+			operation, (unsigned long)owner, ownerOperation != NULL ? ownerOperation : "none", elapsed);
+		audioFatal (player, operation);
+	}
+	return false;
+}
+
+/* Requires lock. Setup uses this variant to commit mode and audio together. */
+static void audioCompleteLocked (player_t *player, BarPlayerAudioState state, bool signal) {
+	player->audioState = state;
+	player->audioBusy = false;
+	player->audioOwnerValid = false;
+	memset (&player->audioOwner, 0, sizeof (player->audioOwner));
+	memset (&player->audioBusySince, 0, sizeof (player->audioBusySince));
+	player->audioOperation = NULL;
+	pthread_cond_broadcast (&player->audioCond);
+	if (signal) { pthread_cond_broadcast (&player->cond); }
+	pthread_mutex_unlock (&player->lock);
+}
+
+static void audioComplete (player_t *player, BarPlayerAudioState state) {
+	pthread_mutex_lock (&player->lock);
+	audioCompleteLocked (player, state, false);
+}
+
+/* These helpers require the reservation, never player.lock. Device state is
+ * queried directly: a test no-device engine has no physical transition. */
+static bool deviceSetStartedReserved (player_t *player, bool started) {
+	if (!player->engineInitialized) { return !started; }
+	ma_device *device = ma_engine_get_device (&player->engine);
+	if (device == NULL) { return player->audioNoDevice; }
+	if ((ma_device_is_started (device) != MA_FALSE) == started) { return true; }
+	const ma_result result = started ? ma_engine_start (&player->engine) : ma_engine_stop (&player->engine);
+	if (result != MA_SUCCESS) {
+		log_write (LOG_ERROR, "Audio device %s failed: %d\n", started ? "start" : "stop", result);
+		return false;
+	}
+	return (ma_device_is_started (device) != MA_FALSE) == started;
+}
+
+static bool stopSoundReserved (player_t *player, bool live) {
+	/* Device stop joins its callback. Publish a persistent source predicate
+	 * before that join, including rollback before any decoder has started. */
+	pthread_mutex_lock (&player->decoderLock);
+	player->sourceReadCancelled = true;
+	pthread_cond_broadcast (&player->decoderCond);
+	pthread_mutex_unlock (&player->decoderLock);
+	bool ok = true;
+	if (live) {
+		const ma_result result = ma_sound_stop (&player->sound);
+		if (result != MA_SUCCESS) {
+			log_write (LOG_ERROR, "Audio sound stop failed: %d\n", result);
+			ok = false;
+		}
+	}
+	return deviceSetStartedReserved (player, false) && ok;
+}
+
+static bool cleanupSoundReserved (player_t *player, bool live) {
+	if (!stopSoundReserved (player, live)) { return false; }
+	if (live) { ma_sound_uninit (&player->sound); }
+	if (player->dataSourceInitialized) {
+		ffmpeg_data_source_uninit (&player->dataSource);
+		player->dataSourceInitialized = false;
+	}
+	return true;
+}
 
 /* Get current RSS (Resident Set Size) in KB for memory tracking */
 static long getCurrentRSSKB(void) {
@@ -247,7 +486,9 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		return MA_AT_END;
 	}
 	
-	/* Check if paused - output silence */
+	/* Transition safeguard: the engine should normally be stopped for a
+	 * sustained pause. Keep silence until backend race testing proves this
+	 * callback cannot overlap the physical pause transition. */
 	if (BarPlayerIsPaused(player)) {
 		memset(pFramesOut, 0, frameCount * pFFmpeg->channels * sizeof(int16_t));
 		if (pFramesRead != NULL) {
@@ -261,7 +502,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 	
 	pthread_mutex_lock(&player->decoderLock);
 	
-	while (framesRead < frameCount) {
+	while (framesRead < frameCount && !player->sourceReadCancelled) {
 		/* First, consume from any buffered frame */
 		if (pFFmpeg->bufferedFrame != NULL) {
 			const int numChannels = pFFmpeg->bufferedFrame->ch_layout.nb_channels;
@@ -324,10 +565,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 			/* Wait for decoder to signal new data */
 			pthread_cond_wait(&player->decoderCond, &player->decoderLock);
 			
-			/* Check for quit after waking */
-			if (shouldQuit(player)) {
-				break;
-			}
+			/* The loop predicate prevents another wait after physical stop. */
 			continue;
 		} else if (ret < 0) {
 			/* Error */
@@ -351,6 +589,7 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		/* Loop will consume from it on next iteration */
 	}
 	
+	const bool cancelled = player->sourceReadCancelled;
 	pthread_mutex_unlock(&player->decoderLock);
 	
 	/* Fill remaining with silence if we didn't get enough */
@@ -360,8 +599,11 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 	}
 	
 	if (pFramesRead != NULL) {
-		*pFramesRead = framesRead;
+		/* A stop wake returns bounded silence, not natural EOF. This keeps a
+		 * retained node/cursor resumable without firing its end callback. */
+		*pFramesRead = cancelled ? frameCount : framesRead;
 	}
+	if (cancelled) { return MA_SUCCESS; }
 	
 	/* Return AT_END only if we read nothing AND we're at the end */
 	if (framesRead == 0 && pFFmpeg->reachedEnd) {
@@ -439,6 +681,9 @@ static ma_data_source_vtable g_ffmpeg_data_source_vtable = {
 /* Initialize the ffmpeg data source */
 static ma_result ffmpeg_data_source_init(ffmpeg_data_source_t* pFFmpeg, player_t* player) {
 	ma_data_source_config baseConfig;
+	pthread_mutex_lock (&player->decoderLock);
+	player->sourceReadCancelled = false;
+	pthread_mutex_unlock (&player->decoderLock);
 	
 	baseConfig = ma_data_source_config_init();
 	baseConfig.vtable = &g_ffmpeg_data_source_vtable;
@@ -501,7 +746,7 @@ static void onSongEnd(void* pUserData, ma_sound* pSound) {
  * ============================================================================
  */
 
-void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
+void BarPlayerInit(player_t * const p, BarSettings_t * const settings) {
 
 	av_log_set_level(AV_LOG_FATAL);
 #ifdef HAVE_AV_REGISTER_ALL
@@ -514,10 +759,24 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	avformat_network_init();
 #endif
 
-	pthread_mutex_init(&p->lock, NULL);
-	pthread_cond_init(&p->cond, NULL);
-	pthread_mutex_init(&p->decoderLock, NULL);
-	pthread_cond_init(&p->decoderCond, NULL);
+	if (!p->synchronizationInitialized) {
+		pthread_mutex_init (&p->lock, NULL);
+		pthread_cond_init (&p->cond, NULL);
+		pthread_mutex_init (&p->decoderLock, NULL);
+		pthread_cond_init (&p->decoderCond, NULL);
+		pthread_condattr_t attr;
+		pthread_condattr_init (&attr);
+#ifndef __APPLE__
+		pthread_condattr_setclock (&attr, CLOCK_MONOTONIC);
+#endif
+		pthread_cond_init (&p->audioCond, &attr);
+		pthread_condattr_destroy (&attr);
+		p->synchronizationInitialized = true;
+		p->settings = settings;
+		p->requestedVolume = settings->volume < 0 ? 0 :
+			(settings->volume > VOLUME_MAX_PERCENT ? VOLUME_MAX_PERCENT : settings->volume);
+		settings->volume = p->requestedVolume;
+	}
 	
 	/* Initialize miniaudio engine once
 	 * On macOS, engine MUST be initialized AFTER fork to avoid CoreAudio thread issues.
@@ -525,8 +784,11 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	
 	if (p->engineInitialized) {
 		/* Already initialized, just reset and return */
-		BarPlayerReset(p);
+		if (!BarPlayerReset (p)) { return; }
+		pthread_mutex_lock (&p->lock);
 		p->settings = settings;
+		settings->volume = p->requestedVolume;
+		pthread_mutex_unlock (&p->lock);
 		s_rssAudioHwmKb = -1;
 #if defined(__GLIBC__)
 		s_rssAfterLastTrimKb = -1;
@@ -535,8 +797,12 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 	}
 	
 	ma_engine_config engineConfig = ma_engine_config_init();
+	engineConfig.noAutoStart = MA_TRUE;
 	if (getenv ("PIANOBAR_TEST_NO_DEVICE") != NULL) {
 		engineConfig.noDevice = MA_TRUE;
+		engineConfig.sampleRate = settings->sampleRate != 0 ? settings->sampleRate : 44100;
+		engineConfig.channels = 2;
+		p->audioNoDevice = true;
 	} else {
 		engineConfig.noDevice = MA_FALSE;
 	}
@@ -550,29 +816,32 @@ void BarPlayerInit(player_t * const p, const BarSettings_t * const settings) {
 		           ma_engine_get_sample_rate(&p->engine));
 	}
 	
-	BarPlayerReset(p);
-	p->settings = settings;
+	if (!BarPlayerReset (p)) { return; }
 	s_rssAudioHwmKb = -1;
 #if defined(__GLIBC__)
 	s_rssAfterLastTrimKb = -1;
 #endif
 }
 
-void BarPlayerDestroy(player_t * const p) {
-	/* Uninit engine */
-	if (p->engineInitialized) {
-		log_write(DEBUG_AUDIO, "BarPlayerDestroy: Stopping engine before uninit\n");
-		
-		/* Stop engine playback before uninit to avoid audio drain delay on Linux */
-		ma_engine_stop(&p->engine);
-		
-		log_write(DEBUG_AUDIO, "BarPlayerDestroy: Calling ma_engine_uninit\n");
-		ma_engine_uninit(&p->engine);
-		log_write(DEBUG_AUDIO, "BarPlayerDestroy: ma_engine_uninit completed\n");
-		
-		p->engineInitialized = false;
+bool BarPlayerDestroy(player_t * const p) {
+	if (p == NULL || !p->synchronizationInitialized) { return false; }
+	pthread_mutex_lock (&p->lock);
+	const bool joinPending = p->threadJoinPending;
+	pthread_mutex_unlock (&p->lock);
+	if (joinPending) { BarPlayerFatalShutdown (p, "destroy before player join"); return false; }
+	if (!audioReserve (p, AUDIO_TEARDOWN, "destroy")) { return false; }
+	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	pthread_mutex_unlock (&p->lock);
+	if (!cleanupSoundReserved (p, live)) {
+		audioTerminal (p, "destroy");
+		return false;
 	}
-	
+	if (p->engineInitialized) { ma_engine_uninit (&p->engine); }
+	pthread_mutex_lock (&p->lock);
+	p->soundInitialized = false;
+	p->engineInitialized = false;
+	audioCompleteLocked (p, PLAYER_AUDIO_NONE, true);
+	pthread_cond_destroy (&p->audioCond);
 	pthread_cond_destroy(&p->cond);
 	pthread_mutex_destroy(&p->lock);
 	pthread_cond_destroy(&p->decoderCond);
@@ -581,36 +850,35 @@ void BarPlayerDestroy(player_t * const p) {
 #ifdef HAVE_AVFORMAT_NETWORK_INIT
 	avformat_network_deinit();
 #endif
+	p->synchronizationInitialized = false;
+	return true;
 }
 
-void BarPlayerReset(player_t * const p) {
-	/* Clean up sound from previous song */
-	if (p->soundInitialized) {
-		/* Stop the sound (not the engine!) before uninit to prevent audio drain delay.
-		 * ma_sound_stop() stops this specific sound instance.
-		 * ma_engine_stop() would stop ALL sounds and the engine itself (wrong!).
-		 * The engine must keep running for the next song. */
-		ma_sound_stop(&p->sound);
-		
-		ma_sound_uninit(&p->sound);
-		log_write(DEBUG_AUDIO, "Cleaned up old sound in reset\n");
+bool BarPlayerReset(player_t * const p) {
+	if (p == NULL || !audioReserve (p, AUDIO_TEARDOWN, "reset")) { return false; }
+	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const uint64_t epoch = p->controlEpoch;
+	pthread_mutex_unlock (&p->lock);
+	if (!cleanupSoundReserved (p, live)) {
+		audioTerminal (p, "reset");
+		return false;
 	}
+	pthread_mutex_lock (&p->lock);
 	p->soundInitialized = false;
-	
-	/* Free any buffered frame in the data source before zeroing */
-	if (p->dataSource.bufferedFrame != NULL) {
-		av_frame_free(&p->dataSource.bufferedFrame);
-		p->dataSource.bufferedFrame = NULL;
-		g_framesFreed++;
+	if (p->controlEpoch != epoch) {
+		/* Physical cleanup succeeded, but a newer control owns the logical
+		 * decision. The lifecycle caller must not start a replacement worker. */
+		audioCompleteLocked (p, PLAYER_AUDIO_NONE, true);
+		return false;
 	}
-	
 	/* Reset all fields */
 	p->doQuit = false;
 	p->doPause = false;
 	p->pauseStartTime = 0;
 	p->songDuration = 0;
 	p->songPlayed = 0;
-	BarPlayerSetMode (p, PLAYER_DEAD);
+	p->mode = PLAYER_DEAD;
+	++p->controlEpoch;
 	p->fgraph = NULL;
 	p->fctx = NULL;
 	p->st = NULL;
@@ -622,6 +890,8 @@ void BarPlayerReset(player_t * const p) {
 	p->interrupted = 0;
 	p->decodingFinished = false;
 	memset(&p->dataSource, 0, sizeof(p->dataSource));
+	audioCompleteLocked (p, PLAYER_AUDIO_NONE, true);
+	return true;
 }
 
 /*
@@ -630,21 +900,42 @@ void BarPlayerReset(player_t * const p) {
  * ============================================================================
  */
 
-void BarPlayerSetVolume(player_t * const player) {
-	assert(player != NULL);
+static void setVolumeReserved (player_t *player, int volume, double gain, double gainMul) {
+	ma_sound_set_volume (&player->sound, (float)volume / 100.0f *
+		powf (10.0f, (float)(gain * gainMul) / 20.0f));
+}
 
-	if (!player->soundInitialized) {
-		return;
+static bool updateVolume (player_t *player, int value, bool relative) {
+	if (player == NULL || !audioReserve (player, AUDIO_NORMAL, "volume")) { return false; }
+	const BarPlayerAudioState state = player->audioState;
+	int64_t volume = relative ? (int64_t)player->requestedVolume + value : value;
+	if (volume < 0) { volume = 0; }
+	if (volume > VOLUME_MAX_PERCENT) { volume = VOLUME_MAX_PERCENT; }
+	player->requestedVolume = (int)volume;
+	player->settings->volume = (int)volume;
+	const double gain = player->gain, gainMul = player->settings->gainMul;
+	pthread_mutex_unlock (&player->lock);
+	if (state == PLAYER_AUDIO_RUNNING || state == PLAYER_AUDIO_STOPPED) {
+		setVolumeReserved (player, (int)volume, gain, gainMul);
 	}
+	audioComplete (player, state);
+	return true;
+}
 
-	/* User volume: 0-100 linear scale -> 0.0-1.0 */
-	float userVolume = (float)player->settings->volume / 100.0f;
-	
-	/* ReplayGain: convert dB to linear multiplier */
-	float replayGain = powf(10.0f, (player->gain * player->settings->gainMul) / 20.0f);
-	
-	/* Apply combined volume to miniaudio sound */
-	ma_sound_set_volume(&player->sound, userVolume * replayGain);
+bool BarPlayerSetVolume (player_t *player, int requestedVolume) {
+	return updateVolume (player, requestedVolume, false);
+}
+
+bool BarPlayerAdjustVolume (player_t *player, int delta) {
+	return updateVolume (player, delta, true);
+}
+
+int BarPlayerGetVolume (player_t *player) {
+	if (player == NULL) { return -1; }
+	pthread_mutex_lock (&player->lock);
+	const int volume = player->requestedVolume;
+	pthread_mutex_unlock (&player->lock);
+	return volume;
 }
 
 /*
@@ -683,9 +974,9 @@ int BarPlayerFfmpegInterruptCb (void * const data) {
 	assert (player != NULL);
 	const sig_atomic_t interrupted = atomic_load_explicit (&player->interrupted, memory_order_relaxed);
 	if (interrupted > 1) {
-		pthread_mutex_lock(&player->lock);
-		player->doQuit = true;
-		pthread_mutex_unlock(&player->lock);
+		/* FFmpeg invokes this on its open/read worker, not a signal or audio
+		 * callback. No application lock or audio reservation is held here. */
+		BarPlayerRequestStop (player);
 		return 1;
 	} else if (interrupted != 0) {
 		sig_atomic_t expected = interrupted;
@@ -905,6 +1196,19 @@ static bool shouldQuit(player_t * const player) {
 	return ret;
 }
 
+/* Packet-boundary wait: decoderLock is never held while awaiting controls. */
+static bool BarPlayerWaitWhilePaused (player_t *player) {
+	pthread_mutex_lock (&player->lock);
+	while (player->doPause && !player->doQuit) {
+		/* An end callback can supersede resume while pause remains set. */
+		if (player->mode != PLAYER_PLAYING) { break; }
+		pthread_cond_wait (&player->cond, &player->lock);
+	}
+	const bool keepDecoding = !player->doQuit && player->mode == PLAYER_PLAYING;
+	pthread_mutex_unlock (&player->lock);
+	return keepDecoding;
+}
+
 bool BarPlayerIsPaused(player_t * const player) {
 	pthread_mutex_lock(&player->lock);
 	const bool ret = player->doPause;
@@ -916,8 +1220,12 @@ void BarPlayerSetMode (player_t * const player, BarPlayerMode mode) {
 	if (player == NULL) { return; }
 
 	pthread_mutex_lock(&player->lock);
-	player->mode = mode;
+	if (player->mode != mode) {
+		player->mode = mode;
+		++player->controlEpoch;
+	}
 	pthread_cond_broadcast(&player->cond);
+	pthread_cond_broadcast(&player->audioCond);
 	pthread_mutex_unlock(&player->lock);
 }
 
@@ -978,6 +1286,7 @@ static int decode(player_t * const player) {
 	
 	while (!shouldQuit(player) && drainMode != DONE) {
 		if (drainMode == FILL) {
+			if (!BarPlayerWaitWhilePaused (player)) { break; }
 			ret = av_read_frame(player->fctx, pkt);
 			if (ret == AVERROR_EOF) {
 				drainMode = DRAIN;
@@ -1053,73 +1362,314 @@ static int decode(player_t * const player) {
  * ============================================================================
  */
 
-static bool setupSound(player_t * const player) {
-	if (!player->engineInitialized) {
-		BarUiMsg(player->settings, MSG_ERR, "Audio engine not initialized\n");
+static void audioTerminal (player_t *player, const char *operation) {
+	pthread_mutex_lock (&player->lock);
+	player->audioTerminalFailure = true;
+	player->doQuit = true;
+	++player->controlEpoch;
+	audioCompleteLocked (player, PLAYER_AUDIO_FAILED, true);
+	audioFatal (player, operation);
+}
+
+bool BarPlayerStopAudio (player_t *player) {
+	if (player == NULL || !audioReserve (player, AUDIO_TEARDOWN, "stop")) { return false; }
+	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	pthread_mutex_unlock (&player->lock);
+	if (!stopSoundReserved (player, live)) {
+		audioTerminal (player, "stop");
 		return false;
 	}
-	
-	/* Initialize the ffmpeg data source */
-	ma_result result = ffmpeg_data_source_init(&player->dataSource, player);
-	if (result != MA_SUCCESS) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to init data source: %d\n", result);
-		return false;
-	}
-	
-	/* Create sound from data source */
-	result = ma_sound_init_from_data_source(&player->engine, 
-	                                        &player->dataSource, 
-	                                        0,    /* flags */
-	                                        NULL, /* group */
-	                                        &player->sound);
-	if (result != MA_SUCCESS) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to init sound: %d\n", result);
-		ffmpeg_data_source_uninit(&player->dataSource);
-		return false;
-	}
-	
-	player->soundInitialized = true;
-	
-	/* Set end callback for clean completion detection */
-	ma_sound_set_end_callback(&player->sound, onSongEnd, player);
-	
-	/* Start playback */
-	result = ma_sound_start(&player->sound);
-	if (result != MA_SUCCESS) {
-		BarUiMsg(player->settings, MSG_ERR, "Failed to start sound: %d\n", result);
-		ma_sound_uninit(&player->sound);
-		player->soundInitialized = false;
-		ffmpeg_data_source_uninit(&player->dataSource);
-		return false;
-	}
-	
-	log_write(DEBUG_AUDIO, "Sound started successfully\n");
+	audioComplete (player, live ? PLAYER_AUDIO_STOPPED : PLAYER_AUDIO_NONE);
 	return true;
 }
 
-static void cleanupSound(player_t * const player) {
-	if (player->soundInitialized) {
-		ma_sound_stop(&player->sound);
-		
-		/* NOTE: Do NOT call ma_engine_stop() here!
-		 * The engine must keep running for the next song.
-		 * ma_engine_stop() stops the entire engine, not just this sound.
-		 * The audio drain delay on Linux is handled by pthread_timedjoin_np
-		 * in the playback manager (commit 5fe7829). */
-		
-		ma_sound_uninit(&player->sound);
-		player->soundInitialized = false;
-		log_write(DEBUG_AUDIO, "Sound cleaned up\n");
-	}
-	
-	ffmpeg_data_source_uninit(&player->dataSource);
+static bool pauseControlCurrentLocked (const player_t *player, uint64_t epoch, BarPlayerMode mode) {
+	return !player->doQuit && !player->audioTerminalFailure && player->controlEpoch == epoch &&
+		player->mode == mode && playbackControlMode (player->mode);
 }
 
-static void finish(player_t * const player) {
+/* Choose toggle direction only after claiming ownership. Each backend phase
+ * releases player.lock, and decoder rearm/cancellation holds decoderLock alone. */
+static bool setPaused (player_t *player, bool paused, bool toggle, bool *finalPaused,
+		BarPlayerPlayStateSnapshot *snapshot) {
+	if (player == NULL || !audioReserve (player, AUDIO_PLAYBACK_CONTROL, toggle ? "toggle" : paused ? "pause" : "resume")) {
+		return false;
+	}
+	if (toggle) { paused = !player->doPause; }
+	const BarPlayerAudioState state = player->audioState;
+	const BarPlayerMode mode = player->mode;
+	const bool live = state != PLAYER_AUDIO_NONE;
+	if (paused == player->doPause && (paused ? state != PLAYER_AUDIO_RUNNING : state != PLAYER_AUDIO_STOPPED)) {
+		if (finalPaused != NULL) { *finalPaused = player->doPause; }
+		if (snapshot != NULL) { *snapshot = (BarPlayerPlayStateSnapshot) {player->doPause, player->controlEpoch}; }
+		audioCompleteLocked (player, state, true);
+		return true;
+	}
+	if (paused || !live) {
+		player->doPause = paused;
+		player->pauseStartTime = paused ? time (NULL) : 0;
+		++player->controlEpoch;
+		pthread_cond_broadcast (&player->cond);
+	}
+	const uint64_t epoch = player->controlEpoch;
+	if (!live || (paused && state == PLAYER_AUDIO_STOPPED)) {
+		if (finalPaused != NULL) { *finalPaused = player->doPause; }
+		if (snapshot != NULL) { *snapshot = (BarPlayerPlayStateSnapshot) {player->doPause, player->controlEpoch}; }
+		audioCompleteLocked (player, state, true);
+		return true;
+	}
+	pthread_mutex_unlock (&player->lock);
+	if (paused) {
+		if (!stopSoundReserved (player, true)) {
+			audioTerminal (player, "pause");
+			return false;
+		}
+		pthread_mutex_lock (&player->lock);
+		const bool current = pauseControlCurrentLocked (player, epoch, mode);
+		if (finalPaused != NULL) { *finalPaused = player->doPause; }
+		if (current && snapshot != NULL) { *snapshot = (BarPlayerPlayStateSnapshot) {player->doPause, player->controlEpoch}; }
+		audioCompleteLocked (player, PLAYER_AUDIO_STOPPED, true);
+		return current;
+	}
+
+	/* A retained node must be rearmed before a device can invoke its callback. */
+	pthread_mutex_lock (&player->decoderLock);
+	player->sourceReadCancelled = false;
+	pthread_mutex_unlock (&player->decoderLock);
+	pthread_mutex_lock (&player->lock);
+	bool current = pauseControlCurrentLocked (player, epoch, mode);
+	pthread_mutex_unlock (&player->lock);
+	bool started = false;
+	if (current && !ma_sound_at_end (&player->sound)) {
+		const ma_result result = ma_sound_start (&player->sound);
+		if (result != MA_SUCCESS) {
+			log_write (LOG_ERROR, "Audio sound start failed: %d\n", result);
+		} else {
+			pthread_mutex_lock (&player->lock);
+			current = pauseControlCurrentLocked (player, epoch, mode);
+			pthread_mutex_unlock (&player->lock);
+			if (current) { started = deviceSetStartedReserved (player, true); }
+		}
+	}
+	pthread_mutex_lock (&player->lock);
+	current = pauseControlCurrentLocked (player, epoch, mode);
+	if (started && current) {
+		player->doPause = false;
+		player->pauseStartTime = 0;
+		++player->controlEpoch;
+		if (finalPaused != NULL) { *finalPaused = false; }
+		if (snapshot != NULL) { *snapshot = (BarPlayerPlayStateSnapshot) {false, player->controlEpoch}; }
+		audioCompleteLocked (player, PLAYER_AUDIO_RUNNING, true);
+		return true;
+	}
+	pthread_mutex_unlock (&player->lock);
+	/* Failure or supersession retains both lifetime and cancellation until the
+ * physical start is rolled back. Only a current failure may change pause. */
+	if (!stopSoundReserved (player, true)) {
+		audioTerminal (player, "resume rollback");
+		return false;
+	}
+	pthread_mutex_lock (&player->lock);
+	if (pauseControlCurrentLocked (player, epoch, mode) && !player->doPause) {
+		player->doPause = true;
+		player->pauseStartTime = time (NULL);
+		++player->controlEpoch;
+	}
+	if (finalPaused != NULL) { *finalPaused = player->doPause; }
+	audioCompleteLocked (player, PLAYER_AUDIO_STOPPED, true);
+	return false;
+}
+
+bool BarPlayerSetPaused (player_t *player, bool paused) {
+	return BarPlayerSetPausedWithSnapshot (player, paused, NULL);
+}
+
+bool BarPlayerTogglePaused (player_t *player, bool *paused) {
+	return setPaused (player, false, true, paused, NULL);
+}
+
+bool BarPlayerSetPausedWithSnapshot (player_t *player, bool paused,
+		BarPlayerPlayStateSnapshot *snapshot) {
+	return setPaused (player, paused, false, NULL, snapshot);
+}
+
+bool BarPlayerTogglePausedWithSnapshot (player_t *player,
+		BarPlayerPlayStateSnapshot *snapshot) {
+	return setPaused (player, false, true, NULL, snapshot);
+}
+
+void BarPlayerRequestStop (player_t *player) {
+	if (player == NULL) { return; }
+	/* Publish before waiting so the current owner cannot commit stale success. */
+	pthread_mutex_lock (&player->lock);
+	player->doQuit = true;
+	++player->controlEpoch;
+	pthread_cond_broadcast (&player->cond);
+	pthread_cond_broadcast (&player->audioCond);
+	pthread_mutex_unlock (&player->lock);
+	if (!audioReserve (player, AUDIO_TEARDOWN, "request stop")) { return; }
+	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	player->doPause = false;
+	player->pauseStartTime = 0;
+	pthread_cond_broadcast (&player->cond);
+	pthread_mutex_unlock (&player->lock);
+	if (!stopSoundReserved (player, live)) {
+		audioTerminal (player, "request stop");
+		return;
+	}
+	audioComplete (player, live ? PLAYER_AUDIO_STOPPED : PLAYER_AUDIO_NONE);
+	/* Ownership and player.lock are released before the final decoder wake. */
+	pthread_mutex_lock (&player->decoderLock);
+	pthread_cond_broadcast (&player->decoderCond);
+	pthread_mutex_unlock (&player->decoderLock);
+}
+
+bool BarPlayerGetAudioSnapshot (player_t *player, BarPlayerAudioSnapshot *snapshot) {
+	if (player == NULL || snapshot == NULL || pthread_mutex_trylock (&player->lock) != 0) {
+		return false;
+	}
+	if (player->audioBusy && player->audioOwnerValid && pthread_equal (player->audioOwner, pthread_self ())) {
+		pthread_mutex_unlock (&player->lock);
+		log_write (LOG_ERROR, "Recursive audio reservation rejected: snapshot\n");
+		return false;
+	}
+	if (player->audioBusy || player->audioControlWaiters != 0 || player->mode != PLAYER_PLAYING ||
+			(player->audioState != PLAYER_AUDIO_RUNNING && player->audioState != PLAYER_AUDIO_STOPPED) ||
+			!BarPlayerAudioReserveLocked (player, AUDIO_OBSERVATION, "snapshot")) {
+		pthread_mutex_unlock (&player->lock);
+		return false;
+	}
+	const BarPlayerAudioState state = player->audioState;
+	const uint64_t epoch = player->controlEpoch;
+	pthread_mutex_unlock (&player->lock);
+	BarPlayerAudioSnapshot sample = {.state = state};
+	/* Source callbacks mutate the FFmpeg cursor under decoderLock. Never
+	 * hold it together with player.lock; the reservation retains lifetime. */
+	pthread_mutex_lock (&player->decoderLock);
+	const ma_result frames = ma_sound_get_cursor_in_pcm_frames (&player->sound, &sample.cursorFrames);
+	const ma_result seconds = ma_sound_get_cursor_in_seconds (&player->sound, &sample.cursorSeconds);
+	pthread_mutex_unlock (&player->decoderLock);
+	sample.playing = ma_sound_is_playing (&player->sound) != MA_FALSE;
+	sample.atEnd = ma_sound_at_end (&player->sound) != MA_FALSE;
+	ma_device *device = ma_engine_get_device (&player->engine);
+	sample.deviceStarted = device != NULL && ma_device_is_started (device);
+	pthread_mutex_lock (&player->lock);
+	const bool current = !player->doQuit && player->mode == PLAYER_PLAYING &&
+		player->controlEpoch == epoch;
+	if (current && frames == MA_SUCCESS && seconds == MA_SUCCESS) { *snapshot = sample; }
+	audioCompleteLocked (player, state, false);
+	return current && frames == MA_SUCCESS && seconds == MA_SUCCESS;
+}
+
+typedef enum { SETUP_PLAYING, SETUP_SUPERSEDED, SETUP_HARDFAIL } SetupResult;
+
+static bool setupCurrentLocked (const player_t *player, uint64_t epoch) {
+	return player->controlEpoch == epoch && player->mode == PLAYER_WAITING && !player->doQuit;
+}
+
+static SetupResult setupSound (player_t *player, uint64_t *setupEpoch) {
+	if (!audioReserve (player, AUDIO_NORMAL, "setup")) { return SETUP_SUPERSEDED; }
+	if (player->mode != PLAYER_WAITING) {
+		audioCompleteLocked (player, player->audioState, false);
+		return SETUP_SUPERSEDED;
+	}
+	const uint64_t epoch = player->controlEpoch;
+	*setupEpoch = epoch;
+	const bool paused = player->doPause;
+	const int volume = player->requestedVolume;
+	const double gain = player->gain, gainMul = player->settings->gainMul;
+	pthread_mutex_unlock (&player->lock);
+	SetupResult outcome = SETUP_HARDFAIL;
+	bool live = false;
+	if (!player->engineInitialized) {
+		log_write (LOG_ERROR, "Audio engine not initialized\n");
+		goto cleanup;
+	}
+	ma_result result = ffmpeg_data_source_init (&player->dataSource, player);
+	if (result != MA_SUCCESS) {
+		log_write (LOG_ERROR, "Failed to init data source: %d\n", result);
+		goto cleanup;
+	}
+	player->dataSourceInitialized = true;
+	result = ma_sound_init_from_data_source (&player->engine, &player->dataSource,
+		0, NULL, &player->sound);
+	if (result != MA_SUCCESS) {
+		log_write (LOG_ERROR, "Failed to init sound: %d\n", result);
+		goto cleanup;
+	}
+	live = true;
+	ma_sound_set_end_callback (&player->sound, onSongEnd, player);
+	setVolumeReserved (player, volume, gain, gainMul);
+	pthread_mutex_lock (&player->lock);
+	bool current = setupCurrentLocked (player, epoch);
+	pthread_mutex_unlock (&player->lock);
+	if (!current) { outcome = SETUP_SUPERSEDED; goto cleanup; }
+	if (!paused) {
+		/* Some backends synchronously prime the engine during device start.
+		 * Keep this fresh node stopped so priming reads silence, not frames
+		 * that this same worker cannot decode until setup returns. */
+		if (!deviceSetStartedReserved (player, true)) { goto cleanup; }
+		pthread_mutex_lock (&player->lock);
+		current = setupCurrentLocked (player, epoch);
+		pthread_mutex_unlock (&player->lock);
+		if (!current) { outcome = SETUP_SUPERSEDED; goto cleanup; }
+		result = ma_sound_start (&player->sound);
+		if (result != MA_SUCCESS) {
+			log_write (LOG_ERROR, "Failed to start sound: %d\n", result);
+			goto cleanup;
+		}
+		/* A stop can publish quit/epoch while setup owns the reservation. */
+		pthread_mutex_lock (&player->lock);
+		current = setupCurrentLocked (player, epoch);
+		pthread_mutex_unlock (&player->lock);
+		if (!current) { outcome = SETUP_SUPERSEDED; goto cleanup; }
+	}
+	pthread_mutex_lock (&player->lock);
+	if (setupCurrentLocked (player, epoch)) {
+		player->soundInitialized = true;
+		player->mode = PLAYER_PLAYING;
+		++player->controlEpoch;
+		audioCompleteLocked (player, paused ? PLAYER_AUDIO_STOPPED : PLAYER_AUDIO_RUNNING, true);
+		return SETUP_PLAYING;
+	}
+	pthread_mutex_unlock (&player->lock);
+	outcome = SETUP_SUPERSEDED;
+cleanup:
+	if (!cleanupSoundReserved (player, live)) {
+		pthread_mutex_lock (&player->lock);
+		player->soundInitialized = live;
+		pthread_mutex_unlock (&player->lock);
+		audioTerminal (player, "setup rollback");
+		return SETUP_HARDFAIL;
+	}
+	pthread_mutex_lock (&player->lock);
+	player->soundInitialized = false;
+	/* Allocation/start failures can be superseded just like successful setup.
+	 * Recheck after rollback too, since backend cleanup released the lock. */
+	if (!setupCurrentLocked (player, epoch)) { outcome = SETUP_SUPERSEDED; }
+	audioCompleteLocked (player, PLAYER_AUDIO_NONE, false);
+	return outcome;
+}
+
+static bool cleanupSound (player_t *player) {
+	if (!audioReserve (player, AUDIO_TEARDOWN, "cleanup")) { return false; }
+	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	pthread_mutex_unlock (&player->lock);
+	if (!cleanupSoundReserved (player, live)) {
+		audioTerminal (player, "cleanup");
+		return false;
+	}
+	pthread_mutex_lock (&player->lock);
+	player->soundInitialized = false;
+	audioCompleteLocked (player, PLAYER_AUDIO_NONE, true);
+	return true;
+}
+
+static bool finish(player_t * const player) {
 	logRSSAudio("at finish() start");
 
 	/* Clean up miniaudio sound */
-	cleanupSound(player);
+	if (!cleanupSound (player)) { return false; }
 	logRSSAudio("after cleanupSound");
 	
 	/* Drain any remaining frames from buffersink before freeing graph.
@@ -1179,6 +1729,7 @@ static void finish(player_t * const player) {
 		}
 	}
 #endif
+	return true;
 }
 
 /*
@@ -1209,11 +1760,27 @@ void *BarPlayerThread(void *data) {
 		if (openStream(player, &staleCdn403)) {
 			logRSSAudio("after openStream");
 
-			if (openFilter(player) && setupSound(player)) {
+			pthread_mutex_lock (&player->lock);
+			uint64_t setupEpoch = player->controlEpoch;
+			pthread_mutex_unlock (&player->lock);
+			const SetupResult setup = openFilter (player) ? setupSound (player, &setupEpoch) : SETUP_HARDFAIL;
+			if (setup != SETUP_PLAYING) {
+				if (!finish (player)) { return (void *)PLAYER_RET_HARDFAIL; }
+				pthread_mutex_lock (&player->lock);
+				const bool failedCurrentSetup = setup == SETUP_HARDFAIL && setupCurrentLocked (player, setupEpoch);
+				/* The worker is exiting even when a newer control superseded
+				 * setup. Publish completion only from WAITING, preserving any
+				 * newer terminal mode and waking the manager to join us. */
+				if (player->mode == PLAYER_WAITING) {
+					player->mode = PLAYER_FINISHED;
+					++player->controlEpoch;
+					pthread_cond_broadcast (&player->cond);
+				}
+				pthread_mutex_unlock (&player->lock);
+				return (void *)(uintptr_t)(failedCurrentSetup ? PLAYER_RET_HARDFAIL : PLAYER_RET_OK);
+			}
+			if (setup == SETUP_PLAYING) {
 				logRSSAudio("after openFilter+setupSound");
-
-				BarPlayerSetMode(player, PLAYER_PLAYING);
-				BarPlayerSetVolume(player);
 
 				/* Run decoder - feeds frames to filter chain which miniaudio reads from */
 				const int ret = decode(player);
@@ -1222,50 +1789,59 @@ void *BarPlayerThread(void *data) {
 				/* Check quit after decode completes */
 				if (shouldQuit(player)) {
 					log_write(DEBUG_AUDIO, "Player: Quit detected after decode\n");
-					finish(player);
+					if (!finish (player)) { return (void *)PLAYER_RET_HARDFAIL; }
 					break;
 				}
 
 				/* Wait for playback to complete (end callback will signal) */
 				while (!shouldQuit(player) && BarPlayerGetMode(player) == PLAYER_PLAYING) {
-					/* Check quit first and stop audio immediately */
-					if (shouldQuit(player)) {
-						log_write(DEBUG_AUDIO, "Player: Quit requested, stopping sound immediately\n");
-						if (player->soundInitialized) {
-							ma_sound_stop(&player->sound);
-						}
-						break;
+					pthread_mutex_lock (&player->lock);
+					while (player->doPause && !player->doQuit && player->mode == PLAYER_PLAYING) {
+						pthread_cond_wait (&player->cond, &player->lock);
 					}
+					const bool observe = !player->doQuit && player->mode == PLAYER_PLAYING;
+					pthread_mutex_unlock (&player->lock);
+					if (!observe) { break; }
 
 					/* Update progress from miniaudio's cursor */
-					float cursor;
-					if (ma_sound_get_cursor_in_seconds(&player->sound, &cursor) == MA_SUCCESS) {
+					BarPlayerAudioSnapshot sample;
+					if (BarPlayerGetAudioSnapshot (player, &sample)) {
 						pthread_mutex_lock(&player->lock);
-						player->songPlayed = (unsigned int)cursor;
+						player->songPlayed = (unsigned int)sample.cursorSeconds;
+						if (sample.atEnd && player->mode == PLAYER_PLAYING && !player->doQuit) {
+							player->mode = PLAYER_FINISHED;
+							++player->controlEpoch;
+							pthread_cond_broadcast (&player->cond);
+						}
 						pthread_mutex_unlock(&player->lock);
 					}
 
-					/* Check if song ended */
-					if (ma_sound_at_end(&player->sound)) {
-						log_write(DEBUG_AUDIO, "ma_sound_at_end() returned true\n");
-						BarPlayerSetMode(player, PLAYER_FINISHED);
-						break;
+					pthread_mutex_lock (&player->lock);
+					/* Keep the active 100 ms cursor cadence. A pause/mode/quit
+					 * broadcast ends this tick; sustained pause waits above. */
+					struct timespec deadline;
+					clock_gettime (CLOCK_REALTIME, &deadline);
+					deadline.tv_nsec += 100000000L;
+					if (deadline.tv_nsec >= 1000000000L) {
+						++deadline.tv_sec;
+						deadline.tv_nsec -= 1000000000L;
 					}
-
-					usleep(100000);  /* 100ms update interval */
+					int waitResult = 0;
+					while (!player->doPause && !player->doQuit && player->mode == PLAYER_PLAYING && waitResult == 0) {
+						waitResult = pthread_cond_timedwait (&player->cond, &player->lock, &deadline);
+					}
+					pthread_mutex_unlock (&player->lock);
 				}
 
 				/* Check quit after playback before retry logic */
 				if (shouldQuit(player)) {
 					log_write(DEBUG_AUDIO, "Player: Quit detected after playback\n");
-					finish(player);
+					if (!finish (player)) { return (void *)PLAYER_RET_HARDFAIL; }
 					break;
 				}
 
 				retry = (ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) &&
 						(atomic_load_explicit (&player->interrupted, memory_order_relaxed) == 0);
-			} else {
-				pret = PLAYER_RET_HARDFAIL;
 			}
 		} else {
 			if (staleCdn403) {
@@ -1275,7 +1851,7 @@ void *BarPlayerThread(void *data) {
 			}
 		}
 		BarPlayerSetMode(player, PLAYER_WAITING);
-		finish(player);
+		if (!finish (player)) { return (void *)PLAYER_RET_HARDFAIL; }
 
 		/* Check quit after cleanup before retry */
 		if (shouldQuit(player)) {

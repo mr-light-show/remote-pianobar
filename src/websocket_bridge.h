@@ -46,6 +46,9 @@ void BarWsBroadcastProcess(BarApp_t *app);
 void BarWsBroadcastSongStop(BarApp_t *app);
 void BarWsBroadcastProgress(BarApp_t *app);
 void BarWsBroadcastPlayState(BarApp_t *app);
+/* Publish a helper's completed immutable result without resampling audio. */
+void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
+                                      const BarPlayerPlayStateSnapshot *snapshot);
 void BarWsBroadcastStations(BarApp_t *app);
 void BarWsDisconnectAllClients(BarApp_t *app);
 

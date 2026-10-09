@@ -53,6 +53,19 @@ void BarPlaybackManagerStop(BarApp_t *app);
 /* True when playback manager should block on cond_wait (no 1 Hz poll). */
 bool BarPlaybackShouldParkIdle(const BarApp_t *app);
 
+typedef enum {
+	BAR_PLAYBACK_WAIT_INDEFINITE,
+	BAR_PLAYBACK_WAIT_TIMED,
+	BAR_PLAYBACK_WAIT_READY,
+	BAR_PLAYBACK_WAIT_PAUSE_EXPIRED
+} BarPlaybackWait;
+
+/* Pure wait decision. Caller protects player control fields with player.lock;
+ * parkIdle is a state snapshot obtained before acquiring that mutex. */
+BarPlaybackWait BarPlaybackManagerSelectWait (const player_t *player,
+		bool parkIdle, unsigned int pauseTimeout, bool stopping,
+		struct timespec now, struct timespec *deadline);
+
 /* Wait until the playback manager is parked idle (no fetch/start in progress).
  * Returns false on timeout. No-op when the manager thread is not running. */
 bool BarPlaybackManagerWaitParkedIdle(const BarApp_t *app, unsigned int timeoutMs);
