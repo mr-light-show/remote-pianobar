@@ -324,6 +324,36 @@ START_TEST (test_ui_act_play_pause_toggle)
 }
 END_TEST
 
+START_TEST (test_ui_act_rejected_controls_preserve_last_broadcast)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	BarSettingsInit (&app.settings);
+	player_primitives_init (&app);
+	attach_ws_context_for_test (&app, &ctx);
+	app.player.mode = PLAYER_WAITING;
+	BarUiActPause (&app, NULL, NULL, 1);
+	char *previous = strdup (ws_bucket_payload (&ctx, BUCKET_STATE));
+	ck_assert_ptr_nonnull (previous);
+	BarWsMessage_t *message = ctx.buckets[BUCKET_STATE].message;
+	app.player.doQuit = true;
+	const uint64_t epoch = app.player.controlEpoch;
+	BarUiActPlay (&app, NULL, NULL, 1);
+	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	BarUiActPause (&app, NULL, NULL, 1);
+	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	BarUiActTogglePause (&app, NULL, NULL, 1);
+	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	ck_assert (app.player.doPause);
+	ck_assert_uint_eq (app.player.controlEpoch, epoch);
+	ck_assert_str_eq (ws_bucket_payload (&ctx, BUCKET_STATE), previous);
+	free (previous);
+	ws_context_destroy (&ctx);
+	player_primitives_destroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 /* Break caught: UI reports unpaused before starting a retained sound, or
  * pause/skip only change flags while the real sound remains started. */
 START_TEST (test_ui_act_controls_complete_real_sound_before_broadcast)
@@ -2368,6 +2398,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_pandora_reconnect_no_credentials);
 	tcase_add_test (tc, test_ui_act_help_runs_dispatch_loop);
 	tcase_add_test (tc, test_ui_act_play_pause_toggle);
+	tcase_add_test (tc, test_ui_act_rejected_controls_preserve_last_broadcast);
 	tcase_add_test (tc, test_ui_act_controls_complete_real_sound_before_broadcast);
 	tcase_add_test (tc, test_ui_act_pending_pause_suppresses_delayed_play_state);
 	tcase_add_test (tc, test_ui_act_delayed_play_state_cannot_replace_newer_final_event);

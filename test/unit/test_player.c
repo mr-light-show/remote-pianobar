@@ -1088,6 +1088,96 @@ static void player_thread_test_teardown (player_t *player, BarSettings_t *settin
 	BarSettingsDestroy (settings);
 }
 
+START_TEST (test_player_public_audio_controls_reject_null)
+{
+	player_t uninitialized = {0};
+	ck_assert (!BarPlayerDestroy (NULL));
+	ck_assert (!BarPlayerDestroy (&uninitialized));
+	ck_assert (!BarPlayerReset (NULL));
+	ck_assert (!BarPlayerStopAudio (NULL));
+	ck_assert (!BarPlayerSetVolume (NULL, 80));
+	ck_assert (!BarPlayerAdjustVolume (NULL, 1));
+	ck_assert_int_eq (BarPlayerGetVolume (NULL), -1);
+	BarPlayerAudioSnapshot snapshot;
+	ck_assert (!BarPlayerGetAudioSnapshot (NULL, &snapshot));
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+	ck_assert (!BarPlayerGetAudioSnapshot (&player, NULL));
+	BarPlayerSetMode (&player, PLAYER_PLAYING);
+	ck_assert (!BarPlayerGetAudioSnapshot (&player, &snapshot));
+	ck_assert (!player.audioBusy);
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_init_clamps_volume_and_honors_sample_rate)
+{
+	const int volumes[] = {-1, VOLUME_MAX_PERCENT + 1};
+	const int expected[] = {0, VOLUME_MAX_PERCENT};
+	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
+	for (unsigned i = 0; i < 2; ++i) {
+		player_t player = {0};
+		BarSettings_t settings;
+		BarSettingsInit (&settings);
+		settings.volume = volumes[i];
+		settings.sampleRate = 48000;
+		BarPlayerInit (&player, &settings);
+		ck_assert (player.engineInitialized);
+		ck_assert_int_eq (BarPlayerGetVolume (&player), expected[i]);
+		ck_assert_int_eq (settings.volume, expected[i]);
+		ck_assert_uint_eq (ma_engine_get_sample_rate (&player.engine), 48000);
+		/* An engine initialization failure still leaves synchronization to clean up. */
+		ma_engine_uninit (&player.engine);
+		player.engineInitialized = false;
+		ck_assert (BarPlayerDestroy (&player));
+		BarSettingsDestroy (&settings);
+	}
+}
+END_TEST
+
+static ma_result failing_audio_cursor (ma_data_source *source, ma_uint64 *cursor) {
+	(void) source;
+	(void) cursor;
+	return MA_ERROR;
+}
+
+static ma_result failing_audio_format (ma_data_source *source, ma_format *format,
+		ma_uint32 *channels, ma_uint32 *sampleRate, ma_channel *map, size_t capacity) {
+	(void) source; (void) format; (void) channels; (void) sampleRate;
+	(void) map; (void) capacity;
+	return MA_ERROR;
+}
+
+START_TEST (test_player_snapshot_source_errors_preserve_output_and_release_owner)
+{
+	player_t player;
+	BarSettings_t settings;
+	ma_audio_buffer buffer;
+	player_thread_test_setup (&player, &settings);
+	player_stopped_sound_fixture (&player, &buffer);
+	ma_data_source_base *source = (ma_data_source_base *) &buffer;
+	const ma_data_source_vtable *original = source->vtable;
+	for (unsigned i = 0; i < 2; ++i) {
+		ma_data_source_vtable failing = *original;
+		if (i == 0) { failing.onGetCursor = failing_audio_cursor; }
+		else { failing.onGetDataFormat = failing_audio_format; }
+		source->vtable = &failing;
+		BarPlayerAudioSnapshot snapshot = {.cursorFrames = 987, .cursorSeconds = 123};
+		ck_assert (!BarPlayerGetAudioSnapshot (&player, &snapshot));
+		ck_assert_uint_eq (snapshot.cursorFrames, 987);
+		ck_assert (snapshot.cursorSeconds == 123);
+		ck_assert (!player.audioBusy && !player.audioOwnerValid);
+		ck_assert (player.soundInitialized);
+		source->vtable = original;
+		ck_assert (BarPlayerGetAudioSnapshot (&player, &snapshot));
+		ck_assert_uint_eq (snapshot.cursorFrames, 0);
+	}
+	player_thread_test_teardown (&player, &settings);
+	ma_audio_buffer_uninit (&buffer);
+}
+END_TEST
+
 typedef struct {
 	player_t *player;
 	pthread_cond_t readyCond;
@@ -1967,6 +2057,60 @@ START_TEST (test_player_resume_failure_releases_waiters_and_allows_retry)
 }
 END_TEST
 
+/* A failed restart of physically stopped but logically unpaused audio must
+ * publish pause, not leave the logical state claiming playback succeeded. */
+START_TEST (test_player_failed_restart_restores_pause_and_allows_retry)
+{
+	player_t player;
+	BarSettings_t settings;
+	ma_audio_buffer buffer;
+	player_thread_test_setup (&player, &settings);
+	player_stopped_sound_fixture (&player, &buffer);
+	DeviceStartGate gate = {.release = true, .failStart = true};
+	install_device_start_gate (&player, &gate);
+	const uint64_t epoch = player.controlEpoch;
+	ck_assert (!BarPlayerSetPaused (&player, false));
+	ck_assert (player.doPause && player.pauseStartTime > 0);
+	ck_assert_uint_eq (player.controlEpoch, epoch + 1);
+	ck_assert (player.sourceReadCancelled);
+	ck_assert (!player.audioBusy && !player.audioOwnerValid);
+	ck_assert (!ma_sound_is_playing (&player.sound));
+	ck_assert (!ma_device_is_started (&gate.device));
+	bool paused = false;
+	ck_assert (!BarPlayerTogglePaused (&player, &paused));
+	ck_assert (paused);
+	gate.failStart = false;
+	ck_assert (BarPlayerSetPaused (&player, false));
+	ck_assert (BarPlayerSetVolume (&player, 81));
+	ck_assert (fabsf (ma_sound_get_volume (&player.sound) - 0.81f) < 0.001f);
+	ck_assert (BarPlayerSetPaused (&player, true));
+	remove_device_start_gate (&player, &gate);
+	player_thread_test_teardown (&player, &settings);
+	ma_audio_buffer_uninit (&buffer);
+}
+END_TEST
+
+START_TEST (test_player_resume_at_sound_end_does_not_restart)
+{
+	player_t player;
+	BarSettings_t settings;
+	ma_audio_buffer buffer;
+	player_thread_test_setup (&player, &settings);
+	player_stopped_sound_fixture (&player, &buffer);
+	ck_assert_int_eq (ma_sound_start (&player.sound), MA_SUCCESS);
+	float frames[2048];
+	ck_assert_int_eq (ma_engine_read_pcm_frames (&player.engine, frames, 1024, NULL), MA_SUCCESS);
+	ck_assert (ma_sound_at_end (&player.sound));
+	ck_assert (!BarPlayerSetPaused (&player, false));
+	ck_assert (player.doPause && player.sourceReadCancelled);
+	ck_assert_int_eq (player.audioState, PLAYER_AUDIO_STOPPED);
+	ck_assert (!ma_sound_is_playing (&player.sound));
+	ck_assert (!player.audioBusy);
+	player_thread_test_teardown (&player, &settings);
+	ma_audio_buffer_uninit (&buffer);
+}
+END_TEST
+
 /* Break caught: resume clears a published quit while its device start was
  * outstanding; a normal waiter steals the next reservation from teardown. */
 START_TEST (test_player_stop_supersedes_resume_and_aborts_normal_waiters)
@@ -2630,6 +2774,128 @@ START_TEST (test_player_paused_setup_retains_stopped_sound)
 }
 END_TEST
 
+/* A backend capability mismatch during fresh start must retain the sound and
+ * FFmpeg resources when rollback cannot prove device shutdown. */
+START_TEST (test_player_setup_unreconciled_device_retains_resources)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	ck_assert (player_mp3_fixture_path (url, sizeof url));
+	player_thread_test_setup (&player, &settings);
+	player.audioNoDevice = false;
+	BarPlayerSetAudioFatalTestHook (returning_audio_fatal_hook);
+	fatal_hook_calls = 0;
+	fatal_hook_saw_unlocked_player = fatal_hook_saw_unlocked_decoder = false;
+	player.url = strdup (url);
+	ck_assert_ptr_nonnull (player.url);
+	BarPlayerSetMode (&player, PLAYER_WAITING);
+	pthread_t worker;
+	ck_assert_int_eq (pthread_create (&worker, NULL, BarPlayerThread, &player), 0);
+	void *result;
+	ck_assert_int_eq (pthread_join (worker, &result), 0);
+	ck_assert_uint_eq ((uintptr_t) result, PLAYER_RET_HARDFAIL);
+	ck_assert_int_eq (fatal_hook_calls, 1);
+	ck_assert (fatal_hook_saw_unlocked_player && fatal_hook_saw_unlocked_decoder);
+	ck_assert (player.audioTerminalFailure && player.doQuit);
+	ck_assert (!BarPlayerStopAudio (&player));
+	ck_assert_int_eq (player.audioState, PLAYER_AUDIO_FAILED);
+	ck_assert (!player.audioBusy && !player.audioOwnerValid);
+	ck_assert (player.soundInitialized && player.dataSourceInitialized);
+	ck_assert_ptr_nonnull (player.fgraph);
+	ck_assert_ptr_nonnull (player.cctx);
+	ck_assert_ptr_nonnull (player.fctx);
+	/* Reinitialization must not erase terminal failure or reuse retained audio. */
+	BarPlayerInit (&player, &settings);
+	ck_assert (player.audioTerminalFailure && player.soundInitialized);
+	/* Test-only recovery after the worker has joined; no callback/device exists. */
+	BarPlayerSetAudioFatalTestHook (NULL);
+	player.audioNoDevice = true;
+	player.audioTerminalFailure = false;
+	player.doQuit = false;
+	ck_assert (BarPlayerDestroy (&player));
+	avfilter_graph_free (&player.fgraph);
+	avcodec_free_context (&player.cctx);
+	avformat_close_input (&player.fctx);
+	free (player.url);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+/* A worker whose mode was canceled before setup must not create a sound or
+ * republish PLAYING. Even this no-sound path must make cleanup failure terminal. */
+START_TEST (test_player_canceled_before_setup_preserves_dead_mode)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	ck_assert (player_mp3_fixture_path (url, sizeof url));
+	player_thread_test_setup (&player, &settings);
+	player.url = strdup (url);
+	ck_assert_ptr_nonnull (player.url);
+	BarPlayerSetMode (&player, PLAYER_WAITING);
+	BarPlayerSetMode (&player, PLAYER_DEAD);
+	const uint64_t epoch = player.controlEpoch;
+	pthread_t worker;
+	ck_assert_int_eq (pthread_create (&worker, NULL, BarPlayerThread, &player), 0);
+	void *result;
+	ck_assert_int_eq (pthread_join (worker, &result), 0);
+	ck_assert_uint_eq ((uintptr_t) result, PLAYER_RET_OK);
+	ck_assert_int_eq (player.mode, PLAYER_DEAD);
+	ck_assert_uint_eq (player.controlEpoch, epoch);
+	ck_assert (!player.audioBusy && !player.soundInitialized && !player.dataSourceInitialized);
+	ck_assert_ptr_null (player.fctx);
+	ck_assert_ptr_null (player.cctx);
+	ck_assert_ptr_null (player.fgraph);
+	free (player.url);
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+START_TEST (test_player_canceled_setup_cleanup_failure_retains_stream)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	ck_assert (player_mp3_fixture_path (url, sizeof url));
+	player_thread_test_setup (&player, &settings);
+	player.audioNoDevice = false;
+	BarPlayerSetAudioFatalTestHook (returning_audio_fatal_hook);
+	fatal_hook_calls = 0;
+	fatal_hook_saw_unlocked_player = fatal_hook_saw_unlocked_decoder = false;
+	player.url = strdup (url);
+	ck_assert_ptr_nonnull (player.url);
+	/* A canceled worker can finish opening the stream, but not start playback. */
+	BarPlayerSetMode (&player, PLAYER_DEAD);
+	pthread_t worker;
+	ck_assert_int_eq (pthread_create (&worker, NULL, BarPlayerThread, &player), 0);
+	void *result;
+	ck_assert_int_eq (pthread_join (worker, &result), 0);
+	ck_assert_uint_eq ((uintptr_t) result, PLAYER_RET_HARDFAIL);
+	ck_assert_int_eq (fatal_hook_calls, 1);
+	ck_assert (fatal_hook_saw_unlocked_player && fatal_hook_saw_unlocked_decoder);
+	ck_assert (player.audioTerminalFailure && player.doQuit);
+	ck_assert_int_eq (player.mode, PLAYER_DEAD);
+	ck_assert_int_eq (player.audioState, PLAYER_AUDIO_FAILED);
+	ck_assert (!player.audioBusy && !player.audioOwnerValid);
+	ck_assert (!player.soundInitialized && !player.dataSourceInitialized);
+	ck_assert_ptr_nonnull (player.fctx);
+	ck_assert_ptr_nonnull (player.cctx);
+	ck_assert_ptr_nonnull (player.fgraph);
+	/* Test-only recovery after join, with no sound or physical callback. */
+	BarPlayerSetAudioFatalTestHook (NULL);
+	player.audioNoDevice = true;
+	player.audioTerminalFailure = false;
+	player.doQuit = false;
+	ck_assert (BarPlayerDestroy (&player));
+	avfilter_graph_free (&player.fgraph);
+	avcodec_free_context (&player.cctx);
+	avformat_close_input (&player.fctx);
+	free (player.url);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
 /* Break caught: decode reads packets during logical pause, or
  * treats an unrelated condition broadcast as permission to decode. */
 START_TEST (test_player_paused_decoder_waits_through_spurious_wakes_until_resume)
@@ -3116,6 +3382,11 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_audio, test_player_controls_are_idempotent_and_preserve_retained_cursor);
 	tcase_add_test (tc_audio, test_player_audio_debug_logs_pause_resume_restart_and_stop_transitions);
 	tcase_add_test (tc_audio, test_player_controls_reject_terminal_modes_and_null_inputs);
+	tcase_add_test (tc_audio, test_player_public_audio_controls_reject_null);
+	tcase_add_test (tc_audio, test_player_init_clamps_volume_and_honors_sample_rate);
+	tcase_add_test (tc_audio, test_player_snapshot_source_errors_preserve_output_and_release_owner);
+	tcase_add_test (tc_audio, test_player_failed_restart_restores_pause_and_allows_retry);
+	tcase_add_test (tc_audio, test_player_resume_at_sound_end_does_not_restart);
 	tcase_add_test (tc_audio, test_player_resume_failure_releases_waiters_and_allows_retry);
 	tcase_add_test (tc_audio, test_player_stop_supersedes_resume_and_aborts_normal_waiters);
 	tcase_add_test (tc_audio, test_player_concurrent_toggles_choose_direction_after_reservation);
@@ -3142,6 +3413,9 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_audio, test_player_failed_setup_preserves_newer_dead_mode);
 	tcase_add_test (tc_audio, test_player_failed_setup_preserves_newer_finished_epoch);
 	tcase_add_test (tc_audio, test_player_paused_setup_retains_stopped_sound);
+	tcase_add_test (tc_audio, test_player_setup_unreconciled_device_retains_resources);
+	tcase_add_test (tc_audio, test_player_canceled_before_setup_preserves_dead_mode);
+	tcase_add_test (tc_audio, test_player_canceled_setup_cleanup_failure_retains_stream);
 	tcase_add_test (tc_audio, test_player_stop_unreconciled_device_is_terminal);
 	tcase_add_test (tc_audio, test_player_reset_unreconciled_device_is_terminal);
 	tcase_add_test (tc_audio, test_player_destroy_unreconciled_device_is_terminal);

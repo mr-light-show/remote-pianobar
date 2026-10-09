@@ -395,6 +395,21 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 }
 END_TEST
 
+START_TEST (test_websocket_play_state_waits_for_queued_control)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	app.player.audioControlWaiters = 1;
+	BarWsBroadcastPlayState (&app);
+	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
+	app.player.audioControlWaiters = 0;
+	BarWsBroadcastPlayState (&app);
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATE].message);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
 START_TEST(test_websocket_bridge_system_volume_mode_broadcast) {
 	BarApp_t app;
 	BarWsContext_t ctx;
@@ -909,6 +924,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
+	tcase_add_test (tc_core, test_websocket_play_state_waits_for_queued_control);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_without_unicast_target);
 	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
