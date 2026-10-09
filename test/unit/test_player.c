@@ -300,6 +300,18 @@ START_TEST (test_main_final_join_is_terminal_before_shared_state_cleanup)
 }
 END_TEST
 
+/* Break caught: main enters shared-resource destruction after a terminal
+ * player failure whose test hook returned to its caller. */
+START_TEST (test_main_finalization_rejects_terminal_player)
+{
+	BarApp_t app = {0};
+	app.player.audioTerminalFailure = true;
+	ck_assert_int_eq (BarMainFinalizationStatus (&app), EXIT_FAILURE);
+	app.player.audioTerminalFailure = false;
+	ck_assert_int_eq (BarMainFinalizationStatus (&app), EXIT_SUCCESS);
+}
+END_TEST
+
 typedef struct {
 	player_t *player;
 	pthread_mutex_t lock;
@@ -3376,6 +3388,7 @@ Suite *player_suite(void) {
 	suite_add_tcase (s, tc_regression);
 	tcase_set_timeout (tc_audio, 10);
 	tcase_add_test (tc_audio, test_main_final_join_is_terminal_before_shared_state_cleanup);
+	tcase_add_test (tc_audio, test_main_finalization_rejects_terminal_player);
 	tcase_add_test (tc_audio, test_player_stop_timeout_preserves_blocked_owner_and_unlocks_before_fatal);
 	tcase_add_test (tc_audio, test_player_owner_release_at_command_deadline_never_steals_audio);
 	tcase_add_test (tc_audio, test_player_pause_helpers_without_sound_wake_condition_waiters);

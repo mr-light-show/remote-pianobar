@@ -568,6 +568,17 @@ static void BarMainLoop (BarApp_t *app) {
 	#endif
 }
 
+/* A returning test fatal hook cannot authorize shared-state destruction.
+ * Production fatal hooks do not return, but keep this boundary explicit. */
+static int BarMainFinalizationStatus (const BarApp_t *app) {
+	const bool terminalFailure = app->player.audioTerminalFailure;
+	if (terminalFailure) {
+		log_write (LOG_ERROR, "Terminal player failure; shared resources retained\n");
+		return EXIT_FAILURE;
+	}
+	return EXIT_SUCCESS;
+}
+
 static void intHandler (int signal) {
 	(void) signal;
 	log_write(DEBUG_UI, "Received ^C\n");
@@ -953,8 +964,7 @@ int main (int argc, char **argv) {
 	/* Call BarMainLoop directly - crash happens here or in function prologue
 	 * Using &app directly avoids any stack variable issues */
 	BarMainLoop (&app);
-	/* A returning test fatal hook cannot authorize shared-state destruction. */
-	if (app.player.audioTerminalFailure) { return EXIT_FAILURE; }
+	if (BarMainFinalizationStatus (&app) != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 
 	if (app.input.fds[1] != -1) {
