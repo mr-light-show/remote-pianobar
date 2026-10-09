@@ -285,7 +285,7 @@ static void audioComplete (player_t *player, BarPlayerAudioState state) {
 
 /* These helpers require the reservation, never player.lock. Device state is
  * queried directly: a test no-device engine has no physical transition. */
-static bool deviceSetStartedReserved (player_t *player, bool started) {
+static bool deviceSetStartedReserved (player_t *player, bool started, const char *operation) {
 	if (!player->engineInitialized) { return !started; }
 	ma_device *device = ma_engine_get_device (&player->engine);
 	if (device == NULL) { return player->audioNoDevice; }
@@ -295,10 +295,15 @@ static bool deviceSetStartedReserved (player_t *player, bool started) {
 		log_write (LOG_ERROR, "Audio device %s failed: %d\n", started ? "start" : "stop", result);
 		return false;
 	}
-	return (ma_device_is_started (device) != MA_FALSE) == started;
+	const bool transitioned = (ma_device_is_started (device) != MA_FALSE) == started;
+	if (transitioned) {
+		log_write (DEBUG_AUDIO, "Audio device %s (%s)\n",
+			started ? "started" : "stopped", operation);
+	}
+	return transitioned;
 }
 
-static bool stopSoundReserved (player_t *player, bool live) {
+static bool stopSoundReserved (player_t *player, bool live, const char *operation) {
 	/* Device stop joins its callback. Publish a persistent source predicate
 	 * before that join, including rollback before any decoder has started. */
 	pthread_mutex_lock (&player->decoderLock);
@@ -313,11 +318,11 @@ static bool stopSoundReserved (player_t *player, bool live) {
 			ok = false;
 		}
 	}
-	return deviceSetStartedReserved (player, false) && ok;
+	return deviceSetStartedReserved (player, false, operation) && ok;
 }
 
-static bool cleanupSoundReserved (player_t *player, bool live) {
-	if (!stopSoundReserved (player, live)) { return false; }
+static bool cleanupSoundReserved (player_t *player, bool live, const char *operation) {
+	if (!stopSoundReserved (player, live, operation)) { return false; }
 	if (live) { ma_sound_uninit (&player->sound); }
 	if (player->dataSourceInitialized) {
 		ffmpeg_data_source_uninit (&player->dataSource);
@@ -832,7 +837,7 @@ bool BarPlayerDestroy(player_t * const p) {
 	if (!audioReserve (p, AUDIO_TEARDOWN, "destroy")) { return false; }
 	const bool live = p->audioState != PLAYER_AUDIO_NONE;
 	pthread_mutex_unlock (&p->lock);
-	if (!cleanupSoundReserved (p, live)) {
+	if (!cleanupSoundReserved (p, live, "destroy")) {
 		audioTerminal (p, "destroy");
 		return false;
 	}
@@ -859,7 +864,7 @@ bool BarPlayerReset(player_t * const p) {
 	const bool live = p->audioState != PLAYER_AUDIO_NONE;
 	const uint64_t epoch = p->controlEpoch;
 	pthread_mutex_unlock (&p->lock);
-	if (!cleanupSoundReserved (p, live)) {
+	if (!cleanupSoundReserved (p, live, "reset")) {
 		audioTerminal (p, "reset");
 		return false;
 	}
@@ -1375,7 +1380,7 @@ bool BarPlayerStopAudio (player_t *player) {
 	if (player == NULL || !audioReserve (player, AUDIO_TEARDOWN, "stop")) { return false; }
 	const bool live = player->audioState != PLAYER_AUDIO_NONE;
 	pthread_mutex_unlock (&player->lock);
-	if (!stopSoundReserved (player, live)) {
+	if (!stopSoundReserved (player, live, "stop")) {
 		audioTerminal (player, "stop");
 		return false;
 	}
@@ -1420,7 +1425,7 @@ static bool setPaused (player_t *player, bool paused, bool toggle, bool *finalPa
 	}
 	pthread_mutex_unlock (&player->lock);
 	if (paused) {
-		if (!stopSoundReserved (player, true)) {
+		if (!stopSoundReserved (player, true, "pause")) {
 			audioTerminal (player, "pause");
 			return false;
 		}
@@ -1448,7 +1453,7 @@ static bool setPaused (player_t *player, bool paused, bool toggle, bool *finalPa
 			pthread_mutex_lock (&player->lock);
 			current = pauseControlCurrentLocked (player, epoch, mode);
 			pthread_mutex_unlock (&player->lock);
-			if (current) { started = deviceSetStartedReserved (player, true); }
+			if (current) { started = deviceSetStartedReserved (player, true, "resume/restart"); }
 		}
 	}
 	pthread_mutex_lock (&player->lock);
@@ -1465,7 +1470,7 @@ static bool setPaused (player_t *player, bool paused, bool toggle, bool *finalPa
 	pthread_mutex_unlock (&player->lock);
 	/* Failure or supersession retains both lifetime and cancellation until the
  * physical start is rolled back. Only a current failure may change pause. */
-	if (!stopSoundReserved (player, true)) {
+	if (!stopSoundReserved (player, true, "resume rollback")) {
 		audioTerminal (player, "resume rollback");
 		return false;
 	}
@@ -1513,7 +1518,7 @@ void BarPlayerRequestStop (player_t *player) {
 	player->pauseStartTime = 0;
 	pthread_cond_broadcast (&player->cond);
 	pthread_mutex_unlock (&player->lock);
-	if (!stopSoundReserved (player, live)) {
+	if (!stopSoundReserved (player, live, "request stop")) {
 		audioTerminal (player, "request stop");
 		return;
 	}
@@ -1608,7 +1613,7 @@ static SetupResult setupSound (player_t *player, uint64_t *setupEpoch) {
 		/* Some backends synchronously prime the engine during device start.
 		 * Keep this fresh node stopped so priming reads silence, not frames
 		 * that this same worker cannot decode until setup returns. */
-		if (!deviceSetStartedReserved (player, true)) { goto cleanup; }
+		if (!deviceSetStartedReserved (player, true, "start/restart")) { goto cleanup; }
 		pthread_mutex_lock (&player->lock);
 		current = setupCurrentLocked (player, epoch);
 		pthread_mutex_unlock (&player->lock);
@@ -1635,7 +1640,7 @@ static SetupResult setupSound (player_t *player, uint64_t *setupEpoch) {
 	pthread_mutex_unlock (&player->lock);
 	outcome = SETUP_SUPERSEDED;
 cleanup:
-	if (!cleanupSoundReserved (player, live)) {
+	if (!cleanupSoundReserved (player, live, "start rollback")) {
 		pthread_mutex_lock (&player->lock);
 		player->soundInitialized = live;
 		pthread_mutex_unlock (&player->lock);
@@ -1655,7 +1660,7 @@ static bool cleanupSound (player_t *player) {
 	if (!audioReserve (player, AUDIO_TEARDOWN, "cleanup")) { return false; }
 	const bool live = player->audioState != PLAYER_AUDIO_NONE;
 	pthread_mutex_unlock (&player->lock);
-	if (!cleanupSoundReserved (player, live)) {
+	if (!cleanupSoundReserved (player, live, "cleanup")) {
 		audioTerminal (player, "cleanup");
 		return false;
 	}

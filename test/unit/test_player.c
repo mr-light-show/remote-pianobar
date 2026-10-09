@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <libavfilter/buffersink.h>
 
 #include "../../src/interrupt.h"
+#include "../../src/log.h"
 #include "../../src/player.h"
 #include "../../src/settings.h"
 #include "../audio_fixture_callback.h"
@@ -1542,6 +1543,56 @@ static void remove_device_start_gate (player_t *player, DeviceStartGate *gate) {
 	pthread_cond_destroy (&gate->cond);
 	pthread_mutex_destroy (&gate->lock);
 }
+
+static FILE *capture_audio_debug (int *savedStderr) {
+	FILE *capture = tmpfile ();
+	ck_assert_ptr_nonnull (capture);
+	*savedStderr = dup (STDERR_FILENO);
+	ck_assert_int_ge (*savedStderr, 0);
+	ck_assert_int_ge (dup2 (fileno (capture), STDERR_FILENO), 0);
+	log_set_debug_mask (DEBUG_AUDIO);
+	return capture;
+}
+
+static void finish_audio_debug_capture (FILE *capture, int savedStderr,
+		char *output, size_t outputSize) {
+	fflush (stderr);
+	ck_assert_int_ge (dup2 (savedStderr, STDERR_FILENO), 0);
+	close (savedStderr);
+	log_set_debug_mask (0);
+	rewind (capture);
+	const size_t count = fread (output, 1, outputSize - 1, capture);
+	output[count] = '\0';
+	fclose (capture);
+}
+
+/* Break caught: successful physical audio-device transitions are invisible at
+ * DEBUG_AUDIO, or their log omits which lifecycle operation caused them. */
+START_TEST (test_player_audio_debug_logs_pause_resume_restart_and_stop_transitions)
+{
+	player_t player;
+	BarSettings_t settings;
+	ma_audio_buffer buffer;
+	player_thread_test_setup (&player, &settings);
+	player_stopped_sound_fixture (&player, &buffer);
+	DeviceStartGate gate = {.release = true};
+	install_device_start_gate (&player, &gate);
+	int savedStderr;
+	char output[4096];
+	FILE *capture = capture_audio_debug (&savedStderr);
+	ck_assert (BarPlayerSetPaused (&player, false));
+	ck_assert (BarPlayerSetPaused (&player, true));
+	ck_assert (BarPlayerSetPaused (&player, false));
+	ck_assert (BarPlayerStopAudio (&player));
+	finish_audio_debug_capture (capture, savedStderr, output, sizeof output);
+	ck_assert_ptr_nonnull (strstr (output, "Audio device started (resume/restart)"));
+	ck_assert_ptr_nonnull (strstr (output, "Audio device stopped (pause)"));
+	ck_assert_ptr_nonnull (strstr (output, "Audio device stopped (stop)"));
+	remove_device_start_gate (&player, &gate);
+	player_thread_test_teardown (&player, &settings);
+	ma_audio_buffer_uninit (&buffer);
+}
+END_TEST
 
 /* Break caught: startup primes a started sound before its own decoder can
  * produce frames, blocking ma_engine_start and the only decoding worker. */
@@ -3063,6 +3114,7 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_audio, test_player_owner_release_at_command_deadline_never_steals_audio);
 	tcase_add_test (tc_audio, test_player_pause_helpers_without_sound_wake_condition_waiters);
 	tcase_add_test (tc_audio, test_player_controls_are_idempotent_and_preserve_retained_cursor);
+	tcase_add_test (tc_audio, test_player_audio_debug_logs_pause_resume_restart_and_stop_transitions);
 	tcase_add_test (tc_audio, test_player_controls_reject_terminal_modes_and_null_inputs);
 	tcase_add_test (tc_audio, test_player_resume_failure_releases_waiters_and_allows_retry);
 	tcase_add_test (tc_audio, test_player_stop_supersedes_resume_and_aborts_normal_waiters);
