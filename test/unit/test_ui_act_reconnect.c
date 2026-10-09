@@ -12,6 +12,7 @@
 
 #include "../../src/bar_constants.h"
 #include "../../src/bar_state.h"
+#include "../test_tmp.h"
 #include "../../src/l10n.h"
 #include "../../src/log.h"
 #include "../../src/main.h"
@@ -403,8 +404,8 @@ END_TEST
 static void
 read_default_settings (BarSettings_t *settings)
 {
-	char tmpl[] = "/tmp/piano_ui_XXXXXX";
-	ck_assert_ptr_nonnull (mkdtemp (tmpl));
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_ui"));
 	char sub[512];
 	snprintf (sub, sizeof (sub), "%s/pianobar", tmpl);
 	ck_assert_int_eq (mkdir (sub, 0700), 0);
