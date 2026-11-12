@@ -25,6 +25,7 @@ THE SOFTWARE.
 #include <stdbool.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
 typedef enum {
 	BAR_FIXTURE_HTTP_OK = 0,
@@ -37,7 +38,7 @@ typedef struct {
 	char filepath[512];
 	BarFixtureHttpMode_t mode;
 	pthread_t thread;
-	volatile int stop;
+	_Atomic bool stop;
 } BarFixtureHttp_t;
 
 bool BarFixtureHttpStart (BarFixtureHttp_t *srv, const char *filepath,

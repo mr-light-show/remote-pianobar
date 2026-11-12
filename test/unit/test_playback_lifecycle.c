@@ -38,6 +38,21 @@ THE SOFTWARE.
 #include "../../src/l10n.h"
 #include "../../src/player.h"
 #include "../../src/ui.h"
+#include <errno.h>
+
+/* Substitute only the OS creation failure; lifecycle/reset behavior stays real. */
+static int failed_player_create (pthread_t *thread, const pthread_attr_t *attr,
+		void *(*entry) (void *), void *data) {
+	(void)thread; (void)attr; (void)entry; (void)data;
+	return EAGAIN;
+}
+#define pthread_create failed_player_create
+#define BarPlaybackStartSong BarTestPlaybackStartSong
+#define BarPlaybackFetchPlaylist BarTestPlaybackFetchPlaylist
+#include "../../src/playback_lifecycle.c"
+#undef BarPlaybackFetchPlaylist
+#undef BarPlaybackStartSong
+#undef pthread_create
 
 static void setup_playback_app (BarApp_t *app) {
 	memset (app, 0, sizeof (*app));
@@ -63,6 +78,24 @@ static void teardown_playback_app (BarApp_t *app) {
 	BarL10nDestroy (&app->l10n);
 	BarSettingsDestroy (&app->settings);
 }
+
+/* Break caught: OS creation failure leaves an impossible pending join. */
+START_TEST (test_playback_creation_failure_clears_pending_join)
+{
+	BarApp_t app;
+	setup_playback_app (&app);
+	PianoStation_t station = {.id = "creation-failure", .name = "Creation"};
+	PianoSong_t song = {.title = "Creation", .artist = "Fixture", .audioUrl = "http://127.0.0.1:9/tone.mp3"};
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetPlaylist (&app, &song);
+	pthread_t worker = 0;
+	ck_assert (!BarTestPlaybackStartSong (&app, &worker));
+	ck_assert (!app.player.threadJoinPending);
+	ck_assert_int_eq (BarPlayerGetMode (&app.player), PLAYER_DEAD);
+	ck_assert (app.player.synchronizationInitialized && app.player.engineInitialized);
+	teardown_playback_app (&app);
+}
+END_TEST
 
 /*	Session recovery needs credentials, partner keys, a Piano handle and its
  *	mutex.  BarSettingsRead supplies the partner keys PianoInit requires, so
@@ -472,7 +505,7 @@ START_TEST (test_playback_start_succeeds_with_http_url)
 	app.player.doQuit = true;
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
-	(void) pthread_join (playerThread, NULL);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
 
 	teardown_playback_app (&app);
 }
@@ -511,7 +544,7 @@ START_TEST (test_playback_start_quickmix_uses_song_station_lookup)
 	app.player.doQuit = true;
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
-	(void) pthread_join (playerThread, NULL);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
 
 	teardown_playback_app (&app);
 }
@@ -547,15 +580,59 @@ START_TEST (test_playback_start_song_rearms_auto_recover)
 	app.player.doQuit = true;
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
-	(void) pthread_join (playerThread, NULL);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
 
 	teardown_playback_app (&app);
+}
+END_TEST
+
+static void returning_audio_fatal_hook (player_t *player, const char *operation) {
+	(void)player;
+	(void)operation;
+}
+
+/* Break caught: ignoring Reset's failure creates a new player worker after
+ * the real cleanup path has entered terminal failure. */
+START_TEST (test_playback_start_stops_after_terminal_reset_failure)
+{
+	BarApp_t app;
+	PianoSong_t song = {.title = "Terminal Song", .artist = "Artist",
+		.audioUrl = "http://127.0.0.1:9/unreachable.mp3"};
+	PianoStation_t station = {.id = "station-terminal", .name = "Terminal Station"};
+	pthread_t playerThread = 0;
+	setup_playback_app (&app);
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetPlaylist (&app, &song);
+	atomic_store (&app.autoRecoverFailed, true);
+	/* A missing device outside the explicitly allowed no-device mode cannot
+	 * be reconciled by Reset. No backend operation is mocked. */
+	app.player.audioNoDevice = false;
+	BarPlayerSetAudioFatalTestHook (returning_audio_fatal_hook);
+	const bool started = BarPlaybackStartSong (&app, &playerThread);
+	if (started) { ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10)); }
+	const bool terminal = app.player.audioTerminalFailure;
+	const BarPlayerMode mode = BarPlayerGetMode (&app.player);
+	const bool recoveryStillFailed = atomic_load (&app.autoRecoverFailed);
+	char *const url = app.player.url;
+	/* Only fixture teardown is allowed to repair the deliberate mismatch. */
+	BarPlayerSetAudioFatalTestHook (NULL);
+	app.player.audioNoDevice = true;
+	app.player.audioTerminalFailure = false;
+	app.player.audioState = PLAYER_AUDIO_NONE;
+	teardown_playback_app (&app);
+	ck_assert (terminal);
+	ck_assert (!started);
+	ck_assert (playerThread == 0);
+	ck_assert_int_eq (mode, PLAYER_DEAD);
+	ck_assert (recoveryStillFailed);
+	ck_assert_ptr_null (url);
 }
 END_TEST
 
 Suite *playback_lifecycle_suite (void) {
 	Suite *s = suite_create ("playback_lifecycle");
 	TCase *tc = tcase_create ("core");
+	tcase_add_test (tc, test_playback_creation_failure_clears_pending_join);
 	tcase_add_test (tc, test_playback_start_rejects_null_app);
 	tcase_add_test (tc, test_playback_start_rejects_null_thread);
 	tcase_add_test (tc, test_playback_start_rejects_null_playlist);
@@ -564,6 +641,7 @@ Suite *playback_lifecycle_suite (void) {
 	tcase_add_test (tc, test_playback_start_succeeds_with_http_url);
 	tcase_add_test (tc, test_playback_start_quickmix_uses_song_station_lookup);
 	tcase_add_test (tc, test_playback_start_song_rearms_auto_recover);
+	tcase_add_test (tc, test_playback_start_stops_after_terminal_reset_failure);
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_session);
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_only_once);
 	tcase_add_test (tc, test_playback_fetch_playlist_disconnects_when_retry_fails);

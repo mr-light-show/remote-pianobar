@@ -226,6 +226,9 @@ START_TEST(test_socketio_translate_volume_commands) {
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	app.player = player;
 	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init (&app.player.audioCond, NULL);
+	app.player.settings = &app.settings;
+	app.player.requestedVolume = app.settings.volume;
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	#endif
@@ -240,6 +243,7 @@ START_TEST(test_socketio_translate_volume_commands) {
 	/* Test volume.down */
 	BarSocketIoHandleAction(&app, "volume.down", NULL, NULL);
 	
+	pthread_cond_destroy (&app.player.audioCond);
 	pthread_mutex_destroy(&app.player.lock);
 	#ifdef WEBSOCKET_ENABLED
 	pthread_rwlock_destroy(&app.stateRwlock);
@@ -614,6 +618,28 @@ START_TEST (test_socketio_build_process_payload_includes_song_fields) {
 }
 END_TEST
 
+/* Break caught: process snapshots expose a stale settings volume. */
+START_TEST (test_socketio_process_payload_reads_canonical_runtime_volume)
+{
+	BarApp_t app = {0};
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	pthread_mutex_init (&app.player.lock, NULL);
+	pthread_cond_init (&app.player.audioCond, NULL);
+	app.player.settings = &app.settings;
+	ck_assert (BarPlayerSetVolume (&app.player, 72));
+	app.settings.volume = 3;
+	json_object *payload = BarSocketIoBuildProcessPayload (&app), *volume;
+	ck_assert_ptr_nonnull (payload);
+	ck_assert (json_object_object_get_ex (payload, "volume", &volume));
+	ck_assert_int_eq (json_object_get_int (volume), 72);
+	json_object_put (payload);
+	pthread_cond_destroy (&app.player.audioCond);
+	pthread_mutex_destroy (&app.player.lock);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_socketio_emit_stations_empty_when_list_missing) {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
@@ -927,6 +953,8 @@ START_TEST (test_socketio_volume_set_action_updates_player_volume) {
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app.settings.volume = 50;
 	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.audioCond, NULL), 0);
+	app.player.requestedVolume = 50;
 	ck_assert_int_eq (pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL), 0);
 	app.player.settings = &app.settings;
 	app.wsContext = &ctx;
@@ -943,6 +971,7 @@ START_TEST (test_socketio_volume_set_action_updates_player_volume) {
 
 	json_object_put (data);
 	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	pthread_cond_destroy (&app.player.audioCond);
 	pthread_mutex_destroy (&app.player.lock);
 	BarSettingsDestroy (&app.settings);
 }
@@ -956,6 +985,7 @@ START_TEST (test_socketio_volume_set_clamps_out_of_range) {
 	memset (&ctx, 0, sizeof (ctx));
 	BarSettingsInit (&app.settings);
 	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.audioCond, NULL), 0);
 	ck_assert_int_eq (pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL), 0);
 	app.player.settings = &app.settings;
 	app.wsContext = &ctx;
@@ -967,6 +997,7 @@ START_TEST (test_socketio_volume_set_clamps_out_of_range) {
 
 	json_object_put (data);
 	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	pthread_cond_destroy (&app.player.audioCond);
 	pthread_mutex_destroy (&app.player.lock);
 	BarSettingsDestroy (&app.settings);
 }
@@ -2078,6 +2109,7 @@ Suite *socketio_suite(void) {
 	/* Event emission tests */
 	tc_emit = tcase_create("Event Emission");
 	tcase_add_test(tc_emit, test_socketio_emit_event_only);
+	tcase_add_test(tc_emit, test_socketio_process_payload_reads_canonical_runtime_volume);
 	tcase_add_test(tc_emit, test_socketio_emit_with_data);
 	tcase_add_test(tc_emit, test_socketio_emit_stop);
 	tcase_add_test(tc_emit, test_socketio_emit_progress);

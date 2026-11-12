@@ -73,8 +73,8 @@ Pianobar uses **several synchronization primitives**:
 The player uses **two separate locks** for different concerns:
 
 **Threading Model:**
-- **Decoder thread** (`BarPlayerThread`): Reads network stream, decodes audio, writes to buffer
-- **Audio output thread** (`BarAoPlayThread`): Reads buffer, plays audio, updates progress
+- **Decoder thread** (`BarPlayerThread`): Reads the network stream, decodes audio, feeds the filter
+- **Miniaudio callback thread**: Reads the FFmpeg data source and outputs audio
 
 **Lock Responsibilities:**
 
@@ -93,7 +93,131 @@ The player uses **two separate locks** for different concerns:
    - `player.lock` = "what should the player do?" (control plane)
    - `player.decoderLock` = "where is the audio data?" (data plane)
 
-**CRITICAL RULE: These locks must NEVER be held simultaneously.**
+**CRITICAL RULE: `player.lock`, `decoderLock`, and `stateRwlock` must NEVER
+be held simultaneously. Release the current lock before acquiring another.**
+
+### Audio lifetime reservation
+
+`player.lock` also protects `audioBusy`, `audioState`, `audioCond`,
+`audioControlWaiters`, `controlEpoch`, the owner/operation/time diagnostics,
+and `requestedVolume`. `audioBusy` is a reservation, not another mutex.
+An operation claims it under `player.lock`, snapshots or changes control state,
+releases the lock, performs miniaudio work, then takes `player.lock` to commit
+and release ownership. **Never hold `player.lock`, `decoderLock`, or
+`stateRwlock` across device start/stop or sound/engine uninitialization.**
+
+| Stable state (`audioBusy == false`) | Meaning |
+|---|---|
+| `PLAYER_AUDIO_NONE` | No sound/data source; the lifetime engine can remain initialized and stopped |
+| `PLAYER_AUDIO_STOPPED` | A retained sound node and stopped device; its cursor is preserved |
+| `PLAYER_AUDIO_RUNNING` | Sound and device started (a no-device test engine has no physical device) |
+| `PLAYER_AUDIO_FAILED` | Backend state could not be reconciled; shutdown is terminal |
+
+While `audioBusy` is true, `audioState` describes the previous commit and must
+not be interpreted as a stable sound/device state. `soundInitialized` remains
+a diagnostic mirror; it does not grant permission to access the sound.
+
+Control reservations count their waiters exactly once and use a predicate loop
+on `audioCond`. Normal operations recheck quit after every wake; teardown can
+still claim ownership after quit. Observation reservations never wait and
+yield when any control is waiting. All aborts balance the waiter count, and
+every ownership release broadcasts `audioCond`, including after superseded
+setup and failures. Owner recursion returns failure in release builds.
+
+Wait deadlines use `CLOCK_MONOTONIC`: selected condition clocks on POSIX, and
+remaining monotonic duration with `pthread_cond_timedwait_relative_np` on
+macOS. A command timeout does not change ownership. A teardown timeout records
+owner/operation/elapsed time, releases locks, and invokes a fatal hook whose
+production default is `_Exit(EXIT_FAILURE)`. A returning test hook leaves the
+player terminal and does not authorize uninitialization of the live owner.
+
+Setup captures `controlEpoch`, pause, and `PLAYER_WAITING && !doQuit` under the
+lock. It revalidates before device start and at the atomic mode/audio commit.
+Quit, mode changes, pause changes, reset, interrupt handling, and end callbacks
+advance the epoch. A superseded setup rolls back physically without publishing
+`PLAYER_PLAYING` over the newer control state. Runtime player volume is read
+through `BarPlayerGetVolume`; absolute/relative writes use the serialized
+player setters, which also update the settings mirror. System volume remains
+independent.
+
+`BarPlayerGetAudioSnapshot` reserves the sound lifetime while reading the real
+cursor, node end/playing state and device state. It takes `decoderLock` for
+cursor access after releasing `player.lock`, then releases it before logical
+revalidation. Callers must treat a failed observation as a skipped sample or
+completion, not inspect `ma_sound` directly.
+
+**Callback exception:** miniaudio's source callback does not reserve audio;
+device stop/uninitialization synchronizes its lifetime. It uses `decoderLock`
+for FFmpeg source data, and releases it before reading control fields. The end
+callback only publishes mode/epoch and signals `player.cond`; it must never
+reserve audio, start/stop/uninitialize a sound, or wait for its owning backend
+operation. No-device tests use one bounded engine read as the absent callback;
+they return from that read before initiating their own lifecycle transitions.
+
+Before any physical stop, `stopSoundReserved` takes only `decoderLock`, sets
+`sourceReadCancelled`, broadcasts `decoderCond`, then releases that lock before
+calling miniaudio. The source read loop checks this persistent predicate under
+the same lock, so a callback cannot miss the wake or enter another wait while
+device stop joins it. Cancellation supplies bounded silence without declaring
+natural EOF or advancing the FFmpeg cursor. Setup clears the predicate before
+starting a new source; a retained-node resume must likewise clear it under
+`decoderLock` before restarting the sound/device, without nesting locks.
+
+Reset/destroy require player and control workers to have joined. They reserve,
+stop the sound, stop the device, uninitialize the sound/data source, then (for
+destroy) uninitialize the engine. Destroy releases its final reservation before
+destroying `audioCond` and the existing primitives. Reinitialization reuses the
+same initialized primitives and engine.
+
+The runtime song creator sets `threadJoinPending` under `player.lock` before
+`pthread_create`; creation failure clears it because no worker exists. The
+shared bounded join clears it only after an OS join succeeds. Destroy checks
+this flag before claiming teardown audio and refuses to destroy either the
+engine or any synchronization primitive while a join is pending. Worker exit
+or `PLAYER_FINISHED` alone is not proof of a successful join.
+
+Both the playback manager and CLI final-join failure use
+`BarPlayerFatalShutdown`. It marks terminal failure under `player.lock`, wakes
+waiters, releases that lock, logs, then invokes the same fatal hook as a terminal
+audio-reservation timeout. Production calls `_Exit(EXIT_FAILURE)`; a returning
+test hook leaves ownership, sound, engine, settings and all primitives intact.
+There is no detach-and-continue path. Failed cleanup does not publish DEAD or
+mark the player joined. The main shutdown sequence joins playback/player,
+returns from CLI control, joins WebSocket control, then destroys shared app
+state and the player. A test fatal-hook return also bypasses that destruction.
+Test hooks are installed before workers start and restored only after join.
+
+Pause/resume/toggle accept `PLAYER_WAITING` and `PLAYER_PLAYING`, rechecking
+that predicate after every reservation wait. Toggle chooses its direction
+after claiming the reservation. Pause publishes its flag/timestamp and epoch
+before physical stop; repeated pause retains the original timer. Resume clears
+source cancellation under `decoderLock` alone, then revalidates mode/quit/epoch
+before sound start, before device start, and at commit. Only a current successful
+commit clears logical pause. Failed or superseded starts stop physically while
+retaining ownership and leave cancellation armed; failed rollback is terminal.
+No-sound controls change only logical pause and keep `PLAYER_AUDIO_NONE`.
+
+`BarPlayerRequestStop` publishes quit/epoch and wakes control waiters before
+waiting for teardown ownership. It clears pause only after claiming audio and
+does not publish a mode. The private pre-stop cancellation wake above remains
+under `decoderLock` alone while lifetime is reserved, so device stop can join
+its callback. A final decoder wake occurs after the reservation has been
+released, again without `player.lock`. FFmpeg's second-interrupt callback uses
+this helper on the normal open/read worker, outside application locks and
+audio reservations. It is not the asynchronous signal or miniaudio callback.
+
+UI controls use the result-bearing pause/toggle helpers. Each captures immutable
+pause and controlEpoch under `player.lock` at successful commit, before releasing
+audio ownership; failed/superseded controls leave the result unchanged. After
+all application locks are released, `BarWsBroadcastPlayStateSnapshot` publishes
+that completed result without resampling or dropping it for an unrelated audio
+owner. Generic `BarWsBroadcastPlayState` still snapshots only with no audio
+owner or waiting control, then unlocks before JSON construction or enqueue.
+The existing STATE bucket mutex atomically rejects
+epochs older than its last accepted play-state snapshot; its watermark survives
+message consumption and generic STATE events. Thus a delayed producer cannot
+replace a newer final event. Epoch stays internal, not in the wire payload.
+No bucket mutex overlaps an application mutex, and no new mutex is introduced.
 
 **Example from audio thread** ([`player.c`](player.c)):
 ```c
@@ -125,15 +249,9 @@ pthread_mutex_unlock(&player->decoderLock);
 
 ### Lock Ordering Rules
 
-When **`stateRwlock`** and **`player.lock`** must both be acquired, **always follow this order**:
-
-```
-1. app->stateRwlock    (web/both: rdlock/wrlock for BarState* pointer fields)
-   ↓
-2. app->player.lock    (Player state)
-```
-
-**Never reverse this order.** Violating lock ordering is the #1 cause of deadlocks.
+`stateRwlock`, `player.lock`, and `decoderLock` are sequential locks, not a
+nested hierarchy. A path may acquire the next only after releasing the prior
+one. Use state getters/snapshots to finish state access before player APIs.
 
 When Pandora RPCs need both `pianoHttpMutex` and `stateRwlock`, the order is
 **`pianoHttpMutex` first, then `stateRwlock`**. This order is limited to the
@@ -147,7 +265,7 @@ must not call Pandora RPC helpers while already holding `stateRwlock`.
 - **No I/O under `stateRwlock` or `player.lock`**: Never make network calls while holding those locks
 - **Pandora HTTP**: Blocking I/O happens only inside [`BarUiPianoCall`](ui.c) while holding **`pianoHttpMutex`** (by design — libcurl requires a single-threaded `CURL *` easy handle)
 - **No allocations under lock** where possible: Avoid `malloc`/`free` while holding `stateRwlock` / `player.lock`
-- **Player locks**: Never hold `player.lock` and `decoderLock` at the same time
+- **Application locks**: Never hold `stateRwlock`, `player.lock`, or `decoderLock` together
 
 ### Conditional Locking
 
@@ -272,13 +390,12 @@ After `BarStateSetNextStation`, `BarStateSetPlaylist`, `BarStateDrainPlaylist`, 
 
 ```c
 // ✓ SAFE: Lock, modify, unlock, THEN broadcast
-pthread_mutex_lock(&app->player.lock);
-app->player.doPause = true;
-pthread_cond_broadcast(&app->player.cond);
-pthread_mutex_unlock(&app->player.lock);
-
-// Broadcast happens AFTER lock is released
-BarWsBroadcastPlayState(app);
+BarPlayerPlayStateSnapshot snapshot;
+if (BarPlayerSetPausedWithSnapshot(&app->player, true, &snapshot)) {
+    // Helper released all locks. Publish its immutable completed result;
+    // versioned enqueue cannot overwrite a newer completed event.
+    BarWsBroadcastPlayStateSnapshot(app, &snapshot);
+}
 ```
 
 **Why:** Broadcast functions may acquire locks internally. Calling them while holding a lock risks nested locking and contention.
@@ -322,32 +439,33 @@ if (song) {
 }
 ```
 
-### Anti-Pattern 2: Reversed Lock Order
+### Anti-Pattern 2: Nested Application Locks
 
 ```c
-// ✗ UNSAFE: Wrong lock order (DEADLOCK RISK)
-pthread_mutex_lock(&app->player.lock);        // Lock 2 first
+// ✗ UNSAFE: Both acquisition orders violate the no-nesting rule.
+pthread_mutex_lock(&app->player.lock);
 // ... some work ...
-pthread_rwlock_wrlock(&app->stateRwlock);     // Then Lock 1
+pthread_rwlock_wrlock(&app->stateRwlock);
 // ... critical section ...
 pthread_rwlock_unlock(&app->stateRwlock);
 pthread_mutex_unlock(&app->player.lock);
 ```
 
-**Problem:** If another thread locks in the correct order (`stateRwlock` → `player.lock`), both threads will deadlock.
+**Problem:** Holding one application lock while acquiring another can create a
+cycle against callbacks, control operations or state updates.
 
-**Fix:** Always lock in hierarchy order:
+**Fix:** Finish one protected operation before starting the next:
 
 ```c
-// ✓ SAFE: Correct lock order
-pthread_rwlock_wrlock(&app->stateRwlock);      // Lock 1 first (or rdlock for read-only)
-pthread_mutex_lock(&app->player.lock);         // Then Lock 2
-// ... critical section ...
+// ✓ SAFE: State getter releases stateRwlock before returning.
+PianoStation_t *station = BarStateGetCurrentStation(app);
+pthread_mutex_lock(&app->player.lock);
+// ... player-only critical section using the state snapshot ...
 pthread_mutex_unlock(&app->player.lock);
-pthread_rwlock_unlock(&app->stateRwlock);
 ```
 
-**Even better:** Avoid nested locks entirely by using state getters/setters.
+If joint atomicity is required, design an explicit snapshot/epoch protocol;
+do not restore nested application locks.
 
 ### Anti-Pattern 3: Holding `stateRwlock` During Piano HTTP
 
@@ -451,7 +569,7 @@ void outerFunction(BarApp_t *app) {
 ### Checklist for New Code
 
 - [ ] Uses state getters/setters instead of direct access
-- [ ] Locks are acquired in hierarchy order (stateRwlock → player.lock)
+- [ ] Release `stateRwlock`, `player.lock`, or `decoderLock` before acquiring another application lock
 - [ ] No I/O operations under lock
 - [ ] No memory allocation/deallocation under lock
 - [ ] Locks are released on all code paths (including error paths)
@@ -669,7 +787,7 @@ static void doNetworkCall(BarApp_t *app) {
 ### The Golden Rules
 
 1. **Use state abstractions**: Always use `BarState*()` functions for shared pointers (web/both)
-2. **Lock ordering**: `stateRwlock` before `player.lock` (if both needed); never mix `stateRwlock` with `pianoHttpMutex` in nested fashion
+2. **No application-lock nesting**: release `stateRwlock`, `player.lock`, or `decoderLock` before acquiring another
 3. **Minimize lock duration**: Hold `stateRwlock` / `player.lock` for microseconds, not milliseconds
 4. **Pandora HTTP**: Only via `BarUiPianoCall` — it holds `pianoHttpMutex` for the full transfer (recursive)
 5. **Broadcast after unlock**: Call `BarWsBroadcast*()` functions after releasing `stateRwlock` / `player.lock`
@@ -702,4 +820,3 @@ static void doNetworkCall(BarApp_t *app) {
 
 **Last Updated:** January 2026  
 **Pianobar Version:** 2.0.0+
-

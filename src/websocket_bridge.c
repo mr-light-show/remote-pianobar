@@ -56,7 +56,7 @@ void BarWsBroadcastVolume(BarApp_t *app) {
 			volumePercent = BarSystemVolumeGet();
 			if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
 		} else {
-			volumePercent = app->settings.volume;
+			volumePercent = BarPlayerGetVolume (&app->player);
 		}
 		struct json_object *vol = json_object_new_int (volumePercent);
 		char *msg = BarSocketIoFormatEventMessage ("volume", vol);
@@ -139,14 +139,27 @@ void BarWsBroadcastProgress(BarApp_t *app) {
 
 void BarWsBroadcastPlayState(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
-		struct json_object *data = json_object_new_object ();
 		pthread_mutex_lock (&app->player.lock);
-		json_object_object_add(data, "paused",
-				json_object_new_boolean(app->player.doPause));
+		/* Pause is published before physical stop. Only completed snapshots
+		 * may reach clients; the owning control broadcasts after completion. */
+		if (app->player.audioBusy || app->player.audioControlWaiters != 0) {
+			pthread_mutex_unlock (&app->player.lock);
+			return;
+		}
+		const BarPlayerPlayStateSnapshot snapshot = {app->player.doPause, app->player.controlEpoch};
 		pthread_mutex_unlock (&app->player.lock);
+		BarWsBroadcastPlayStateSnapshot (app, &snapshot);
+	}
+}
+
+void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
+                                      const BarPlayerPlayStateSnapshot *snapshot) {
+	if (app && snapshot && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
+		struct json_object *data = json_object_new_object ();
+		json_object_object_add (data, "paused", json_object_new_boolean (snapshot->paused));
 		char *msg = BarSocketIoFormatEventMessage ("playState", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketBroadcastPlayStateMessage (app, msg, snapshot->controlEpoch);
 	}
 }
 
@@ -348,6 +361,10 @@ void BarWsBroadcastProcess(BarApp_t *app) { (void)app; }
 void BarWsBroadcastSongStop(BarApp_t *app) { (void)app; }
 void BarWsBroadcastProgress(BarApp_t *app) { (void)app; }
 void BarWsBroadcastPlayState(BarApp_t *app) { (void)app; }
+void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
+                                      const BarPlayerPlayStateSnapshot *snapshot) {
+	(void)app; (void)snapshot;
+}
 void BarWsBroadcastStations(BarApp_t *app) { (void)app; }
 void BarWsDisconnectAllClients(BarApp_t *app) { (void)app; }
 

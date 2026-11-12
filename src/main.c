@@ -388,23 +388,12 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 	BarWsBroadcastSongStop(app);
 
 	/* Wait for player thread with timeout to prevent infinite hang */
-	bool threadExited = false;
-	for (int i = 0; i < BAR_JOIN_THREAD_ITERATIONS; i++) {  /* 10 seconds max */
-		int ret = pthread_kill(*playerThread, 0);
-		if (ret == ESRCH) {
-			/* Thread no longer exists - join to clean up */
-			pthread_join(*playerThread, &threadRet);
-			threadExited = true;
-			break;
-		}
-		usleep ((unsigned int)BAR_PLAYER_STOP_POLL_MS * 1000u);
-	}
+	bool threadExited = BarPlayerJoinThreadWithTimeout (&app->player, *playerThread, &threadRet, 10);
 
 	if (!threadExited) {
-		BarUiMsg(&app->settings, MSG_ERR, "%s",
-				BarL10nGet (&app->l10n, "cli.player_thread_detach"));
-		pthread_detach(*playerThread);
-		threadRet = (void *)PLAYER_RET_HARDFAIL;
+		BarPlayerFatalShutdown (&app->player, "CLI player thread final join");
+		atomic_store (&app->doQuit, 1);
+		return;
 	}
 
 	if (threadRet == (void *) PLAYER_RET_OK) {
@@ -573,9 +562,21 @@ static void BarMainLoop (BarApp_t *app) {
 
 	#ifndef WEBSOCKET_ENABLED
 	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
-		pthread_join (playerThread, NULL);
+		BarPlayerRequestStop (player);
+		BarMainPlayerCleanup (app, &playerThread);
 	}
 	#endif
+}
+
+/* A returning test fatal hook cannot authorize shared-state destruction.
+ * Production fatal hooks do not return, but keep this boundary explicit. */
+static int BarMainFinalizationStatus (const BarApp_t *app) {
+	const bool terminalFailure = app->player.audioTerminalFailure;
+	if (terminalFailure) {
+		log_write (LOG_ERROR, "Terminal player failure; shared resources retained\n");
+		return EXIT_FAILURE;
+	}
+	return EXIT_SUCCESS;
 }
 
 static void intHandler (int signal) {
@@ -963,6 +964,7 @@ int main (int argc, char **argv) {
 	/* Call BarMainLoop directly - crash happens here or in function prologue
 	 * Using &app directly avoids any stack variable issues */
 	BarMainLoop (&app);
+	if (BarMainFinalizationStatus (&app) != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 
 	if (app.input.fds[1] != -1) {

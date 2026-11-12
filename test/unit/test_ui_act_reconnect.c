@@ -3,6 +3,7 @@
  */
 
 #include <check.h>
+#include <json-c/json.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,9 +125,11 @@ player_primitives_init (BarApp_t *app)
 {
 	ck_assert_int_eq (pthread_mutex_init (&app->player.lock, NULL), 0);
 	ck_assert_int_eq (pthread_cond_init (&app->player.cond, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app->player.audioCond, NULL), 0);
 	ck_assert_int_eq (pthread_mutex_init (&app->player.decoderLock, NULL), 0);
 	ck_assert_int_eq (pthread_cond_init (&app->player.decoderCond, NULL), 0);
 	app->player.settings = &app->settings;
+	app->player.requestedVolume = app->settings.volume;
 	app->player.soundInitialized = false;
 }
 
@@ -136,6 +139,7 @@ player_primitives_destroy (BarApp_t *app)
 	pthread_cond_destroy (&app->player.decoderCond);
 	pthread_mutex_destroy (&app->player.decoderLock);
 	pthread_cond_destroy (&app->player.cond);
+	pthread_cond_destroy (&app->player.audioCond);
 	pthread_mutex_destroy (&app->player.lock);
 }
 
@@ -222,6 +226,30 @@ ws_bucket_payload (BarWsContext_t *ctx, BarWsBucketType_t bucket)
 	return (const char *) ctx->buckets[bucket].message->data;
 }
 
+static bool
+play_state_payload_paused (BarWsContext_t *ctx)
+{
+	const char *payload = ws_bucket_payload (ctx, BUCKET_STATE);
+	ck_assert_int_eq (payload[0], '2');
+	json_object *event = json_tokener_parse (payload + 1);
+	ck_assert_ptr_nonnull (event);
+	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (event, 0)),
+	                  "playState");
+	json_object *state = json_object_array_get_idx (event, 1);
+	json_object *value = NULL;
+	ck_assert (json_object_object_get_ex (state, "paused", &value));
+	ck_assert_int_eq (json_object_object_length (state), 1);
+	const bool paused = json_object_get_boolean (value);
+	json_object_put (event);
+	return paused;
+}
+
+static void
+assert_play_state_payload (BarWsContext_t *ctx, bool paused)
+{
+	ck_assert_int_eq (play_state_payload_paused (ctx), paused);
+}
+
 START_TEST (test_ui_act_pandora_reconnect_no_credentials)
 {
 	BarApp_t app;
@@ -258,20 +286,383 @@ END_TEST
 START_TEST (test_ui_act_play_pause_toggle)
 {
 	BarApp_t app;
+	BarWsContext_t ctx;
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
 	player_primitives_init (&app);
+	attach_ws_context_for_test (&app, &ctx);
+	app.player.mode = PLAYER_WAITING;
 
 	BarUiActPlay (&app, NULL, NULL, 1);
 	ck_assert (app.player.doPause == false);
+	ck_assert_int_eq (app.player.pauseStartTime, 0);
+	assert_play_state_payload (&ctx, false);
 
 	BarUiActPause (&app, NULL, NULL, 1);
 	ck_assert (app.player.doPause == true);
+	ck_assert (app.player.pauseStartTime > 0);
+	assert_play_state_payload (&ctx, true);
+
+	BarUiActPlay (&app, NULL, NULL, 1);
+	ck_assert (app.player.doPause == false);
+	ck_assert_int_eq (app.player.pauseStartTime, 0);
+	assert_play_state_payload (&ctx, false);
 
 	BarUiActTogglePause (&app, NULL, NULL, 1);
+	ck_assert (app.player.doPause == true);
+	ck_assert (app.player.pauseStartTime > 0);
+	assert_play_state_payload (&ctx, true);
 
+	BarUiActTogglePause (&app, NULL, NULL, 1);
+	ck_assert (app.player.doPause == false);
+	ck_assert_int_eq (app.player.pauseStartTime, 0);
+	assert_play_state_payload (&ctx, false);
+
+	ws_context_destroy (&ctx);
 	player_primitives_destroy (&app);
 	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_ui_act_rejected_controls_preserve_last_broadcast)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	BarSettingsInit (&app.settings);
+	player_primitives_init (&app);
+	attach_ws_context_for_test (&app, &ctx);
+	app.player.mode = PLAYER_WAITING;
+	BarUiActPause (&app, NULL, NULL, 1);
+	char *previous = strdup (ws_bucket_payload (&ctx, BUCKET_STATE));
+	ck_assert_ptr_nonnull (previous);
+	BarWsMessage_t *message = ctx.buckets[BUCKET_STATE].message;
+	app.player.doQuit = true;
+	const uint64_t epoch = app.player.controlEpoch;
+	BarUiActPlay (&app, NULL, NULL, 1);
+	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	BarUiActPause (&app, NULL, NULL, 1);
+	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	BarUiActTogglePause (&app, NULL, NULL, 1);
+	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	ck_assert (app.player.doPause);
+	ck_assert_uint_eq (app.player.controlEpoch, epoch);
+	ck_assert_str_eq (ws_bucket_payload (&ctx, BUCKET_STATE), previous);
+	free (previous);
+	ws_context_destroy (&ctx);
+	player_primitives_destroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+/* Break caught: UI reports unpaused before starting a retained sound, or
+ * pause/skip only change flags while the real sound remains started. */
+START_TEST (test_ui_act_controls_complete_real_sound_before_broadcast)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	ma_audio_buffer buffer;
+	static const float samples[960] = {0};
+	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
+	BarSettingsInit (&app.settings);
+	BarPlayerInit (&app.player, &app.settings);
+	ck_assert (app.player.engineInitialized);
+	ma_audio_buffer_config config = ma_audio_buffer_config_init (ma_format_f32, 2, 480, samples, NULL);
+	config.sampleRate = 44100;
+	ck_assert_int_eq (ma_audio_buffer_init (&config, &buffer), MA_SUCCESS);
+	ck_assert_int_eq (ma_sound_init_from_data_source (&app.player.engine, &buffer, 0, NULL, &app.player.sound), MA_SUCCESS);
+	app.player.soundInitialized = true;
+	app.player.audioState = PLAYER_AUDIO_STOPPED;
+	app.player.mode = PLAYER_PLAYING;
+	app.player.doPause = true;
+	app.player.pauseStartTime = 123;
+	attach_ws_context_for_test (&app, &ctx);
+	BarUiActPlay (&app, NULL, NULL, 1);
+	const bool started = ma_sound_is_playing (&app.player.sound);
+	assert_play_state_payload (&ctx, false);
+	BarUiActPlay (&app, NULL, NULL, 1);
+	ck_assert (!app.player.audioBusy);
+	BarUiActPause (&app, NULL, NULL, 1);
+	const bool stopped = !ma_sound_is_playing (&app.player.sound);
+	const time_t timestamp = app.player.pauseStartTime;
+	assert_play_state_payload (&ctx, true);
+	BarUiActPause (&app, NULL, NULL, 1);
+	ck_assert_int_eq (app.player.pauseStartTime, timestamp);
+	ck_assert (!app.player.audioBusy);
+	BarUiActTogglePause (&app, NULL, NULL, 1);
+	const bool toggled = ma_sound_is_playing (&app.player.sound);
+	assert_play_state_payload (&ctx, false);
+	BarUiActTogglePause (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, true);
+	BarUiActSkipSong (&app, NULL, NULL, 1);
+	ck_assert (app.player.doQuit);
+	ck_assert (!app.player.doPause);
+	ck_assert_int_eq (app.player.pauseStartTime, 0);
+	ck_assert (!app.player.audioBusy);
+	ck_assert_int_eq (app.player.audioState, PLAYER_AUDIO_STOPPED);
+	ck_assert (!ma_sound_is_playing (&app.player.sound));
+	ws_context_destroy (&ctx);
+	ck_assert (BarPlayerDestroy (&app.player));
+	ma_audio_buffer_uninit (&buffer);
+	BarSettingsDestroy (&app.settings);
+	ck_assert_msg (started, "Play must start the actual retained sound before reporting success");
+	ck_assert (stopped);
+	ck_assert (toggled);
+}
+END_TEST
+
+typedef struct {
+	player_t *player;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	bool entered, release;
+} UiDecoderGate;
+
+static void *hold_ui_decoder_lock (void *data) {
+	UiDecoderGate *gate = data;
+	pthread_mutex_lock (&gate->player->decoderLock);
+	pthread_mutex_lock (&gate->lock);
+	gate->entered = true;
+	pthread_cond_broadcast (&gate->cond);
+	while (!gate->release) { pthread_cond_wait (&gate->cond, &gate->lock); }
+	pthread_mutex_unlock (&gate->lock);
+	pthread_mutex_unlock (&gate->player->decoderLock);
+	return NULL;
+}
+
+static void *pause_ui_thread (void *data) {
+	BarUiActPause (data, NULL, NULL, 1);
+	return NULL;
+}
+
+typedef struct {
+	player_t *player;
+	BarPlayerAudioSnapshot snapshot;
+	bool result;
+} UiAudioObserver;
+
+static void *observe_ui_audio_thread (void *data) {
+	UiAudioObserver *observer = data;
+	/* Observation may skip a contended player.lock; retry within the same
+	 * bounded fixture interval, without changing production skip semantics. */
+	for (unsigned attempt = 0; attempt < 1000 && !observer->result; ++attempt) {
+		observer->result = BarPlayerGetAudioSnapshot (observer->player, &observer->snapshot);
+		if (!observer->result) { usleep (1000); }
+	}
+	return NULL;
+}
+
+/* Break caught: a completed action's delayed broadcaster samples another
+ * UI action's logical pause before that action physically stops its sound. */
+START_TEST (test_ui_act_pending_pause_suppresses_delayed_play_state)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	ma_audio_buffer buffer;
+	static const float samples[960] = {0};
+	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
+	BarSettingsInit (&app.settings);
+	BarPlayerInit (&app.player, &app.settings);
+	ma_audio_buffer_config config = ma_audio_buffer_config_init (ma_format_f32, 2, 480, samples, NULL);
+	config.sampleRate = 44100;
+	ck_assert_int_eq (ma_audio_buffer_init (&config, &buffer), MA_SUCCESS);
+	ck_assert_int_eq (ma_sound_init_from_data_source (&app.player.engine, &buffer, 0, NULL, &app.player.sound), MA_SUCCESS);
+	app.player.soundInitialized = true;
+	app.player.audioState = PLAYER_AUDIO_STOPPED;
+	app.player.mode = PLAYER_PLAYING;
+	app.player.doPause = true;
+	attach_ws_context_for_test (&app, &ctx);
+	/* Completed action A. Invoke its delayed broadcast boundary below. */
+	ck_assert (BarPlayerSetPaused (&app.player, false));
+	UiDecoderGate gate = {.player = &app.player};
+	pthread_mutex_init (&gate.lock, NULL);
+	pthread_cond_init (&gate.cond, NULL);
+	pthread_t blocker, pauser;
+	ck_assert_int_eq (pthread_create (&blocker, NULL, hold_ui_decoder_lock, &gate), 0);
+	pthread_mutex_lock (&gate.lock);
+	while (!gate.entered) { pthread_cond_wait (&gate.cond, &gate.lock); }
+	pthread_mutex_unlock (&gate.lock);
+	ck_assert_int_eq (pthread_create (&pauser, NULL, pause_ui_thread, &app), 0);
+	bool pending = false;
+	for (unsigned attempt = 0; attempt < 1000 && !pending; ++attempt) {
+		pthread_mutex_lock (&app.player.lock);
+		pending = app.player.audioBusy && app.player.doPause;
+		pthread_mutex_unlock (&app.player.lock);
+		if (!pending) { usleep (1000); }
+	}
+	ck_assert_msg (pending, "Action B must publish pause while physical stop is gated");
+	ck_assert (ma_sound_is_playing (&app.player.sound));
+	/* Neither the test nor the broadcaster holds an application lock. */
+	BarWsBroadcastPlayState (&app);
+	const bool suppressed = ctx.buckets[BUCKET_STATE].message == NULL;
+	pthread_mutex_lock (&gate.lock);
+	gate.release = true;
+	pthread_cond_broadcast (&gate.cond);
+	pthread_mutex_unlock (&gate.lock);
+	ck_assert_int_eq (pthread_join (blocker, NULL), 0);
+	ck_assert_int_eq (pthread_join (pauser, NULL), 0);
+	ck_assert (!app.player.audioBusy);
+	ck_assert (!ma_sound_is_playing (&app.player.sound));
+	assert_play_state_payload (&ctx, true);
+	BarUiActPlay (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, false);
+	pthread_cond_destroy (&gate.cond);
+	pthread_mutex_destroy (&gate.lock);
+	ws_context_destroy (&ctx);
+	ck_assert (BarPlayerDestroy (&app.player));
+	ma_audio_buffer_uninit (&buffer);
+	BarSettingsDestroy (&app.settings);
+	ck_assert_msg (suppressed, "An unfinished UI pause must not be broadcast by a delayed completed action");
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	char *message;
+	uint64_t epoch;
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	bool ready, release;
+} DelayedPlayState;
+
+static char *format_play_state_for_test (bool paused) {
+	json_object *data = json_object_new_object ();
+	json_object_object_add (data, "paused", json_object_new_boolean (paused));
+	char *message = BarSocketIoFormatEventMessage ("playState", data);
+	json_object_put (data);
+	return message;
+}
+
+static void *delayed_play_state_enqueue (void *data) {
+	DelayedPlayState *sender = data;
+	pthread_mutex_lock (&sender->lock);
+	sender->ready = true;
+	pthread_cond_broadcast (&sender->cond);
+	while (!sender->release) { pthread_cond_wait (&sender->cond, &sender->lock); }
+	pthread_mutex_unlock (&sender->lock);
+	BarWebsocketBroadcastPlayStateMessage (sender->app, sender->message, sender->epoch);
+	return NULL;
+}
+
+/* Break caught: an older completed producer overwrites a newer final UI
+ * state, or a drained bucket forgets its watermark and resurrects old state. */
+START_TEST (test_ui_act_delayed_play_state_cannot_replace_newer_final_event)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	BarSettingsInit (&app.settings);
+	player_primitives_init (&app);
+	attach_ws_context_for_test (&app, &ctx);
+	app.player.mode = PLAYER_WAITING;
+	BarUiActPause (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, true);
+	pthread_mutex_lock (&app.player.lock);
+	const uint64_t oldEpoch = app.player.controlEpoch;
+	const bool oldPaused = app.player.doPause;
+	pthread_mutex_unlock (&app.player.lock);
+	DelayedPlayState sender = {.app = &app, .epoch = oldEpoch,
+		.message = format_play_state_for_test (oldPaused)};
+	pthread_mutex_init (&sender.lock, NULL);
+	pthread_cond_init (&sender.cond, NULL);
+	pthread_t oldProducer;
+	ck_assert_int_eq (pthread_create (&oldProducer, NULL, delayed_play_state_enqueue, &sender), 0);
+	pthread_mutex_lock (&sender.lock);
+	while (!sender.ready) { pthread_cond_wait (&sender.cond, &sender.lock); }
+	pthread_mutex_unlock (&sender.lock);
+	BarUiActPlay (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, false);
+	pthread_mutex_lock (&sender.lock);
+	sender.release = true;
+	pthread_cond_broadcast (&sender.cond);
+	pthread_mutex_unlock (&sender.lock);
+	ck_assert_int_eq (pthread_join (oldProducer, NULL), 0);
+	const bool oldIgnored = !play_state_payload_paused (&ctx);
+	BarUiActTogglePause (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, true);
+	/* Model the service consuming the latest event; watermark must survive. */
+	pthread_mutex_lock (&ctx.buckets[BUCKET_STATE].mutex);
+	BarWsMessageFree (ctx.buckets[BUCKET_STATE].message);
+	ctx.buckets[BUCKET_STATE].message = NULL;
+	pthread_mutex_unlock (&ctx.buckets[BUCKET_STATE].mutex);
+	BarWebsocketBroadcastPlayStateMessage (&app, format_play_state_for_test (oldPaused), oldEpoch);
+	const bool drainedOldIgnored = ctx.buckets[BUCKET_STATE].message == NULL;
+	BarWsBroadcastPlayState (&app);
+	assert_play_state_payload (&ctx, true);
+	pthread_cond_destroy (&sender.cond);
+	pthread_mutex_destroy (&sender.lock);
+	ws_context_destroy (&ctx);
+	player_primitives_destroy (&app);
+	BarSettingsDestroy (&app.settings);
+	ck_assert_msg (oldIgnored, "A delayed older pause event must not replace the newer completed play event");
+	ck_assert_msg (drainedOldIgnored, "A consumed state bucket must still reject older play-state epochs");
+}
+END_TEST
+
+/* Break caught: an unrelated observer claiming audio after helper completion
+ * suppresses the only final UI event and leaves clients in the old pause. */
+START_TEST (test_ui_act_completed_state_survives_unrelated_audio_owner)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	ma_audio_buffer buffer;
+	static const float samples[960] = {0};
+	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
+	BarSettingsInit (&app.settings);
+	BarPlayerInit (&app.player, &app.settings);
+	ma_audio_buffer_config config = ma_audio_buffer_config_init (ma_format_f32, 2, 480, samples, NULL);
+	config.sampleRate = 44100;
+	ck_assert_int_eq (ma_audio_buffer_init (&config, &buffer), MA_SUCCESS);
+	ck_assert_int_eq (ma_sound_init_from_data_source (&app.player.engine, &buffer, 0, NULL, &app.player.sound), MA_SUCCESS);
+	app.player.soundInitialized = true;
+	app.player.audioState = PLAYER_AUDIO_STOPPED;
+	app.player.mode = PLAYER_PLAYING;
+	app.player.doPause = true;
+	attach_ws_context_for_test (&app, &ctx);
+	BarUiActPause (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, true);
+	/* The actual UI helper/broadcast boundary; observer claims in between. */
+	BarPlayerPlayStateSnapshot completed;
+	ck_assert (BarPlayerSetPausedWithSnapshot (&app.player, false, &completed));
+	UiDecoderGate gate = {.player = &app.player};
+	pthread_mutex_init (&gate.lock, NULL);
+	pthread_cond_init (&gate.cond, NULL);
+	pthread_t blocker, reader;
+	ck_assert_int_eq (pthread_create (&blocker, NULL, hold_ui_decoder_lock, &gate), 0);
+	pthread_mutex_lock (&gate.lock);
+	while (!gate.entered) { pthread_cond_wait (&gate.cond, &gate.lock); }
+	pthread_mutex_unlock (&gate.lock);
+	UiAudioObserver observer = {.player = &app.player};
+	ck_assert_int_eq (pthread_create (&reader, NULL, observe_ui_audio_thread, &observer), 0);
+	bool owned = false;
+	for (unsigned attempt = 0; attempt < 1000 && !owned; ++attempt) {
+		pthread_mutex_lock (&app.player.lock);
+		owned = app.player.audioBusy && app.player.audioOwnerValid &&
+			pthread_equal (app.player.audioOwner, reader);
+		pthread_mutex_unlock (&app.player.lock);
+		if (!owned) { usleep (1000); }
+	}
+	ck_assert_msg (owned, "An actual unrelated observer must own audio between completion and publication");
+	BarWsBroadcastPlayStateSnapshot (&app, &completed);
+	const bool newestPublished = !play_state_payload_paused (&ctx);
+	pthread_mutex_lock (&gate.lock);
+	gate.release = true;
+	pthread_cond_broadcast (&gate.cond);
+	pthread_mutex_unlock (&gate.lock);
+	ck_assert_int_eq (pthread_join (blocker, NULL), 0);
+	ck_assert_int_eq (pthread_join (reader, NULL), 0);
+	ck_assert (observer.result && observer.snapshot.playing);
+	ck_assert (!app.player.audioBusy);
+	BarUiActPause (&app, NULL, NULL, 1);
+	assert_play_state_payload (&ctx, true);
+	/* Immutable handoff still cannot replace a newer completed control. */
+	BarWsBroadcastPlayStateSnapshot (&app, &completed);
+	assert_play_state_payload (&ctx, true);
+	pthread_cond_destroy (&gate.cond);
+	pthread_mutex_destroy (&gate.lock);
+	ws_context_destroy (&ctx);
+	ck_assert (BarPlayerDestroy (&app.player));
+	ma_audio_buffer_uninit (&buffer);
+	BarSettingsDestroy (&app.settings);
+	ck_assert_msg (newestPublished, "An unrelated audio owner must not suppress the completed newest UI play state");
 }
 END_TEST
 
@@ -293,6 +684,53 @@ START_TEST (test_ui_act_volume_player_mode)
 	BarUiActVolReset (&app, NULL, NULL, 1);
 	ck_assert_int_eq (app.settings.volume, DEFAULT_VOLUME_PERCENT);
 
+	player_primitives_destroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+typedef struct { BarApp_t *app; bool websocket; } UiVolumeUpdate;
+static void *ui_concurrent_volume (void *data) {
+	UiVolumeUpdate *update = data;
+	for (unsigned i = 0; i < 200; ++i) {
+		if (update->websocket) {
+			json_object *payload = json_object_new_object ();
+			json_object_object_add (payload, "volume", json_object_new_int (72));
+			BarSocketIoHandleAction (update->app, "volume.set", payload, NULL);
+			json_object_put (payload);
+		} else {
+			BarUiActVolDown (update->app, NULL, NULL, 1);
+			BarUiActVolUp (update->app, NULL, NULL, 1);
+		}
+	}
+	return NULL;
+}
+
+/* Break caught: real CLI and WebSocket controls bypass reservation serialization. */
+START_TEST (test_ui_act_cli_and_websocket_volume_updates_share_runtime_value)
+{
+	BarApp_t app = {0};
+	BarWsContext_t ctx;
+	BarSettingsInit (&app.settings);
+	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	player_primitives_init (&app);
+	attach_ws_context_for_test (&app, &ctx);
+	pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL);
+	UiVolumeUpdate cli = {.app = &app}, websocket = {.app = &app, .websocket = true};
+	pthread_t cliThread, websocketThread;
+	ck_assert_int_eq (pthread_create (&cliThread, NULL, ui_concurrent_volume, &cli), 0);
+	ck_assert_int_eq (pthread_create (&websocketThread, NULL, ui_concurrent_volume, &websocket), 0);
+	ck_assert_int_eq (pthread_join (cliThread, NULL), 0);
+	ck_assert_int_eq (pthread_join (websocketThread, NULL), 0);
+	const int value = BarPlayerGetVolume (&app.player);
+	ck_assert (value == 72 || value == 73);
+	ck_assert_int_eq (app.settings.volume, value);
+	ck_assert (!app.player.audioBusy && app.player.audioControlWaiters == 0);
+	BarUiActVolReset (&app, NULL, NULL, 1);
+	ck_assert_int_eq (BarPlayerGetVolume (&app.player), DEFAULT_VOLUME_PERCENT);
+	ck_assert_int_eq (app.settings.volume, DEFAULT_VOLUME_PERCENT);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	ws_context_destroy (&ctx);
 	player_primitives_destroy (&app);
 	BarSettingsDestroy (&app.settings);
 }
@@ -1960,7 +2398,13 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_pandora_reconnect_no_credentials);
 	tcase_add_test (tc, test_ui_act_help_runs_dispatch_loop);
 	tcase_add_test (tc, test_ui_act_play_pause_toggle);
+	tcase_add_test (tc, test_ui_act_rejected_controls_preserve_last_broadcast);
+	tcase_add_test (tc, test_ui_act_controls_complete_real_sound_before_broadcast);
+	tcase_add_test (tc, test_ui_act_pending_pause_suppresses_delayed_play_state);
+	tcase_add_test (tc, test_ui_act_delayed_play_state_cannot_replace_newer_final_event);
+	tcase_add_test (tc, test_ui_act_completed_state_survives_unrelated_audio_owner);
 	tcase_add_test (tc, test_ui_act_volume_player_mode);
+	tcase_add_test (tc, test_ui_act_cli_and_websocket_volume_updates_share_runtime_value);
 	tcase_add_test (tc, test_ui_act_debug_prints_fields);
 	tcase_add_test (tc, test_ui_act_skip_song_sets_do_quit);
 	tcase_add_test (tc, test_ui_act_quit);

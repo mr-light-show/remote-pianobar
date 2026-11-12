@@ -654,7 +654,7 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 		volumePercent = BarSystemVolumeGet ();
 		if (volumePercent < 0) volumePercent = VOLUME_FALLBACK_PERCENT;
 	} else {
-		volumePercent = app->settings.volume;
+		volumePercent = BarPlayerGetVolume (&app->player);
 	}
 	json_object_object_add (data, "volume", json_object_new_int (volumePercent));
 
@@ -1628,8 +1628,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 				/* Player volume mode - use percentage directly (linear 0-100) */
 				log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' → volume=%d%%\n", 
 				           action, volumePercent);
-				app->settings.volume = volumePercent;
-				BarPlayerSetVolume(&app->player);
+				BarPlayerSetVolume (&app->player, volumePercent);
 			}
 			
 			/* Schedule debounced broadcast (will read current volume at broadcast time) */
@@ -1754,7 +1753,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		BarSocketIoSetUnicastTarget(NULL);
 	}
 	
-	/* Note: Play/pause/toggle broadcast state via BarWsBroadcastPlayState() in ui_act.c.
+	/* Note: Play/pause/toggle broadcast completed snapshots in ui_act.c.
 	 * song.love / song.ban emit a full `process` (not `start`) via BarWsBroadcastProcess
 	 * in BarUiActLoveSong/BarUiActBanSong after a successful PIANO_REQUEST_RATE_SONG —
 	 * do not add BarSocketIoEmitStart here (duplicate). */
