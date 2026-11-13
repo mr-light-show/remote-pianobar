@@ -42,4 +42,16 @@
 #define BAR_JOIN_THREAD_ITERATIONS   100  /* Main: wait iterations for player thread exit (100 * 100ms = 10s) */
 #define BAR_STATION_ID_MAX           50   /* Max length for station ID string buffer */
 
+/* --- WebSocket outbound queues ---
+ * Measured payloads for a 200-station library with realistic song data:
+ * largest `process` frame ~0.7 KB, largest `stations` frame ~26.5 KB
+ * (roughly 130 bytes per station). Limits are sized from the stations frame:
+ * frame max >= 2x largest, per-client byte cap >= 4x largest. Message counts
+ * stay small to bound memory on a Raspberry Pi 3. */
+#define WS_FRAME_MAX_BYTES           (64 * 1024)   /* Largest single frame accepted */
+#define WS_CLIENT_MAX_BYTES          (256 * 1024)  /* Pending bytes per client queue */
+#define WS_CLIENT_MAX_MSGS           64            /* Pending frames per client queue */
+#define WS_INGRESS_MAX_BYTES         (256 * 1024)  /* Pending bytes in ingress queue */
+#define WS_INGRESS_MAX_MSGS          128           /* Pending frames in ingress queue */
+
 #endif /* BAR_CONSTANTS_H */
