@@ -129,7 +129,7 @@ static bool bar_l10n_load_file (const char *path, BarL10nPair_t **pairs,
 		while (ve > val && (ve[-1] == '\n' || ve[-1] == '\r')) {
 			*--ve = '\0';
 		}
-		if (*s == '\0') {
+		if (s == eq) {
 			continue;
 		}
 		if (!bar_l10n_append_pair (pairs, n, cap, s, val)) {
