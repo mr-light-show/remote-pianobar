@@ -44,6 +44,3 @@ staticFunction:src/websocket/core/websocket_lws_log.c
 staticFunction:src/websocket/daemon/daemon.c
 staticFunction:src/websocket/http/http_server.c
 staticFunction:src/websocket/protocol/socketio.c
-# cppcheck 2.13 (Ubuntu) does not report some findings that 2.18 does (staticFunction, const, etc.),
-# so tolerate suppressions that match nothing there instead of failing make lint
-unmatchedSuppression
