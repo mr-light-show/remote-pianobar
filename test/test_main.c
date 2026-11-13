@@ -59,6 +59,7 @@ Suite *libpiano_response_suite(void);
 
 Suite *websocket_suite(void);
 Suite *ws_outbox_suite(void);
+Suite *ws_commands_suite(void);
 Suite *http_server_suite(void);
 Suite *daemon_suite(void);
 Suite *socketio_suite(void);
@@ -75,6 +76,7 @@ int main(void) {
 
 	sr = srunner_create(websocket_suite());
 	srunner_add_suite(sr, ws_outbox_suite());
+	srunner_add_suite(sr, ws_commands_suite());
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
 	srunner_add_suite(sr, socketio_suite());

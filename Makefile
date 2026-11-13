@@ -44,7 +44,7 @@ PIANOBAR_DIR:=src
 # Third-party miniaudio wrapper: omit from cppcheck (vendored, multi-config noise)
 PIANOBAR_LINT_C:=$(filter-out ${PIANOBAR_DIR}/miniaudio_impl.c,$(wildcard ${PIANOBAR_DIR}/*.c))
 # New WebSocket modules covered by lint (the rest of src/websocket predates lint coverage)
-PIANOBAR_LINT_WS:=src/websocket/core/outbox.c
+PIANOBAR_LINT_WS:=src/websocket/core/outbox.c src/websocket/core/commands.c
 LOCALE_YAML:=$(wildcard locale/*.yaml)
 LOCALE_GEN_MARKER:=${PIANOBAR_DIR}/l10n_defaults_gen.c
 # Updated when codegen runs; avoids re-running Python on every `make locale-codegen` (e.g. after
@@ -79,6 +79,7 @@ PIANOBAR_SRC+=\
 	${WEBSOCKET_DIR}/core/websocket.c \
 	${WEBSOCKET_DIR}/core/websocket_lws_log.c \
 	${WEBSOCKET_DIR}/core/outbox.c \
+	${WEBSOCKET_DIR}/core/commands.c \
 	${WEBSOCKET_DIR}/http/http_server.c \
 	${WEBSOCKET_DIR}/protocol/socketio.c \
 	${WEBSOCKET_DIR}/protocol/error_messages.c \
@@ -315,6 +316,7 @@ BASE_TEST_SRC:=\
 WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_websocket.c \
 		${TEST_DIR}/unit/test_ws_outbox.c \
+		${TEST_DIR}/unit/test_ws_commands.c \
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
@@ -333,9 +335,9 @@ TEST_OBJ:=${TEST_SRC:.c=.o}
 BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/station_sort.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}
 
 # Link all objects including WebSocket modules
-${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/outbox.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
+${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/outbox.o ${WEBSOCKET_DIR}/core/commands.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/outbox.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/outbox.o ${WEBSOCKET_DIR}/core/commands.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}

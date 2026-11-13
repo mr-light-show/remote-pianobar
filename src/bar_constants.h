@@ -58,4 +58,17 @@
 #define WS_INGRESS_MAX_BYTES         (1024 * 1024) /* Pending bytes in ingress queue */
 #define WS_INGRESS_MAX_MSGS          128           /* Pending frames in ingress queue */
 
+/* --- WebSocket command queue (receive callbacks -> command worker) ---
+ * Commands are small JSON frames, typically < 1 KiB. The transport delivers
+ * at most LWS_RX_BUFFER_SIZE (4 KiB) per receive callback, and each callback
+ * is handled as one request, so 4 KiB is the largest request the queue ever
+ * sees (WS_CMD_MAX_REQUEST_BYTES). The byte cap is 16x that, so an empty
+ * queue always accepts one maximal request. 32 items bounds how far a stalled
+ * Pandora call can back up (a client sends a handful of controls per second;
+ * more means the client is misbehaving) and keeps worst-case memory at
+ * ~64 KiB on a Pi 3. */
+#define WS_CMD_MAX_REQUEST_BYTES     LWS_RX_BUFFER_SIZE /* Largest request one receive callback delivers */
+#define WS_CMD_MAX_ITEMS             32                 /* Pending commands in the worker queue */
+#define WS_CMD_MAX_BYTES             (64 * 1024)        /* Pending request bytes in the worker queue */
+
 #endif /* BAR_CONSTANTS_H */
