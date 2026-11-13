@@ -93,7 +93,8 @@ typedef struct {
 	int lastPolledVolume;         /* Last known system volume (-1 = unknown) */
 	time_t lastVolumePollTime;    /* Last poll timestamp (seconds) */
 	
-	/* Connections (WS thread only) */
+	/* Connections: the service thread mutates; producers only read IDs under
+	 * connMutex (BarWebsocketSend). Sockets are used on the service thread. */
 	BarWsConnection_t *connections;
 	size_t numConnections;
 	size_t maxConnections;
@@ -101,6 +102,8 @@ typedef struct {
 	/* Guards the connection table: the service thread mutates it, producers
 	 * resolve destination IDs against it in BarWebsocketSend. */
 	pthread_mutex_t connMutex;
+	/* Frame writer (NULL = lws_write); a seam so tests can observe delivery */
+	int (*writeFrame) (void *wsi, unsigned char *buf, size_t len);
 } BarWsContext_t;
 
 /* Initialize WebSocket server */
@@ -119,14 +122,24 @@ void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
                                             BarWsBucketType_t bucket,
                                             char *message);
 /*
- * Enqueue a pre-formatted Socket.IO event for `dest`, a connection ID or
- * BAR_WS_DEST_BROADCAST. Always takes ownership of `message` (freed on
- * failure). Returns false for a NULL app/context/message, or when `dest`
- * names no currently connected client (unknown, closed, or a reused slot).
- * Thread-safe; never exposes sockets to the caller.
+ * Send a pre-formatted Socket.IO event. Always takes ownership of `message`
+ * (freed on failure). Returns false for a NULL app/context/message, or when
+ * `dest` names no currently connected client (unknown, closed, or a reused
+ * slot).
+ *  - BAR_WS_DEST_BROADCAST: queued in `bucket` (latest-wins), thread-safe.
+ *  - A connection ID: delivered immediately to that client only, bypassing
+ *    the buckets and their STATE/PROGRESS side effects, like the unicast
+ *    path. Must be called on the service thread until the outbound queue
+ *    (Task 2) replaces this.
  */
 bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest,
                        BarWsBucketType_t bucket, char *message);
+
+/* Write `message` to every client (BAR_WS_DEST_BROADCAST) or only the client
+ * whose connection ID is `dest`; honors the thread-local unicast target.
+ * Service thread only. This is the single delivery routine. */
+void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
+                   BarWsConnId_t dest);
 
 /* Service-thread connection table updates (exposed for tests).
  * Add returns the new connection's ID, or 0 if the table is full. */
