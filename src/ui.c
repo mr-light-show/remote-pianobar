@@ -555,6 +555,87 @@ PianoStation_t *BarUiSelectStation (BarApp_t *app, PianoStation_t *stations,
 	return retStation;
 }
 
+/*	let user pick one of the account's stations without holding a pointer
+ *	into the shared station list while waiting for input: the list is copied
+ *	under the state lock (and again after the callback may have changed it)
+ *	@param app handle
+ *	@param prompt string
+ *	@param called if input was not a number
+ *	@param auto-select if only one station remains after filtering
+ *	@return id of the selected station (caller frees) or NULL
+ */
+char *BarUiSelectStationId (BarApp_t *app, const char *prompt,
+		BarUiSelectStationCallback_t callback, bool autoselect) {
+	char *retId = NULL;
+	char buf[BAR_INPUT_MAX];
+	BarStationSnapshotList_t snap;
+
+	memset (buf, 0, sizeof (buf));
+
+	do {
+		size_t lastDisplayed = 0, displayCount = 0;
+		bool selected = false;
+
+		if (!BarStateSnapshotStations (app, &snap) || snap.count == 0) {
+			BarStateFreeStationSnapshot (&snap);
+			BarUiMsg (&app->settings, MSG_ERR, "No station available.\n");
+			return NULL;
+		}
+		BarSortStationSnapshots (snap.items, snap.count,
+				app->settings.sortOrder);
+
+		for (size_t i = 0; i < snap.count; i++) {
+			const BarStationSnapshot_t *currStation = &snap.items[i];
+			const char *displayName = currStation->displayName ?
+					currStation->displayName : currStation->name;
+			/* filter stations */
+			if (BarStrCaseStr (displayName, buf) != NULL) {
+				BarUiMsg (&app->settings, MSG_LIST, "%2zi) %c%c%c %s\n", i,
+						currStation->isQuickMixed ? 'q' : ' ',
+						currStation->isQuickMix ? 'Q' : ' ',
+						!currStation->isCreator ? 'S' : ' ',
+						displayName);
+				++displayCount;
+				lastDisplayed = i;
+			}
+		}
+
+		BarUiMsg (&app->settings, MSG_QUESTION, "%s", prompt);
+		if (autoselect && displayCount == 1 && snap.count != 1) {
+			/* auto-select last remaining station */
+			BarUiMsg (&app->settings, MSG_NONE, "%zi\n", lastDisplayed);
+			retId = snap.items[lastDisplayed].id ?
+					strdup (snap.items[lastDisplayed].id) : NULL;
+			selected = true;
+		} else {
+			if (BarReadlineStr (buf, sizeof (buf), &app->input,
+					BAR_RL_DEFAULT) == 0) {
+				BarStateFreeStationSnapshot (&snap);
+				break;
+			}
+
+			if (isnumeric (buf)) {
+				unsigned long sel = strtoul (buf, NULL, 0);
+				if (sel < snap.count) {
+					retId = snap.items[sel].id ? strdup (snap.items[sel].id) : NULL;
+					selected = true;
+				}
+			}
+		}
+		BarStateFreeStationSnapshot (&snap);
+
+		/* hand over buffer to external function if it was not a station number */
+		if (!selected && callback != NULL) {
+			callback (app, buf);
+		}
+		if (selected) {
+			break;
+		}
+	} while (true);
+
+	return retId;
+}
+
 /*	let user pick one song
  *	@param app
  *	@param song list

@@ -25,7 +25,6 @@ constParameterCallback:src/ui.c
 constVariablePointer:src/ui.c
 staticFunction:src/ui.c
 variableScope:src/ui_act.c
-constParameterCallback:src/ui_act.c
 constVariablePointer:src/ui_act.c
 staticFunction:src/ui_act.c
 constParameterPointer:src/ui_readline.c

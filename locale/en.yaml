@@ -32,6 +32,8 @@ cli:
   invalid_song_url: "Invalid song url.\n"
   piano_reinit_failed: "Failed to reset Pandora session: %s\n"
   player_stop_timeout: "Timed out waiting for playback to stop.\n"
+  station_gone: "The station no longer exists.\n"
+  song_gone: "The song is no longer available.\n"
   player_thread_detach: "Player thread did not exit within 10s, detaching\n"
   piano_init_failed: "Initialization failed: %s\n"
   press_help: "Press %c for a list of commands.\n"

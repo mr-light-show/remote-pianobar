@@ -27,6 +27,7 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../src/main.h"
 #include "../../src/settings.h"
@@ -362,6 +363,78 @@ START_TEST (test_ui_dispatch_piano_lock_policy)
 }
 END_TEST
 
+static void ui_input_from_string (BarApp_t *app, const char *text) {
+	int pipefd[2];
+	ck_assert_int_eq (pipe (pipefd), 0);
+	ck_assert (write (pipefd[1], text, strlen (text)) == (ssize_t) strlen (text));
+	close (pipefd[1]);
+	FD_ZERO (&app->input.set);
+	FD_SET (pipefd[0], &app->input.set);
+	app->input.fds[0] = pipefd[0];
+	app->input.fds[1] = -1;
+	app->input.maxfd = pipefd[0] + 1;
+}
+
+static unsigned g_selectCallbackCalls;
+
+static void select_callback_toggles_all (BarApp_t *app, char *buf) {
+	g_selectCallbackCalls++;
+	if (strcmp (buf, "t") == 0) {
+		BarStateChangeQuickMixAll (app, BAR_QUICKMIX_TOGGLE_ALL);
+		*buf = '\0';
+	}
+}
+
+/* B4: stations are picked from a copy and returned by id */
+START_TEST (test_ui_select_station_id_returns_copied_id)
+{
+	BarApp_t app;
+	PianoStation_t a, b;
+	memset (&app, 0, sizeof (app));
+	memset (&a, 0, sizeof (a));
+	memset (&b, 0, sizeof (b));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.settings.sortOrder = BAR_SORT_NAME_AZ;
+	BarStateInit (&app);
+	a.id = "id-a";
+	a.name = "Alpha";
+	b.id = "id-b";
+	b.name = "Beta";
+	b.displayName = "Bravo";
+	app.ph.stations = PianoListAppendP (&a, &b);
+
+	/* "t" goes to the callback (which changes the list), then pick #1 */
+	g_selectCallbackCalls = 0;
+	ui_input_from_string (&app, "t\n1\n");
+	char *id = BarUiSelectStationId (&app, "Pick: ", select_callback_toggles_all, false);
+	ck_assert_str_eq (id, "id-b");
+	ck_assert_uint_eq (g_selectCallbackCalls, 1);
+	ck_assert (a.useQuickMix && b.useQuickMix);
+	free (id);
+	close (app.input.fds[0]);
+
+	/* Autoselect the only station matching the filter */
+	ui_input_from_string (&app, "Bra\n");
+	id = BarUiSelectStationId (&app, "Pick: ", NULL, true);
+	ck_assert_str_eq (id, "id-b");
+	free (id);
+	close (app.input.fds[0]);
+
+	/* Empty input aborts */
+	ui_input_from_string (&app, "\n");
+	ck_assert_ptr_null (BarUiSelectStationId (&app, "Pick: ", NULL, false));
+	close (app.input.fds[0]);
+
+	/* No stations */
+	app.ph.stations = NULL;
+	ck_assert_ptr_null (BarUiSelectStationId (&app, "Pick: ", NULL, false));
+
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -378,6 +451,7 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_ui_piano_call_http_hits_progress_cb);
 	tcase_add_test (tc, test_ui_piano_hold_suspend_resume);
 	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
+	tcase_add_test (tc, test_ui_select_station_id_returns_copied_id);
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
