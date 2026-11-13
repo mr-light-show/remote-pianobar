@@ -323,11 +323,6 @@ BarUiActCallback(BarUiActCreateStationFromSong) {
 	BarReadline (selectBuf, sizeof (selectBuf), "sa", &app->input,
 			BAR_RL_FULLRETURN, -1);
 	BarUiActInputEnd (app, &wait, &selStation, &selSong);
-	if (selSong == NULL) {
-		BarUiActSelectionGone (app, false);
-		return;
-	}
-	reqData.token = selSong->trackToken;
 	switch (selectBuf[0]) {
 		case 's':
 			reqData.type = PIANO_MUSICTYPE_SONG;
@@ -337,7 +332,10 @@ BarUiActCallback(BarUiActCreateStationFromSong) {
 			reqData.type = PIANO_MUSICTYPE_ARTIST;
 			break;
 	}
-	if (reqData.type != PIANO_MUSICTYPE_INVALID) {
+	if (reqData.type != PIANO_MUSICTYPE_INVALID && selSong == NULL) {
+		BarUiActSelectionGone (app, false);
+	} else if (reqData.type != PIANO_MUSICTYPE_INVALID) {
+		reqData.token = selSong->trackToken;
 		BarUiMsg (&app->settings, MSG_INFO, "Creating station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_CREATE_STATION, &reqData)) {
 			/* Update display names for newly created station */
@@ -997,7 +995,7 @@ static PianoSong_t *BarUiActSelectHistorySong (BarApp_t *app) {
 		PianoSong_t *song = NULL;
 		bool chosen = false;
 		if (len > 0 && strspn (buf, "0123456789") == len) {
-			const unsigned long i = strtoul (buf, NULL, 10);
+			const unsigned long i = strtoul (buf, NULL, 0);
 			if (i < count) {
 				chosen = true;
 				song = BarUiActFindSongByToken (app, tokens[i]);
