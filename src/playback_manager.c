@@ -156,9 +156,12 @@ static bool force_join_player_thread(BarApp_t *app, pthread_t *playerThread,
 static bool PlaybackManagerPlayerCleanup(BarApp_t *app, pthread_t *playerThread) {
 	void *threadRet = (void *)PLAYER_RET_HARDFAIL;
 
+	/* eventcmd dereferences the station and songs: keep them alive */
+	BarUiPianoHold(app);
 	BarUiStartEventCmd(&app->settings, "songfinish", BarStateGetCurrentStation(app),
 			BarStateGetPlaylist(app), &app->player, BarStateGetStationList(app), 
 			PIANO_RET_OK, CURLE_OK);
+	BarUiPianoRelease(app);
 
 	BarWsBroadcastSongStop(app);
 
@@ -310,11 +313,15 @@ static void *BarPlaybackManagerThread(void *data) {
 			PianoStation_t *nextStation = BarStateGetNextStation(app);
 			
 			if (playlist == NULL && nextStation != NULL && !atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
+				/* Re-read the station inside pianoHttpMutex before printing it */
+				BarUiPianoHold(app);
+				nextStation = BarStateGetNextStation(app);
 				PianoStation_t *curStation = BarStateGetCurrentStation(app);
 				
-				if (nextStation != curStation) {
+				if (nextStation != NULL && nextStation != curStation) {
 					BarUiPrintStation(&app->settings, nextStation);
 				}
+				BarUiPianoRelease(app);
 				
 			/* Fetch playlist from Pandora */
 			BarPlaybackFetchPlaylist (app);

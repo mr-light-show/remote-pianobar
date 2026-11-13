@@ -45,13 +45,25 @@ extern bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
 static bool BarPlaybackFetchPlaylistOnce (BarApp_t *app, PianoReturn_t *pRet,
 		CURLcode *wRet) {
 	PianoRequestDataGetPlaylist_t reqData;
+
+	/* Resolve the station after taking pianoHttpMutex, not before waiting
+	 * for it: a delete or session reset frees stations only while it is
+	 * held. */
+	BarUiPianoHold (app);
 	reqData.station = BarStateGetNextStation (app);
 	reqData.quality = app->settings.audioQuality;
+	if (reqData.station == NULL) {
+		/* Cleared (deleted, disconnected) while we waited */
+		BarUiPianoRelease (app);
+		return true;
+	}
 
 	BarUiMsg (&app->settings, MSG_INFO, "%s",
 	          BarL10nGet (&app->l10n, "cli.receiving_playlist"));
-	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
-	                     &reqData, pRet, wRet)) {
+	const bool fetched = BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
+	                                     &reqData, pRet, wRet);
+	BarUiPianoRelease (app);
+	if (!fetched) {
 		return false;
 	}
 
@@ -78,11 +90,13 @@ bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 	if (!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet)) {
 		/* Station pointers do not survive the session teardown: keep our own
 		 * copy of the id we were fetching so it can be resumed. */
-		const PianoStation_t * const station = BarStateGetNextStation (app);
 		char *resumeId = NULL;
+		BarUiPianoHold (app);
+		const PianoStation_t * const station = BarStateGetNextStation (app);
 		if (station != NULL && station->id != NULL) {
 			resumeId = strdup (station->id);
 		}
+		BarUiPianoRelease (app);
 
 		if (wRet == CURLE_ABORTED_BY_CALLBACK) {
 			BarStateSetNextStation (app, NULL);
@@ -105,12 +119,16 @@ bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 		free (resumeId);
 	}
 
+	/* eventcmd dereferences stations and songs: keep them alive */
+	BarUiPianoHold (app);
 	PianoStation_t *nextStation = BarStateGetNextStation (app);
 	BarStateSetCurrentStation (app, nextStation);
 	BarUiStartEventCmd (&app->settings, "stationfetchplaylist",
 	                    BarStateGetCurrentStation (app), BarStateGetPlaylist (app),
 	                    &app->player, BarStateGetStationList (app), pRet, wRet);
-	return BarStateGetPlaylist (app) != NULL;
+	const bool havePlaylist = BarStateGetPlaylist (app) != NULL;
+	BarUiPianoRelease (app);
+	return havePlaylist;
 }
 
 /*	Start a player thread for the first song in app->playlist.
@@ -121,13 +139,19 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 		return false;
 	}
 
+	/* The song and station are used until eventcmd returns; they are only
+	 * freed inside pianoHttpMutex. Order: pianoHttpMutex, then the player's
+	 * audio reservation (as in song actions that skip). */
+	BarUiPianoHold (app);
 	const PianoSong_t * const curSong = BarStateGetPlaylist (app);
 	if (curSong == NULL) {
+		BarUiPianoRelease (app);
 		return false;
 	}
 
 	PianoStation_t *curStation = BarStateGetCurrentStation (app);
 	if (curStation == NULL) {
+		BarUiPianoRelease (app);
 		return false;
 	}
 
@@ -138,13 +162,17 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 	static const char httpPrefix[] = "http://";
 	if (curSong->audioUrl == NULL ||
 	    strncmp (curSong->audioUrl, httpPrefix, strlen (httpPrefix)) != 0) {
+		BarUiPianoRelease (app);
 		BarUiMsg (&app->settings, MSG_ERR, "%s",
 		          BarL10nGet (&app->l10n, "cli.invalid_song_url"));
 		return false;
 	}
 
 	player_t * const player = &app->player;
-	if (!BarPlayerReset (player)) { return false; }
+	if (!BarPlayerReset (player)) {
+		BarUiPianoRelease (app);
+		return false;
+	}
 
 	app->player.url = curSong->audioUrl;
 	app->player.gain = curSong->fileGain;
@@ -155,6 +183,7 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 	BarUiStartEventCmd (&app->settings, "songstart",
 	                    curStation, curSong, &app->player,
 	                    BarStateGetStationList (app), PIANO_RET_OK, CURLE_OK);
+	BarUiPianoRelease (app);
 
 	BarWsBroadcastSongStart (app);
 
