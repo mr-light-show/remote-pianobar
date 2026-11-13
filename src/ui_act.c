@@ -103,7 +103,7 @@ bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_UI);
 }
 
-/*	Logged version of BarTransformIfShared for WebSocket thread
+/*	Logged version of BarTransformIfShared for WebSocket commands
  *	@return false on error, true on success
  */
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {

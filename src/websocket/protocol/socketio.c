@@ -1733,7 +1733,7 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 	} else if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_UPCOMING) {
 		BarUiActPrintUpcomingTo (app, requester);
 	} else {
-		/* Execute action directly by ID in WebSocket thread
+		/* Execute action directly by ID on the command worker
 		 * 
 		 * THREAD SAFETY: This call may trigger state lock acquisition via:
 		 * - BarStateGet* / BarStateSet* use stateRwlock in web and both (BarStateUsesRwlock)

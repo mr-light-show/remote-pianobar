@@ -80,6 +80,7 @@ static const BarL10nDefaultPair_t bar_l10n_defaults[] = {
 	{ "web.pandora_reconnect_unknown_account", "Unknown account" },
 	{ "web.query_upcoming_empty", "No songs in queue" },
 	{ "web.socket.action_context", "Action cannot be performed in current context" },
+	{ "web.socket.busy", "The player is busy. Try again in a moment." },
 	{ "web.socket.no_song_playing", "No song is currently playing" },
 	{ "web.socket.no_station_selected", "No station is selected" },
 	{ "web.socket.not_connected", "Not connected to Pandora" },
