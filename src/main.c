@@ -368,8 +368,18 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 		} else {
 			context |= BAR_DC_PANDORA_DISCONNECTED;
 		}
+		/* Resolve the selection inside pianoHttpMutex for actions that use
+		 * it; songs and stations are only freed while it is held */
+		const bool hold = BarUiDispatchHoldsPianoLock (
+				BarUiDispatchKeyToId (app, buf[0]));
+		if (hold) {
+			BarUiPianoHold (app);
+		}
 		BarUiDispatch (app, buf[0], BarStateGetCurrentStation(app), 
 				BarStateGetPlaylist(app), true, context);
+		if (hold) {
+			BarUiPianoRelease (app);
+		}
 	}
 }
 

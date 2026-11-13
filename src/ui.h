@@ -53,6 +53,13 @@ void BarUiStartEventCmd (const BarSettings_t *, const char *,
 		PianoStation_t *, PianoReturn_t, CURLcode);
 void BarUiPianoHttpMutexInit (BarApp_t *app);
 void BarUiPianoHttpMutexDestroy (BarApp_t *app);
+/* Hold pianoHttpMutex across resolving and using borrowed libpiano pointers.
+ * Holds are counted per thread so Suspend can release them all before a wait
+ * for terminal input and Resume can take them back. */
+void BarUiPianoHold (BarApp_t *app);
+void BarUiPianoRelease (BarApp_t *app);
+unsigned int BarUiPianoSuspend (BarApp_t *app);
+void BarUiPianoResume (BarApp_t *app, unsigned int holds);
 typedef bool (*BarUiPianoCallTestHook_fn) (BarApp_t * const app,
 		const PianoRequestType_t type, void * const data,
 		PianoReturn_t * const pRet, CURLcode * const wRet);

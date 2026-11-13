@@ -342,6 +342,43 @@ void BarUiPianoHttpMutexDestroy (BarApp_t *app) {
 	pthread_mutex_destroy (&app->pianoHttpMutex);
 }
 
+/* pianoHttpMutex holds taken through BarUiPianoHold on this thread */
+static _Thread_local unsigned int g_barUiPianoHolds = 0;
+
+void BarUiPianoHold (BarApp_t *app) {
+	assert (app != NULL);
+	pthread_mutex_lock (&app->pianoHttpMutex);
+	g_barUiPianoHolds++;
+}
+
+void BarUiPianoRelease (BarApp_t *app) {
+	assert (app != NULL);
+	assert (g_barUiPianoHolds > 0);
+	if (g_barUiPianoHolds == 0) {
+		return;
+	}
+	g_barUiPianoHolds--;
+	pthread_mutex_unlock (&app->pianoHttpMutex);
+}
+
+/*	Release every hold of this thread, e.g. before waiting for terminal input.
+ *	Pointers resolved under the hold are invalid afterwards.
+ *	@return number of holds to give back to BarUiPianoResume
+ */
+unsigned int BarUiPianoSuspend (BarApp_t *app) {
+	const unsigned int holds = g_barUiPianoHolds;
+	while (g_barUiPianoHolds > 0) {
+		BarUiPianoRelease (app);
+	}
+	return holds;
+}
+
+void BarUiPianoResume (BarApp_t *app, unsigned int holds) {
+	while (holds-- > 0) {
+		BarUiPianoHold (app);
+	}
+}
+
 static BarUiPianoCallTestHook_fn g_barUiPianoCallTestHook = NULL;
 
 void BarUiPianoCallSetTestHook (BarUiPianoCallTestHook_fn hook) {
@@ -1006,6 +1043,9 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 	/* make sure it's a single song */
 	assert (PianoListNextP (song) == NULL);
 
+	/* History songs are borrowed by CLI history actions: change and free
+	 * the list inside pianoHttpMutex (BarStateFreeSongs). */
+	pthread_mutex_lock (&app->pianoHttpMutex);
 	if (app->settings.history != 0) {
 		app->songHistory = PianoListPrependP (app->songHistory, song);
 		PianoSong_t *del;
@@ -1013,14 +1053,15 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 			del = PianoListGetP (app->songHistory, app->settings.history);
 			if (del != NULL) {
 				app->songHistory = PianoListDeleteP (app->songHistory, del);
-				PianoDestroyPlaylist (del);
+				BarStateFreeSongs (app, del);
 			} else {
 				break;
 			}
 		} while (true);
 	} else {
-		PianoDestroyPlaylist (song);
+		BarStateFreeSongs (app, song);
 	}
+	pthread_mutex_unlock (&app->pianoHttpMutex);
 }
 
 

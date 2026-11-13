@@ -2657,6 +2657,68 @@ START_TEST (test_get_genres_fetch_holds_piano_mutex) {
 }
 END_TEST
 
+/* B1: song actions resolve the current song and station inside
+ * pianoHttpMutex and keep it for the whole Pandora call */
+START_TEST (test_song_actions_hold_piano_mutex_across_song_use) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.decoderLock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.decoderCond, NULL), 0);
+	app.player.settings = &app.settings;
+	station.isCreator = true;
+	song.trackToken = "token";
+	app.playlist = &song;
+	app.ph.user.listenerId = "listener";
+
+	static const char * const actions[] = {
+		"song.love", "song.ban", "song.tired", "song.explain",
+	};
+	for (size_t i = 0; i < sizeof (actions) / sizeof (actions[0]); i++) {
+		g_pianoCallsLocked = 0;
+		g_pianoCallsUnlocked = 0;
+		BarUiPianoCallSetTestHook (mock_piano_call_records_mutex);
+		BarSocketIoHandleAction (&app, actions[i], NULL, test_ws_cap.ids[0]);
+		BarUiPianoCallClearTestHook ();
+		ck_assert_msg (g_pianoCallsUnlocked == 0,
+				"%s used the song outside pianoHttpMutex", actions[i]);
+		ck_assert_msg (g_pianoCallsLocked == 1, "%s made no Pandora call", actions[i]);
+	}
+	/* The hold is released when the action returns */
+	ck_assert (!piano_mutex_held_by_caller (&app));
+
+	app.ph.user.listenerId = NULL;
+	pthread_cond_destroy (&app.player.decoderCond);
+	pthread_mutex_destroy (&app.player.decoderLock);
+	pthread_cond_destroy (&app.player.cond);
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+/* A failed context check releases the hold too */
+START_TEST (test_song_action_context_error_releases_piano_mutex) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	app.ph.user.listenerId = "listener";
+
+	BarSocketIoHandleAction (&app, "song.love", NULL, test_ws_cap.ids[0]);
+	ck_assert (!piano_mutex_held_by_caller (&app));
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "error"), 1);
+
+	app.ph.user.listenerId = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
 typedef struct {
 	BarApp_t *app;
 	BarWsConnId_t requester;
@@ -2816,6 +2878,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test (tc_ptr, test_delete_current_station_switches_to_quickmix);
 	tcase_add_test (tc_ptr, test_get_genres_fetch_holds_piano_mutex);
 	tcase_add_test (tc_ptr, test_upcoming_reads_queue_under_state_lock);
+	tcase_add_test (tc_ptr, test_song_actions_hold_piano_mutex_across_song_use);
+	tcase_add_test (tc_ptr, test_song_action_context_error_releases_piano_mutex);
 	suite_add_tcase (s, tc_ptr);
 	
 	return s;

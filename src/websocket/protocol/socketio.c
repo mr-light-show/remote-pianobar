@@ -1675,6 +1675,19 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 		context |= BAR_DC_PANDORA_DISCONNECTED;
 	}
 	
+	/* When Pandora is disconnected, treat playback.play as reconnect so clients can always send "play" */
+	if (actionId == BAR_KS_PLAY && (context & BAR_DC_PANDORA_DISCONNECTED)) {
+		actionId = BAR_KS_PANDORA_RECONNECT;
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
+	}
+
+	/* Actions that use the selection resolve it, and run, inside
+	 * pianoHttpMutex: stations and songs are only freed while it is held. */
+	const bool hold = BarUiDispatchHoldsPianoLock (actionId);
+	if (hold) {
+		BarUiPianoHold (app);
+	}
+	
 	/* Add station context if station is selected */
 	PianoStation_t *currentStation = BarStateGetCurrentStation(app);
 	if (currentStation) {
@@ -1685,12 +1698,6 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 	PianoSong_t *currentSong = BarStateGetPlaylist(app);
 	if (currentSong) {
 		context |= BAR_DC_SONG;
-	}
-	
-	/* When Pandora is disconnected, treat playback.play as reconnect so clients can always send "play" */
-	if (actionId == BAR_KS_PLAY && (context & BAR_DC_PANDORA_DISCONNECTED)) {
-		actionId = BAR_KS_PANDORA_RECONNECT;
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
 	}
 	
 	/* Check if action can be executed in current context */
@@ -1709,6 +1716,9 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 			errorMsg = "Action cannot be performed in current context";
 		}
 		
+		if (hold) {
+			BarUiPianoRelease (app);
+		}
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' failed: %s\n", action, errorMsg);
 		BarSocketIoEmitError(app, action, errorMsg);
 		return;
@@ -1720,23 +1730,23 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 	 * callers) the terminal callbacks run as before. */
 	if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_EXPLAIN) {
 		BarUiActExplainTo (app, currentStation, currentSong, requester);
-		return;
-	}
-	if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_UPCOMING) {
+	} else if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_UPCOMING) {
 		BarUiActPrintUpcomingTo (app, requester);
-		return;
+	} else {
+		/* Execute action directly by ID in WebSocket thread
+		 * 
+		 * THREAD SAFETY: This call may trigger state lock acquisition via:
+		 * - BarStateGet* / BarStateSet* use stateRwlock in web and both (BarStateUsesRwlock)
+		 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
+		 * - BarUiPianoCall (Pandora HTTP) serializes on app->pianoHttpMutex
+		 * 
+		 * Lock ordering: pianoHttpMutex → stateRwlock; stateRwlock and
+		 * player.lock are never nested. See src/THREAD_SAFETY.md for details */
+		BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
 	}
-	
-	/* Execute action directly by ID in WebSocket thread
-	 * 
-	 * THREAD SAFETY: This call may trigger state lock acquisition via:
-	 * - BarStateGet* / BarStateSet* use stateRwlock in web and both (BarStateUsesRwlock)
-	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
-	 * - BarUiPianoCall (Pandora HTTP) serializes on app->pianoHttpMutex
-	 * 
-	 * Lock ordering is safe: stateRwlock → player.lock (if both needed)
-	 * See src/THREAD_SAFETY.md for details */
-	BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
+	if (hold) {
+		BarUiPianoRelease (app);
+	}
 	
 	/* Note: Play/pause/toggle broadcast completed snapshots in ui_act.c.
 	 * song.love / song.ban emit a full `process` (not `start`) via BarWsBroadcastProcess

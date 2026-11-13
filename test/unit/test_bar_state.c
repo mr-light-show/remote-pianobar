@@ -24,6 +24,8 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <errno.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include "../../src/main.h"
@@ -31,6 +33,7 @@ THE SOFTWARE.
 #include "../../src/settings.h"
 #include "../../src/station_display.h"
 #include "../../src/log.h"
+#include "../../src/ui.h"
 
 /* Minimal station for FindStationById tests (list has one element). */
 static PianoStation_t station_a;
@@ -1288,6 +1291,111 @@ START_TEST (test_bar_state_last_station_id_concurrent_set_take)
 }
 END_TEST
 
+/* --- B1: songs are freed only inside pianoHttpMutex --- */
+
+static void *song_free_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static unsigned g_songFreesLocked;
+static unsigned g_songFreesUnlocked;
+
+/* pianoHttpMutex is recursive, so ask another thread whether it is held */
+static void song_free_records_mutex (BarApp_t *app, const PianoSong_t *songs) {
+	(void) songs;
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, song_free_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	if ((intptr_t) rc == EBUSY) {
+		g_songFreesLocked++;
+	} else {
+		g_songFreesUnlocked++;
+	}
+}
+
+static PianoSong_t *song_list_new (size_t count) {
+	PianoSong_t *list = NULL;
+	for (size_t i = 0; i < count; i++) {
+		PianoSong_t *song = calloc (1, sizeof (*song));
+		ck_assert_ptr_nonnull (song);
+		list = PianoListAppendP (list, song);
+	}
+	return list;
+}
+
+static void song_free_app_setup (BarApp_t *app) {
+	bar_state_test_setup (app, BAR_UI_MODE_BOTH);
+	ck_assert_int_eq (pthread_mutex_init (&app->player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app->player.cond, NULL), 0);
+	BarUiPianoHttpMutexInit (app);
+	g_songFreesLocked = 0;
+	g_songFreesUnlocked = 0;
+	BarStateSetSongFreeTestHook (song_free_records_mutex);
+}
+
+static void song_free_app_teardown (BarApp_t *app) {
+	BarStateSetSongFreeTestHook (NULL);
+	BarStateFreeSongs (app, app->playlist);
+	app->playlist = NULL;
+	BarStateFreeSongs (app, app->songHistory);
+	app->songHistory = NULL;
+	BarUiPianoHttpMutexDestroy (app);
+	pthread_cond_destroy (&app->player.cond);
+	pthread_mutex_destroy (&app->player.lock);
+	bar_state_test_teardown (app);
+}
+
+START_TEST (test_bar_state_playlist_frees_hold_piano_mutex)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&station, 0, sizeof (station));
+	station.id = "sid";
+	station.name = "Station";
+	song_free_app_setup (&app);
+	app.ph.stations = &station;
+
+	app.playlist = song_list_new (3);
+	BarStateTruncatePlaylistTail (&app);
+	app.playlist->head.next = &song_list_new (1)->head;
+	BarStatePrepareStationSwitch (&app, &station);
+	app.playlist->head.next = &song_list_new (1)->head;
+	ck_assert (BarStatePrepareStationSwitchById (&app, "sid"));
+	BarStateDrainPlaylist (&app);
+	app.playlist = song_list_new (2);
+	BarStateSwitchStation (&app, &station);
+
+	ck_assert_uint_eq (g_songFreesLocked, 5);
+	ck_assert_uint_eq (g_songFreesUnlocked, 0);
+	song_free_app_teardown (&app);
+}
+END_TEST
+
+START_TEST (test_history_frees_hold_piano_mutex)
+{
+	BarApp_t app;
+	song_free_app_setup (&app);
+
+	/* Trimming the history past its size frees the oldest song */
+	app.settings.history = 1;
+	BarUiHistoryPrepend (&app, song_list_new (1));
+	BarUiHistoryPrepend (&app, song_list_new (1));
+	/* History disabled: the finished song is freed at once */
+	app.settings.history = 0;
+	BarUiHistoryPrepend (&app, song_list_new (1));
+
+	ck_assert_uint_eq (g_songFreesLocked, 2);
+	ck_assert_uint_eq (g_songFreesUnlocked, 0);
+	song_free_app_teardown (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -1341,6 +1449,8 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_misc, test_bar_state_delete_station_response_clears_current_and_next);
 	tcase_add_test(tc_misc, test_bar_state_last_station_id_set_and_take);
 	tcase_add_test(tc_misc, test_bar_state_last_station_id_concurrent_set_take);
+	tcase_add_test(tc_misc, test_bar_state_playlist_frees_hold_piano_mutex);
+	tcase_add_test(tc_misc, test_history_frees_hold_piano_mutex);
 	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 

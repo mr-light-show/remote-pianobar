@@ -130,3 +130,10 @@ BarKeyShortcutId_t BarUiDispatchById (BarApp_t *, BarKeyShortcutId_t, PianoStati
 
 const BarUiDispatchAction_t *BarUiDispatchLookupById(BarKeyShortcutId_t id);
 
+/* Action bound to `key`, or BAR_KS_COUNT */
+BarKeyShortcutId_t BarUiDispatchKeyToId (const BarApp_t *app, char key);
+
+/* True when the dispatcher must hold pianoHttpMutex (BarUiPianoHold) from
+ * resolving the selected station/song until the action returns */
+bool BarUiDispatchHoldsPianoLock (BarKeyShortcutId_t id);
+

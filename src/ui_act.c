@@ -752,10 +752,12 @@ static bool BarSessionTeardown(BarApp_t *app,
 	}
 	
 	if (freeSongHistory) {
+		pthread_mutex_lock(&app->pianoHttpMutex);
 		if (app->songHistory != NULL) {
-			PianoDestroyPlaylist(app->songHistory);
+			BarStateFreeSongs(app, app->songHistory);
 			app->songHistory = NULL;
 		}
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 	}
 	
 	/* Disconnect from Pandora (destroys stations, user info, partner).

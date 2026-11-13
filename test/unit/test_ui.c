@@ -33,6 +33,10 @@ THE SOFTWARE.
 #include "../../src/bar_state.h"
 #include "../../src/ui.h"
 #include "../../src/libpiano/piano.h"
+#include "../../src/ui_dispatch.h"
+#include <errno.h>
+#include <pthread.h>
+#include <stdint.h>
 
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
@@ -293,6 +297,71 @@ START_TEST (test_ui_piano_call_http_hits_progress_cb)
 }
 END_TEST
 
+static void *ui_piano_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static bool ui_piano_mutex_held (BarApp_t *app) {
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, ui_piano_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	return (intptr_t) rc == EBUSY;
+}
+
+/* Suspend gives up every hold of this thread (e.g. before terminal input);
+ * Resume takes the same number back */
+START_TEST (test_ui_piano_hold_suspend_resume)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarUiPianoHttpMutexInit (&app);
+
+	ck_assert_uint_eq (BarUiPianoSuspend (&app), 0);
+	BarUiPianoResume (&app, 0);
+	ck_assert (!ui_piano_mutex_held (&app));
+
+	BarUiPianoHold (&app);
+	BarUiPianoHold (&app);
+	ck_assert (ui_piano_mutex_held (&app));
+	const unsigned int holds = BarUiPianoSuspend (&app);
+	ck_assert_uint_eq (holds, 2);
+	ck_assert (!ui_piano_mutex_held (&app));
+	BarUiPianoResume (&app, holds);
+	ck_assert (ui_piano_mutex_held (&app));
+	BarUiPianoRelease (&app);
+	ck_assert (ui_piano_mutex_held (&app));
+	BarUiPianoRelease (&app);
+	ck_assert (!ui_piano_mutex_held (&app));
+
+	BarUiPianoHttpMutexDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_ui_dispatch_piano_lock_policy)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.keys[BAR_KS_LOVE] = '+';
+
+	ck_assert_int_eq (BarUiDispatchKeyToId (&app, '+'), BAR_KS_LOVE);
+	ck_assert_int_eq (BarUiDispatchKeyToId (&app, '\x7f'), BAR_KS_COUNT);
+	ck_assert (BarUiDispatchHoldsPianoLock (BAR_KS_LOVE));
+	ck_assert (BarUiDispatchHoldsPianoLock (BAR_KS_EXPLAIN));
+	ck_assert (!BarUiDispatchHoldsPianoLock (BAR_KS_PLAYPAUSE));
+	ck_assert (!BarUiDispatchHoldsPianoLock (BAR_KS_PANDORA_RECONNECT));
+	ck_assert (!BarUiDispatchHoldsPianoLock (BAR_KS_COUNT));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -307,6 +376,8 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
 	tcase_add_test (tc, test_ui_piano_call_http_hits_progress_cb);
+	tcase_add_test (tc, test_ui_piano_hold_suspend_resume);
+	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
