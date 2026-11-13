@@ -8,7 +8,6 @@
 /* --- WebSocket --- */
 #define WEBSOCKET_PING_TIMEOUT_SEC    25   /* Send PING after this many seconds idle */
 #define WEBSOCKET_HANGUP_TIMEOUT_SEC  60   /* Hang up if no valid PING response within this */
-#define WEBSOCKET_POLL_MS             50   /* lws_service() poll interval (ms) */
 #define LWS_RX_BUFFER_SIZE            4096 /* Per-protocol receive buffer size (libwebsockets) */
 #define WEBSOCKET_FILEPATH_MAX        512  /* Max filepath length for webui / static files */
 #define LOG_MESSAGE_TRUNCATE_LEN      100  /* Truncate long messages in log output to this many chars */
