@@ -51,6 +51,7 @@ typedef struct {
 
 /* WebSocket connection state */
 typedef struct {
+	BarWsConnId_t id;             /* Connection ID (service thread assigns) */
 	void *wsi;                    /* libwebsockets instance */
 	bool authenticated;           /* Authentication status */
 	bool pendingClose;            /* Connection marked for close (app.stop) */
@@ -96,6 +97,10 @@ typedef struct {
 	BarWsConnection_t *connections;
 	size_t numConnections;
 	size_t maxConnections;
+	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
+	/* Guards the connection table: the service thread mutates it, producers
+	 * resolve destination IDs against it in BarWebsocketSend. */
+	pthread_mutex_t connMutex;
 } BarWsContext_t;
 
 /* Initialize WebSocket server */
@@ -113,6 +118,22 @@ void BarWebsocketDestroy(BarApp_t *app);
 void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
                                             BarWsBucketType_t bucket,
                                             char *message);
+/*
+ * Enqueue a pre-formatted Socket.IO event for `dest`, a connection ID or
+ * BAR_WS_DEST_BROADCAST. Always takes ownership of `message` (freed on
+ * failure). Returns false for a NULL app/context/message, or when `dest`
+ * names no currently connected client (unknown, closed, or a reused slot).
+ * Thread-safe; never exposes sockets to the caller.
+ */
+bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest,
+                       BarWsBucketType_t bucket, char *message);
+
+/* Service-thread connection table updates (exposed for tests).
+ * Add returns the new connection's ID, or 0 if the table is full. */
+BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
+                                  const char *protocol);
+void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi);
+
 /* Same ownership contract; rejects older completed play-state epochs under
  * STATE's mutex. The watermark survives consumption and generic messages.
  * Callers snapshot stable player state, then release every application lock.

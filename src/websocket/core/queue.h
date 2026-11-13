@@ -24,6 +24,11 @@ THE SOFTWARE.
 #define _WEBSOCKET_QUEUE_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+/* Connection ID, assigned on the service thread; 0 is never assigned */
+typedef uint64_t BarWsConnId_t;
+#define BAR_WS_DEST_BROADCAST ((BarWsConnId_t) 0)
 
 /* Message types for bucket communication */
 typedef enum {
@@ -44,6 +49,7 @@ typedef struct BarWsMessage {
 	BarWsMsgType_t type;           /* Message type */
 	void *data;                    /* Message payload (owned by message) */
 	size_t dataLen;                /* Payload length */
+	BarWsConnId_t dest;            /* Recipient, or BAR_WS_DEST_BROADCAST */
 	struct BarWsMessage *next;     /* Next message in linked list */
 } BarWsMessage_t;
 
