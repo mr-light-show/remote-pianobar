@@ -481,9 +481,8 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	BarStateInit (&app);
 	pthread_mutex_init (&app.player.lock, NULL);
 	pthread_cond_init (&app.player.cond, NULL);
-	for (int i = 0; i < BUCKET_COUNT; ++i) {
-		pthread_mutex_init (&ctx.buckets[i].mutex, NULL);
-	}
+	ctx.outbox = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (ctx.outbox);
 	app.wsContext = &ctx;
 	app.player.mode = PLAYER_PLAYING;
 	app.player.doPause = true;
@@ -497,9 +496,7 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 		usleep (50000);
 	}
 	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), &station);
-	pthread_mutex_lock (&ctx.buckets[BUCKET_PROGRESS].mutex);
-	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_PROGRESS].mutex);
+	ck_assert_ptr_null (BarWsOutboxTake (ctx.outbox));
 	/* Resume before the minute deadline; the next ordinary tick must publish
 	 * actual progress, proving the paused deadline was abandoned on its wake. */
 	pthread_mutex_lock (&app.player.lock);
@@ -508,18 +505,21 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
 	usleep (1200000);
-	pthread_mutex_lock (&ctx.buckets[BUCKET_PROGRESS].mutex);
-	BarWsMessage_t *message = ctx.buckets[BUCKET_PROGRESS].message;
+	BarWsPending_t *message = BarWsOutboxTake (ctx.outbox);
 	ck_assert_ptr_nonnull (message);
-	json_object *event = json_tokener_parse ((char *) message->data + 1);
+	ck_assert_ptr_null (message->next);
+	ck_assert_int_eq (message->key, BAR_WS_KEY_PROGRESS);
+	char *text = strndup ((const char *) BarWsFrameData (message->frame),
+			BarWsFrameLen (message->frame));
+	ck_assert_ptr_nonnull (text);
+	json_object *event = json_tokener_parse (text + 1);
+	free (text);
 	ck_assert_ptr_nonnull (event);
 	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (event, 0)), "progress");
 	json_object *payload = json_object_array_get_idx (event, 1);
 	ck_assert_int_eq (json_object_get_int (json_object_object_get (payload, "elapsed")), 7);
 	json_object_put (event);
-	BarWsMessageFree (message);
-	ctx.buckets[BUCKET_PROGRESS].message = NULL;
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_PROGRESS].mutex);
+	BarWsPendingFree (message);
 	pthread_mutex_lock (&app.player.lock);
 	app.player.doPause = true;
 	app.player.pauseStartTime = time (NULL);
@@ -527,14 +527,9 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
 	usleep (1200000);
-	pthread_mutex_lock (&ctx.buckets[BUCKET_PROGRESS].mutex);
-	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_PROGRESS].mutex);
+	ck_assert_ptr_null (BarWsOutboxTake (ctx.outbox));
 	BarPlaybackManagerStop (&app);
-	for (int i = 0; i < BUCKET_COUNT; ++i) {
-		BarWsMessageFree (ctx.buckets[i].message);
-		pthread_mutex_destroy (&ctx.buckets[i].mutex);
-	}
+	BarWsOutboxFree (ctx.outbox);
 	pthread_cond_destroy (&app.player.cond);
 	pthread_mutex_destroy (&app.player.lock);
 	BarStateDestroy (&app);

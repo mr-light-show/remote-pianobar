@@ -55,7 +55,7 @@ void BarSocketIoHandleMessage (BarApp_t *app, const char *message, BarWsConnId_t
    Passing data=NULL produces a no-payload frame: 2["eventName"] */
 char *BarSocketIoFormatEventMessage (const char *event, struct json_object *data);
 
-/* Emit event now to `dest` (a client, or BAR_WS_DEST_BROADCAST); unbucketed */
+/* Queue event for `dest` (a client, or BAR_WS_DEST_BROADCAST) as an ordered frame */
 void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
                       struct json_object *data);
 

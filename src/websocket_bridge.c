@@ -60,7 +60,7 @@ void BarWsBroadcastVolume(BarApp_t *app) {
 		struct json_object *vol = json_object_new_int (volumePercent);
 		char *msg = BarSocketIoFormatEventMessage ("volume", vol);
 		json_object_put (vol);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_VOLUME, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_VOLUME, msg);
 	}
 }
 
@@ -81,7 +81,7 @@ void BarWsBroadcastSongStart(BarApp_t *app) {
 		struct json_object *data = BarSocketIoBuildStartPayload (app);
 		char *msg = BarSocketIoFormatEventMessage ("start", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketBroadcastSongStart (app, msg);
 	}
 }
 
@@ -90,20 +90,23 @@ void BarWsBroadcastProcess(BarApp_t *app) {
 		struct json_object *data = BarSocketIoBuildProcessPayload (app);
 		char *msg = BarSocketIoFormatEventMessage ("process", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }
 
 void BarWsBroadcastSongStop(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
 		char *msg = BarSocketIoFormatEventMessage ("stop", NULL);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }
 
 void BarWsBroadcastProgress(BarApp_t *app) {
 	if (!app || app->settings.uiMode == BAR_UI_MODE_CLI || !app->wsContext) return;
 
+	/* Observe the song generation before sampling, so a sample of a song
+	 * that ends meanwhile is dropped instead of shown for the next one. */
+	uint32_t generation = BarWebsocketSongGeneration (app);
 	player_t *player = &app->player;
 	pthread_mutex_lock (&player->lock);
 	if (player->mode != PLAYER_PLAYING || player->doPause) {
@@ -114,9 +117,13 @@ void BarWsBroadcastProgress(BarApp_t *app) {
 	unsigned int duration = player->songDuration;
 	pthread_mutex_unlock (&player->lock);
 
+	/* De-duplication is producer-side only: just this (playback manager)
+	 * thread reads or writes ctx->progress. */
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	if (elapsed == ctx->progress.lastBroadcast) return;
+	if (elapsed == ctx->progress.lastBroadcast &&
+			generation == ctx->progress.lastGeneration) return;
 	ctx->progress.lastBroadcast = elapsed;
+	ctx->progress.lastGeneration = generation;
 
 	float pct = (duration > 0) ? (elapsed * 100.0f) / (float)duration : 0.0f;
 	struct json_object *data = json_object_new_object ();
@@ -125,7 +132,7 @@ void BarWsBroadcastProgress(BarApp_t *app) {
 	json_object_object_add (data, "percentage", json_object_new_double ((double)pct));
 	char *msg = BarSocketIoFormatEventMessage ("progress", data);
 	json_object_put (data);
-	BarWebsocketBroadcastSocketIoMessage (app, BUCKET_PROGRESS, msg);
+	BarWebsocketBroadcastProgress (app, generation, msg);
 }
 
 void BarWsBroadcastPlayState(BarApp_t *app) {
@@ -159,7 +166,7 @@ void BarWsBroadcastStations(BarApp_t *app) {
 		struct json_object *data = BarSocketIoBuildStationsPayload (app);
 		char *msg = BarSocketIoFormatEventMessage ("stations", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATIONS, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_STATIONS, msg);
 	}
 }
 
@@ -279,7 +286,7 @@ void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
 				json_object_new_string(reason ? reason : "unknown"));
 		char *msg = BarSocketIoFormatEventMessage ("pandora.disconnected", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }
 

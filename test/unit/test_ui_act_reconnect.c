@@ -100,6 +100,18 @@ mock_broadcast (const char *message, size_t len)
 	last_broadcast_msg[len] = '\0';
 }
 
+/* Latest frame a capture client received, after running the service-thread
+ * side when a capture is attached (frames are written only from writable
+ * callbacks) */
+static const char *
+last_broadcast (void)
+{
+	if (test_ws_cap.ctx != NULL) {
+		TestWsCaptureFlush ();
+	}
+	return last_broadcast_msg;
+}
+
 static void
 clear_mock (void)
 {
@@ -152,21 +164,16 @@ static void
 ws_context_init (BarWsContext_t *ctx)
 {
 	memset (ctx, 0, sizeof (*ctx));
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		pthread_mutex_init (&ctx->buckets[i].mutex, NULL);
-	}
+	ctx->outbox = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (ctx->outbox);
 }
 
 static void
 ws_context_destroy (BarWsContext_t *ctx)
 {
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		if (ctx->buckets[i].message != NULL) {
-			BarWsMessageFree (ctx->buckets[i].message);
-			ctx->buckets[i].message = NULL;
-		}
-		pthread_mutex_destroy (&ctx->buckets[i].mutex);
-	}
+	BarWsOutboxFree (ctx->outbox);
+	ctx->outbox = NULL;
+	TestWsPendingReset ();
 }
 
 static void
@@ -177,14 +184,13 @@ attach_ws_context_for_test (BarApp_t *app, BarWsContext_t *ctx)
 	ws_context_init (ctx);
 }
 
+/* Copy the newest queued event with `key` into last_broadcast_msg */
 static void
-capture_bucket_message (BarWsContext_t *ctx, BarWsBucketType_t bucket)
+capture_pending_message (BarWsContext_t *ctx, BarWsKey_t key)
 {
-	ck_assert_ptr_nonnull (ctx->buckets[bucket].message);
-	ck_assert_ptr_nonnull (ctx->buckets[bucket].message->data);
 	free (last_broadcast_msg);
-	last_broadcast_msg = strdup ((const char *)ctx->buckets[bucket].message->data);
-	ck_assert_ptr_nonnull (last_broadcast_msg);
+	last_broadcast_msg = strdup (TestWsPendingLast (ctx, key));
+	ck_assert_ptr_nonnull (last_broadcast ());
 }
 
 static void
@@ -224,17 +230,15 @@ setup_web_app_with_station (BarApp_t *app, BarWsContext_t *ctx,
 }
 
 static const char *
-ws_bucket_payload (BarWsContext_t *ctx, BarWsBucketType_t bucket)
+ws_pending_payload (BarWsContext_t *ctx, BarWsKey_t key)
 {
-	ck_assert_ptr_nonnull (ctx->buckets[bucket].message);
-	ck_assert_ptr_nonnull (ctx->buckets[bucket].message->data);
-	return (const char *) ctx->buckets[bucket].message->data;
+	return TestWsPendingLast (ctx, key);
 }
 
 static bool
 play_state_payload_paused (BarWsContext_t *ctx)
 {
-	const char *payload = ws_bucket_payload (ctx, BUCKET_STATE);
+	const char *payload = ws_pending_payload (ctx, BAR_WS_KEY_NONE);
 	ck_assert_int_eq (payload[0], '2');
 	json_object *event = json_tokener_parse (payload + 1);
 	ck_assert_ptr_nonnull (event);
@@ -268,8 +272,8 @@ START_TEST (test_ui_act_pandora_reconnect_no_credentials)
 
 	BarUiActPandoraReconnect (&app, NULL, NULL, 1);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "error") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "error") != NULL);
 
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
@@ -339,20 +343,19 @@ START_TEST (test_ui_act_rejected_controls_preserve_last_broadcast)
 	attach_ws_context_for_test (&app, &ctx);
 	app.player.mode = PLAYER_WAITING;
 	BarUiActPause (&app, NULL, NULL, 1);
-	char *previous = strdup (ws_bucket_payload (&ctx, BUCKET_STATE));
+	char *previous = strdup (ws_pending_payload (&ctx, BAR_WS_KEY_NONE));
 	ck_assert_ptr_nonnull (previous);
-	BarWsMessage_t *message = ctx.buckets[BUCKET_STATE].message;
 	app.player.doQuit = true;
 	const uint64_t epoch = app.player.controlEpoch;
 	BarUiActPlay (&app, NULL, NULL, 1);
-	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	ck_assert_uint_eq (TestWsPendingTake (&ctx, BAR_WS_KEY_NONE), 0);
 	BarUiActPause (&app, NULL, NULL, 1);
-	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	ck_assert_uint_eq (TestWsPendingTake (&ctx, BAR_WS_KEY_NONE), 0);
 	BarUiActTogglePause (&app, NULL, NULL, 1);
-	ck_assert_ptr_eq (ctx.buckets[BUCKET_STATE].message, message);
+	ck_assert_uint_eq (TestWsPendingTake (&ctx, BAR_WS_KEY_NONE), 0);
 	ck_assert (app.player.doPause);
 	ck_assert_uint_eq (app.player.controlEpoch, epoch);
-	ck_assert_str_eq (ws_bucket_payload (&ctx, BUCKET_STATE), previous);
+	ck_assert_str_eq (ws_pending_payload (&ctx, BAR_WS_KEY_NONE), previous);
 	free (previous);
 	ws_context_destroy (&ctx);
 	player_primitives_destroy (&app);
@@ -499,7 +502,7 @@ START_TEST (test_ui_act_pending_pause_suppresses_delayed_play_state)
 	ck_assert (ma_sound_is_playing (&app.player.sound));
 	/* Neither the test nor the broadcaster holds an application lock. */
 	BarWsBroadcastPlayState (&app);
-	const bool suppressed = ctx.buckets[BUCKET_STATE].message == NULL;
+	const bool suppressed = TestWsPendingTake (&ctx, BAR_WS_KEY_NONE) == 0;
 	pthread_mutex_lock (&gate.lock);
 	gate.release = true;
 	pthread_cond_broadcast (&gate.cond);
@@ -550,7 +553,7 @@ static void *delayed_play_state_enqueue (void *data) {
 }
 
 /* Break caught: an older completed producer overwrites a newer final UI
- * state, or a drained bucket forgets its watermark and resurrects old state. */
+ * state, or a drained ingress forgets its watermark and resurrects old state. */
 START_TEST (test_ui_act_delayed_play_state_cannot_replace_newer_final_event)
 {
 	BarApp_t app = {0};
@@ -585,12 +588,9 @@ START_TEST (test_ui_act_delayed_play_state_cannot_replace_newer_final_event)
 	BarUiActTogglePause (&app, NULL, NULL, 1);
 	assert_play_state_payload (&ctx, true);
 	/* Model the service consuming the latest event; watermark must survive. */
-	pthread_mutex_lock (&ctx.buckets[BUCKET_STATE].mutex);
-	BarWsMessageFree (ctx.buckets[BUCKET_STATE].message);
-	ctx.buckets[BUCKET_STATE].message = NULL;
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_STATE].mutex);
+	TestWsPendingTake (&ctx, BAR_WS_KEY_NONE);
 	BarWebsocketBroadcastPlayStateMessage (&app, format_play_state_for_test (oldPaused), oldEpoch);
-	const bool drainedOldIgnored = ctx.buckets[BUCKET_STATE].message == NULL;
+	const bool drainedOldIgnored = TestWsPendingTake (&ctx, BAR_WS_KEY_NONE) == 0;
 	BarWsBroadcastPlayState (&app);
 	assert_play_state_payload (&ctx, true);
 	pthread_cond_destroy (&sender.cond);
@@ -599,7 +599,7 @@ START_TEST (test_ui_act_delayed_play_state_cannot_replace_newer_final_event)
 	player_primitives_destroy (&app);
 	BarSettingsDestroy (&app.settings);
 	ck_assert_msg (oldIgnored, "A delayed older pause event must not replace the newer completed play event");
-	ck_assert_msg (drainedOldIgnored, "A consumed state bucket must still reject older play-state epochs");
+	ck_assert_msg (drainedOldIgnored, "A drained ingress must still reject older play-state epochs");
 }
 END_TEST
 
@@ -892,13 +892,13 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "user", NULL);
-	capture_bucket_message (&ctx, BUCKET_STATE);
+	capture_pending_message (&ctx, BAR_WS_KEY_NONE);
 
 	ck_assert_ptr_nonnull (app.lastStationId);
 	ck_assert_str_eq (app.lastStationId, "resume-station");
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "pandora.disconnected") != NULL);
-	ck_assert (strstr (last_broadcast_msg, "user") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "pandora.disconnected") != NULL);
+	ck_assert (strstr (last_broadcast (), "user") != NULL);
 
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
@@ -933,11 +933,11 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "idle_timeout", "override-station");
-	capture_bucket_message (&ctx, BUCKET_STATE);
+	capture_pending_message (&ctx, BAR_WS_KEY_NONE);
 
 	ck_assert_ptr_nonnull (app.lastStationId);
 	ck_assert_str_eq (app.lastStationId, "override-station");
-	ck_assert (strstr (last_broadcast_msg, "idle_timeout") != NULL);
+	ck_assert (strstr (last_broadcast (), "idle_timeout") != NULL);
 
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
@@ -1168,8 +1168,9 @@ START_TEST (test_session_auto_recover_resumes_without_disconnect_event)
 	ck_assert_ptr_null (app.lastStationId);
 	ck_assert (!atomic_load (&app.autoRecoverFailed));
 	ck_assert (!atomic_load (&app.autoRecoverInFlight));
-	/* pandora.disconnected would have landed in BUCKET_STATE */
-	ck_assert_ptr_null (ctx.buckets[BUCKET_STATE].message);
+	/* No pandora.disconnected event was queued or delivered */
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "pandora.disconnected"), 0);
 
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
@@ -1606,8 +1607,8 @@ START_TEST (test_ui_act_print_upcoming_lists_and_broadcasts)
 
 	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "query.upcoming.result") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "query.upcoming.result") != NULL);
 
 	TestWsCaptureDetach (&app);
 	clear_mock ();
@@ -1671,10 +1672,10 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	clear_mock ();
 
 	BarUiActPandoraDisconnect (&app, NULL, NULL, 1);
-	capture_bucket_message (&ctx, BUCKET_STATE);
+	capture_pending_message (&ctx, BAR_WS_KEY_NONE);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "pandora.disconnected") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "pandora.disconnected") != NULL);
 
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
@@ -1793,9 +1794,9 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 	ck_assert_int_eq (pthread_create (&helper, NULL, set_player_dead_thread, &args), 0);
 	BarUiDoPandoraDisconnect (&app, "user", NULL);
 	ck_assert_int_eq (pthread_join (helper, NULL), 0);
-	capture_bucket_message (&ctx, BUCKET_STATE);
+	capture_pending_message (&ctx, BAR_WS_KEY_NONE);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
+	ck_assert_ptr_nonnull (last_broadcast ());
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
@@ -1889,7 +1890,7 @@ START_TEST (test_ui_act_love_song_broadcasts_process)
 	BarUiActLoveSong (&app, &station, &song, 1);
 	BarUiPianoCallClearTestHook ();
 
-	ck_assert (strstr (ws_bucket_payload (&ctx, BUCKET_STATE), "process") != NULL);
+	ck_assert (strstr (ws_pending_payload (&ctx, BAR_WS_KEY_NONE), "process") != NULL);
 	teardown_web_app_with_station (&app, &ctx);
 }
 END_TEST
@@ -1908,7 +1909,7 @@ START_TEST (test_ui_act_ban_song_skips_current_playlist_track)
 	BarUiActBanSong (&app, &station, &song, 1);
 	BarUiPianoCallClearTestHook ();
 
-	ck_assert (strstr (ws_bucket_payload (&ctx, BUCKET_STATE), "process") != NULL);
+	ck_assert (strstr (ws_pending_payload (&ctx, BAR_WS_KEY_NONE), "process") != NULL);
 	teardown_web_app_with_station (&app, &ctx);
 }
 END_TEST
@@ -1983,11 +1984,12 @@ START_TEST (test_ui_act_explain_websocket_failure_emits_error)
 	BarUiPianoCallSetTestHook (mock_explain_fail);
 	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[0]);
 	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
 	TestWsCaptureDetach (&app);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "error") != NULL);
-	ck_assert (strstr (last_broadcast_msg, "song.explain") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "error") != NULL);
+	ck_assert (strstr (last_broadcast (), "song.explain") != NULL);
 
 	clear_mock ();
 	ws_context_destroy (&ctx);
@@ -2025,10 +2027,11 @@ START_TEST (test_ui_act_explain_websocket_success_broadcasts)
 	BarUiPianoCallSetTestHook (mock_explain_with_text);
 	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[0]);
 	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
 	TestWsCaptureDetach (&app);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "Because you enjoy jazz.") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "Because you enjoy jazz.") != NULL);
 
 	clear_mock ();
 	ws_context_destroy (&ctx);
@@ -2055,11 +2058,12 @@ START_TEST (test_ui_act_print_upcoming_websocket_empty_emits_error)
 	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	TestWsCaptureFlush ();
 	TestWsCaptureDetach (&app);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
-	ck_assert (strstr (last_broadcast_msg, "error") != NULL);
-	ck_assert (strstr (last_broadcast_msg, "query.upcoming") != NULL);
+	ck_assert_ptr_nonnull (last_broadcast ());
+	ck_assert (strstr (last_broadcast (), "error") != NULL);
+	ck_assert (strstr (last_broadcast (), "query.upcoming") != NULL);
 
 	clear_mock ();
 	ws_context_destroy (&ctx);
@@ -2080,6 +2084,7 @@ START_TEST (test_query_explain_reaches_only_requester)
 	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[1]);
 	BarUiPianoCallClearTestHook ();
 
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_int_eq (test_ws_cap.frameClient[0], 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "song.explanation"), 1);
@@ -2090,6 +2095,7 @@ START_TEST (test_query_explain_reaches_only_requester)
 	BarUiPianoCallSetTestHook (mock_explain_fail);
 	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[0]);
 	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "song.explain"), 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, ""), 0);
@@ -2099,6 +2105,7 @@ START_TEST (test_query_explain_reaches_only_requester)
 	BarUiPianoCallSetTestHook (mock_explain_empty);
 	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[1]);
 	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "song.explain"), 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "error"), 1);
@@ -2123,6 +2130,7 @@ START_TEST (test_query_upcoming_reaches_only_requester)
 	TestWsCaptureAttach (&app, 2, NULL);
 
 	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming.result"), 1);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "Next Song"), 1);
@@ -2131,6 +2139,7 @@ START_TEST (test_query_upcoming_reaches_only_requester)
 	TestWsCaptureClear ();
 	cur.head.next = NULL;
 	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[1]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "query.upcoming"), 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "error"), 1);
@@ -2173,6 +2182,7 @@ START_TEST (test_cli_explain_prints_terminal_output_and_no_web_reply)
 	out[n] = '\0';
 
 	ck_assert_ptr_nonnull (strstr (out, "Because you enjoy jazz."));
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	TestWsCaptureDetach (&app);
@@ -2238,6 +2248,7 @@ START_TEST (test_cli_upcoming_prints_terminal_list_and_no_web_reply)
 	capture_stdout (run_cli_upcoming, &args, out, sizeof (out));
 
 	ck_assert_ptr_nonnull (strstr (out, "Queued Song"));
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	TestWsCaptureDetach (&app);
@@ -2266,9 +2277,9 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "playlist_session_error", NULL);
-	capture_bucket_message (&ctx, BUCKET_STATE);
+	capture_pending_message (&ctx, BAR_WS_KEY_NONE);
 
-	ck_assert_ptr_nonnull (last_broadcast_msg);
+	ck_assert_ptr_nonnull (last_broadcast ());
 
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
@@ -2447,7 +2458,7 @@ START_TEST (test_ui_act_delete_station_confirmed)
 	BarUiPianoCallClearTestHook ();
 
 	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), &current);
-	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_STATIONS].message);
+	ck_assert (strstr (ws_pending_payload (&ctx, BAR_WS_KEY_STATIONS), "\"stations\"") != NULL);
 	close (pipefd[0]);
 	teardown_web_app_with_station (&app, &ctx);
 }
