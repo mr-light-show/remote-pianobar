@@ -904,11 +904,11 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -943,11 +943,11 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1071,12 +1071,12 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1173,12 +1173,12 @@ START_TEST (test_session_auto_recover_resumes_without_disconnect_event)
 
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1229,12 +1229,12 @@ START_TEST (test_session_auto_recover_failure_is_sticky)
 	free (app.lastStationId);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1350,12 +1350,12 @@ START_TEST (test_ui_act_pandora_reconnect_logs_when_manager_not_parked)
 
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1680,11 +1680,11 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1800,11 +1800,11 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -2199,11 +2199,11 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
+	TestWsCaptureDetach (&app);
 	ws_context_destroy (&ctx);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
-	TestWsCaptureDetach (&app);
 }
 END_TEST
 

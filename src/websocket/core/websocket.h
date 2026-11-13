@@ -154,6 +154,10 @@ void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
 BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
                                   const char *protocol);
 void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi);
+/* Receive-callback body: dispatch a frame from `wsi` as its connection's
+ * request. Frames from a connection missing from the table (e.g. it was
+ * full) are dropped, never handled as requester 0. Service thread only. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len);
 
 /* Same ownership contract; rejects older completed play-state epochs under
  * STATE's mutex. The watermark survives consumption and generic messages.

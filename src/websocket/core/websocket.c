@@ -187,6 +187,28 @@ static BarWsConnId_t BarWsConnectionIdOf (BarWsContext_t *ctx, void *wsi) {
 	return id;
 }
 
+/* Dispatch a frame received from `wsi` (service thread). A received message
+ * always has a nonzero requester. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len) {
+	if (!app || !app->wsContext || !in || len == 0) {
+		return;
+	}
+	BarWsConnId_t requester = BarWsConnectionIdOf (app->wsContext, wsi);
+	if (requester == BAR_WS_DEST_BROADCAST) {
+		/* Untracked (table was full): its replies would have no recipient */
+		log_write (DEBUG_WEBSOCKET, "Dropping message from untracked client (wsi=%p)\n",
+		           wsi);
+		return;
+	}
+	char *message = malloc (len + 1);
+	if (message) {
+		memcpy (message, in, len);
+		message[len] = '\0';
+		BarWebsocketHandleMessage (app, message, len, "socketio", requester);
+		free (message);
+	}
+}
+
 void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
 	pthread_mutex_lock (&ctx->connMutex);
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
@@ -269,19 +291,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 			
 		case LWS_CALLBACK_RECEIVE:
 			/* Received message from client */
-			if (app && in && len > 0) {
-				char *message = malloc(len + 1);
-				if (message) {
-					memcpy(message, in, len);
-					message[len] = '\0';
-					BarWsConnId_t requester = app->wsContext ?
-							BarWsConnectionIdOf (app->wsContext, wsi) :
-							BAR_WS_DEST_BROADCAST;
-					BarWebsocketHandleMessage (app, message, len, "socketio",
-							requester);
-					free(message);
-				}
-			}
+			BarWsHandleReceive (app, wsi, in, len);
 			break;
 			
 		case LWS_CALLBACK_SERVER_WRITEABLE:

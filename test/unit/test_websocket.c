@@ -464,6 +464,33 @@ START_TEST (test_send_targeted_state_keeps_pending_progress_broadcast)
 }
 END_TEST
 
+START_TEST (test_receive_from_untracked_client_is_dropped)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+
+	/* Live but untracked (e.g. the table was full): its query must not turn
+	 * into a broadcast, nor reach anyone else */
+	BarWsHandleReceive (&app, &test_fake_sockets[2], "0", 1);
+	BarWsHandleReceive (&app, &test_fake_sockets[2], "2[\"query\"]", 11);
+	ck_assert_uint_eq (test_written_count, 0);
+
+	/* A tracked client still gets its reply, and only it */
+	BarWsHandleReceive (&app, &test_fake_sockets[1], "2[\"query\"]", 11);
+	ck_assert_uint_eq (test_written_count, 2);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[1]);
+	ck_assert_ptr_eq (test_written_wsi[1], &test_fake_sockets[1]);
+	ck_assert (strstr (test_written_msg[0], "process") != NULL);
+	ck_assert (strstr (test_written_msg[1], "stations") != NULL);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
 START_TEST (test_send_unknown_id_frees_message_and_returns_false)
 {
 	BarApp_t app;
@@ -1149,6 +1176,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_core, test_send_targeted_and_broadcast_do_not_replace_each_other);
 	tcase_add_test (tc_core, test_send_targeted_state_keeps_pending_progress_broadcast);
 	tcase_add_test (tc_core, test_send_unknown_id_frees_message_and_returns_false);
+	tcase_add_test (tc_core, test_receive_from_untracked_client_is_dropped);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
