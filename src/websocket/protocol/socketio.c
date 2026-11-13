@@ -1891,11 +1891,10 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 
 	if (deleted) {
 		if (wasCurrentStation) {
+			/* The delete response already cleared current/next */
 			if (quickMixId != NULL && BarUiSwitchStationById(app, quickMixId)) {
 				log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to QuickMix after deletion\n");
 			}
-			
-			BarStateSetCurrentStation(app, NULL);
 		}
 		
 		BarSocketIoEmitStations(app);

@@ -1170,6 +1170,73 @@ START_TEST (test_bar_state_snapshot_upcoming_empty_queue)
 }
 END_TEST
 
+/* DELETE_STATION frees the station inside PianoResponse; current/next must
+ * not point at it once the write lock is released (B2). */
+START_TEST (test_bar_state_delete_station_response_clears_current_and_next)
+{
+	BarApp_t app;
+	PianoRequest_t req;
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+
+	PianoStation_t *doomed = calloc (1, sizeof (*doomed));
+	PianoStation_t *kept = calloc (1, sizeof (*kept));
+	ck_assert_ptr_nonnull (doomed);
+	ck_assert_ptr_nonnull (kept);
+	doomed->id = strdup ("doomed");
+	doomed->name = strdup ("Doomed");
+	kept->id = strdup ("kept");
+	kept->name = strdup ("Kept");
+	app.ph.stations = PianoListAppendP (doomed, kept);
+	app.curStation = doomed;
+	app.nextStation = doomed;
+
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_DELETE_STATION;
+	req.data = doomed;
+	req.responseData = strdup ("{\"stat\":\"ok\",\"result\":{}}");
+	ck_assert_int_eq (BarStatePianoResponse (&app, &req), PIANO_RET_OK);
+	free (req.responseData);
+	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+	ck_assert_ptr_eq (BarStateGetStationList (&app), kept);
+
+	/* Deleting another station leaves current/next alone */
+	PianoStation_t *other = calloc (1, sizeof (*other));
+	ck_assert_ptr_nonnull (other);
+	other->id = strdup ("other");
+	app.ph.stations = PianoListAppendP (app.ph.stations, other);
+	app.curStation = kept;
+	app.nextStation = kept;
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_DELETE_STATION;
+	req.data = other;
+	req.responseData = strdup ("{\"stat\":\"ok\",\"result\":{}}");
+	ck_assert_int_eq (BarStatePianoResponse (&app, &req), PIANO_RET_OK);
+	free (req.responseData);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), kept);
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), kept);
+
+	/* A failed delete keeps the station selected */
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_DELETE_STATION;
+	req.data = kept;
+	req.responseData = strdup ("{\"stat\":\"fail\",\"code\":0,\"message\":\"x\"}");
+	ck_assert_int_ne (BarStatePianoResponse (&app, &req), PIANO_RET_OK);
+	free (req.responseData);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), kept);
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), kept);
+
+	free (kept->id);
+	free (kept->name);
+	free (kept);
+	pthread_cond_destroy (&app.player.cond);
+	pthread_mutex_destroy (&app.player.lock);
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -1220,6 +1287,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_empty_list);
 	tcase_add_test(tc_misc, test_bar_update_station_display_names_null_app_noop);
 	tcase_add_test(tc_misc, test_bar_state_piano_request_response_wrappers);
+	tcase_add_test(tc_misc, test_bar_state_delete_station_response_clears_current_and_next);
 	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 

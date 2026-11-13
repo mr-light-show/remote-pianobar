@@ -309,16 +309,16 @@ BarUiActCallback(BarUiActDeleteStation) {
 			selStation->name);
 	if (BarReadlineYesNo (false, &app->input)) {
 		BarUiMsg (&app->settings, MSG_INFO, "Deleting station... ");
+		/* The response clears current/next when they point at the deleted
+		 * station (BarStatePianoResponse), so compare before the call. */
+		const bool wasCurrent = selStation == BarStateGetCurrentStation(app);
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_DELETE_STATION, selStation)) {
+			/* DELETE_STATION destroys the station struct */
+			selStation = NULL;
 			/* Notify WebSocket clients of station list change */
 			BarWsBroadcastStations(app);
-			if (selStation == BarStateGetCurrentStation(app)) {
+			if (wasCurrent) {
 				drainPlaylist (app);
-				BarStateSetNextStation(app, NULL);
-				/* XXX: usually we shoudn't touch cur*, but DELETE_STATION destroys
-				 * station struct */
-				BarStateSetCurrentStation(app, NULL);
-				selStation = NULL;
 			}
 		}
 		BarUiActDefaultEventcmd ("stationdelete");
