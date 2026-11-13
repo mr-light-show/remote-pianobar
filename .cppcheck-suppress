@@ -38,3 +38,5 @@ constVariablePointer:src/libpiano/response.c
 memleak:src/libpiano/response.c
 # Bridge functions in websocket_bridge.h are public API; BarWsIsWebActive is only called by tests outside its TU
 staticFunction:src/websocket_bridge.c
+# outbox.c is linted standalone; its public API is used by other translation units
+staticFunction:src/websocket/core/outbox.c
