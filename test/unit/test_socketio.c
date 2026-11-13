@@ -2425,6 +2425,58 @@ START_TEST (test_action_query_replies_reach_only_requester) {
 }
 END_TEST
 
+static bool mockSetQuickMixAccept (BarApp_t *app, const PianoRequestType_t type,
+		void *data, PianoReturn_t *pRet, CURLcode *wRet) {
+	(void) app;
+	(void) data;
+	ck_assert_int_eq (type, PIANO_REQUEST_SET_QUICKMIX);
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+/* Frames parsed from the wire reach their handlers with the sender's ID;
+ * these replies are broadcasts today and must stay broadcasts. */
+START_TEST (test_message_events_dispatch_from_requester) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	BarWsConnId_t sender = test_ws_cap.ids[0];
+
+	/* "action" with a string payload */
+	BarSocketIoHandleMessage (&app, "2[\"action\",\"app.settings\"]", sender);
+	assert_broadcast_frame ("error");
+	ck_assert (strstr (test_ws_cap.frames[0], "app.settings") != NULL);
+
+	/* "action" with an object payload naming the action */
+	TestWsCaptureClear ();
+	BarSocketIoHandleMessage (&app, "2[\"action\",{\"action\":\"app.settings\"}]", sender);
+	assert_broadcast_frame ("error");
+	ck_assert (strstr (test_ws_cap.frames[0], "app.settings") != NULL);
+
+	/* Table-dispatched events */
+	TestWsCaptureClear ();
+	BarUiPianoCallSetTestHook (mock_get_station_modes_ok);
+	BarSocketIoHandleMessage (&app, "2[\"station.getModes\",{\"stationId\":\"S1\"}]", sender);
+	BarUiPianoCallClearTestHook ();
+	assert_broadcast_frame ("stationModes");
+	ck_assert (strstr (test_ws_cap.frames[0], "My Mode") != NULL);
+
+	TestWsCaptureClear ();
+	station.useQuickMix = false;
+	BarUiPianoCallSetTestHook (mockSetQuickMixAccept);
+	BarSocketIoHandleMessage (&app, "2[\"station.setQuickMix\",[\"S1\"]]", sender);
+	BarUiPianoCallClearTestHook ();
+	ck_assert (station.useQuickMix);
+	assert_broadcast_frame ("stations");
+
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -2529,6 +2581,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test (tc_dest, test_capture_pandora_disconnected_broadcast);
 	tcase_add_test (tc_dest, test_capture_explanation_and_upcoming_to_requester);
 	tcase_add_test (tc_dest, test_action_query_replies_reach_only_requester);
+	tcase_add_test (tc_dest, test_message_events_dispatch_from_requester);
 	suite_add_tcase (s, tc_dest);
 	
 	return s;

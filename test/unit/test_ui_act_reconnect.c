@@ -2094,6 +2094,16 @@ START_TEST (test_query_explain_reaches_only_requester)
 	ck_assert_uint_eq (TestWsCaptureCount (0, "song.explain"), 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, ""), 0);
 
+	/* Pandora answers without an explanation: requester-only error */
+	TestWsCaptureClear ();
+	BarUiPianoCallSetTestHook (mock_explain_empty);
+	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[1]);
+	BarUiPianoCallClearTestHook ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "song.explain"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "error"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, ""), 0);
+
 	TestWsCaptureDetach (&app);
 	teardown_web_app_with_station (&app, &ctx);
 }
@@ -2163,6 +2173,71 @@ START_TEST (test_cli_explain_prints_terminal_output_and_no_web_reply)
 	out[n] = '\0';
 
 	ck_assert_ptr_nonnull (strstr (out, "Because you enjoy jazz."));
+	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+
+	TestWsCaptureDetach (&app);
+	teardown_web_app_with_station (&app, &ctx);
+}
+END_TEST
+
+/* Run `fn` with stdout redirected to a pipe; return what it printed. */
+static void
+capture_stdout (void (*fn) (void *), void *arg, char *out, size_t outSize)
+{
+	int pipefd[2];
+	ck_assert_int_eq (pipe (pipefd), 0);
+	fflush (stdout);
+	int saved_stdout = dup (STDOUT_FILENO);
+	ck_assert_int_ge (saved_stdout, 0);
+	ck_assert_int_ge (dup2 (pipefd[1], STDOUT_FILENO), 0);
+	close (pipefd[1]);
+	fn (arg);
+	fflush (stdout);
+	ck_assert_int_ge (dup2 (saved_stdout, STDOUT_FILENO), 0);
+	close (saved_stdout);
+	ssize_t n = read (pipefd[0], out, outSize - 1);
+	close (pipefd[0]);
+	ck_assert_int_gt (n, 0);
+	out[n] = '\0';
+}
+
+typedef struct {
+	BarApp_t *app;
+	PianoStation_t *station;
+	PianoSong_t *song;
+} UpcomingArgs_t;
+
+static void
+run_cli_upcoming (void *arg)
+{
+	UpcomingArgs_t *a = arg;
+	BarUiActPrintUpcoming (a->app, a->station, a->song, 1);
+}
+
+START_TEST (test_cli_upcoming_prints_terminal_list_and_no_web_reply)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t cur, next;
+	char out[2048];
+	setup_web_app_with_station (&app, &ctx, &station, &cur);
+	/* Real defaults: the song list needs the configured list format */
+	BarSettingsDestroy (&app.settings);
+	read_default_settings (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_BOTH; /* terminal and web clients */
+	memset (&next, 0, sizeof (next));
+	cur.head.next = &next.head;
+	next.title = "Queued Song";
+	next.artist = "Queued Artist";
+	next.album = "Queued Album";
+	next.stationId = station.id;
+	TestWsCaptureAttach (&app, 2, NULL);
+
+	UpcomingArgs_t args = { &app, &station, &cur };
+	capture_stdout (run_cli_upcoming, &args, out, sizeof (out));
+
+	ck_assert_ptr_nonnull (strstr (out, "Queued Song"));
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	TestWsCaptureDetach (&app);
@@ -2565,6 +2640,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_query_explain_reaches_only_requester);
 	tcase_add_test (tc, test_query_upcoming_reaches_only_requester);
 	tcase_add_test (tc, test_cli_explain_prints_terminal_output_and_no_web_reply);
+	tcase_add_test (tc, test_cli_upcoming_prints_terminal_list_and_no_web_reply);
 	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
 	tcase_add_test (tc, test_ui_act_bookmark_artist);
