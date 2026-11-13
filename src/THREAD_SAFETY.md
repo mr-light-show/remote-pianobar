@@ -690,7 +690,7 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 | Any producer (worker, playback manager, CLI) | nothing | `BarWebsocketSend` and friends: push to the outbox and `lws_cancel_service()`; never blocks on a client |
 | Playback manager | `ctx->progress` (progress de-duplication) | `BarWsBroadcastProgress` |
 
-`BarWebsocketDisconnectAllClients` touches the connection table and is service-thread only.
+Only the service thread closes connections (the overflow policies in `BarWsServiceOutbox`, write failures); no producer can touch the connection table.
 
 The service thread never runs a command, never takes `pianoHttpMutex` and never waits on the command queue (it only pushes, which does not wait). The initial `process` frame for a new connection is still built on the service thread: `BarSocketIoBuildProcessPayload` takes only `stateRwlock` (read, via `BarStateSnapshotPlayback`) and `player.lock`, which are never held across network I/O. Pandora HTTP runs under `pianoHttpMutex` only, and `stateRwlock` is taken after it for in-memory updates, so a slow Pandora call cannot make that snapshot wait. Moving it to the worker would delay a new client's first state behind any slow command.
 

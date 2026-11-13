@@ -967,25 +967,3 @@ void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
 		BarWsWake (ctx);
 	}
 }
-
-/* Disconnect all WebSocket clients (used by app.stop) */
-void BarWebsocketDisconnectAllClients(BarApp_t *app) {
-	if (!app || !app->wsContext) {
-		return;
-	}
-	
-	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	log_write(DEBUG_WEBSOCKET, "Disconnecting all clients (%zu connected)\n", 
-	           ctx->numConnections);
-	
-	/* Close each connected client on its next writable callback */
-	for (size_t i = 0; i < ctx->maxConnections; i++) {
-		if (ctx->connections[i].wsi != NULL) {
-			BarWsConnectionClose (ctx, &ctx->connections[i],
-			                      LWS_CLOSE_STATUS_GOINGAWAY, "Server stopping");
-		}
-	}
-	
-	log_write(DEBUG_WEBSOCKET, "All clients marked for disconnect\n");
-}

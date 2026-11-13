@@ -26,7 +26,7 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdbool.h>
 
-#include "../core/queue.h"
+#include "../core/conn_id.h"
 
 /* Note: main.h must be included before this header to get BarApp_t definition */
 

@@ -169,12 +169,6 @@ void BarWsBroadcastStations(BarApp_t *app) {
 	}
 }
 
-void BarWsDisconnectAllClients(BarApp_t *app) {
-	if (app && app->wsContext) {
-		BarWebsocketDisconnectAllClients(app);
-	}
-}
-
 /* Lifecycle management */
 bool BarWsInit(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI) {

@@ -26,7 +26,7 @@ THE SOFTWARE.
 #include <stdio.h>
 
 #include "main.h"
-#include "websocket/core/queue.h"
+#include "websocket/core/conn_id.h"
 
 /* WebSocket bridge functions
  * Bridge between core modules and the WebSocket subsystem
@@ -55,7 +55,6 @@ void BarWsBroadcastPlayState(BarApp_t *app);
 void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
                                       const BarPlayerPlayStateSnapshot *snapshot);
 void BarWsBroadcastStations(BarApp_t *app);
-void BarWsDisconnectAllClients(BarApp_t *app);
 
 /* Lifecycle management */
 bool BarWsInit(BarApp_t *app);

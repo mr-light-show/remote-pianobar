@@ -934,7 +934,10 @@ START_TEST (test_large_stations_reply_does_not_close_clients)
 }
 END_TEST
 
-START_TEST (test_disconnect_all_clients_closes_and_frees_pending)
+/* Closing a client frees the frames already waiting for it, and a second
+ * close of the same client changes nothing (both through the ingress-full
+ * policy, the real close path). */
+START_TEST (test_close_frees_queued_frames_and_is_idempotent)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
@@ -943,15 +946,21 @@ START_TEST (test_disconnect_all_clients_closes_and_frees_pending)
 	test_add_client (&ctx, 1);
 	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"a\"]"));
 	BarWsServiceOutbox (&ctx);
+	ck_assert_uint_eq (test_conn (&ctx, 0)->pending.count, 1);
+	memset (test_writable_requests, 0, sizeof (test_writable_requests));
 
-	BarWebsocketDisconnectAllClients (&app);
-	BarWebsocketDisconnectAllClients (&app); /* idempotent */
+	for (int round = 0; round < 2; round++) {
+		for (int i = 0; i <= WS_INGRESS_MAX_MSGS; i++) {
+			test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]");
+		}
+		BarWsServiceOutbox (&ctx);
+	}
 	for (int c = 0; c < 2; c++) {
 		BarWsConnection_t *conn = test_conn (&ctx, c);
 		ck_assert (conn->pendingClose);
-		ck_assert_str_eq (conn->closeReason, "Server stopping");
-		ck_assert_int_eq (conn->closeStatus, LWS_CLOSE_STATUS_GOINGAWAY);
+		ck_assert_str_eq (conn->closeReason, "Server event queue full");
 		ck_assert_uint_eq (conn->pending.count, 0);
+		ck_assert_uint_eq (test_writable_requests[c], 1); /* closed once */
 		ck_assert_int_eq (test_writable (&ctx, c), -1);
 	}
 	ck_assert_uint_eq (test_written_count, 0);
@@ -1071,16 +1080,6 @@ START_TEST (test_bridge_progress_resumes_after_song_start)
 }
 END_TEST
 
-START_TEST (test_websocket_bridge_disconnect_all_clients_with_context)
-{
-	BarApp_t app;
-	BarWsContext_t ctx;
-	test_setup_web_app (&app, &ctx);
-	BarWsDisconnectAllClients (&app);
-	ck_assert (1);
-	test_teardown_web_app (&app, &ctx);
-}
-END_TEST
 
 START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 	BarApp_t app;
@@ -1909,11 +1908,6 @@ START_TEST(test_websocket_bridge_upcoming_skips_unknown_requester) {
 }
 END_TEST
 
-START_TEST(test_websocket_disconnect_all_clients_null_app) {
-	BarWebsocketDisconnectAllClients (NULL);
-	ck_assert (1);
-}
-END_TEST
 
 START_TEST(test_websocket_bridge_both_mode_is_web_active) {
 	BarApp_t app;
@@ -3044,7 +3038,6 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_broadcasts_real_player_state_events);
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
 	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
-	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
 	tcase_add_test (tc_core, test_send_broadcast_reaches_all_clients);
 	tcase_add_test (tc_core, test_send_to_id_reaches_only_that_client);
 	tcase_add_test (tc_core, test_send_to_reused_slot_does_not_reach_new_client);
@@ -3064,7 +3057,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_core, test_oversize_frame_is_rejected_without_closing_clients);
 	tcase_add_test (tc_core, test_large_stations_reply_does_not_close_clients);
 	tcase_add_test (tc_core, test_frame_at_limit_is_delivered_to_empty_client);
-	tcase_add_test (tc_core, test_disconnect_all_clients_closes_and_frees_pending);
+	tcase_add_test (tc_core, test_close_frees_queued_frames_and_is_idempotent);
 	tcase_add_test (tc_core, test_start_then_playstate_both_delivered);
 	tcase_add_test (tc_core, test_stop_then_start_both_delivered);
 	tcase_add_test (tc_core, test_progress_for_old_song_dropped_after_start);
@@ -3076,7 +3069,6 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test (tc_core, test_websocket_play_state_waits_for_queued_control);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_unknown_requester);
-	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);
 	tcase_add_test(tc_core, test_websocket_immediate_and_delayed_volume_read_current_player_value);

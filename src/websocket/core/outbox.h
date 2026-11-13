@@ -26,7 +26,7 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdint.h>
 
-#include "queue.h"
+#include "conn_id.h"
 
 /* Coalescing key for a queued frame. NONE entries are ordered events and are
  * never replaced; keyed entries are replaced by a later entry with the same

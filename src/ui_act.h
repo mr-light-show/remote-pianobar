@@ -29,7 +29,7 @@ THE SOFTWARE.
 
 #include "main.h"
 #include "ui_dispatch.h"
-#include "websocket/core/queue.h"
+#include "websocket/core/conn_id.h"
 
 #define BarUiActCallback(name) void name (BarApp_t *app, \
 		PianoStation_t *selStation, PianoSong_t *selSong, \
@@ -77,8 +77,6 @@ void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 		PianoSong_t *selSong, BarWsConnId_t requester);
 void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester);
 
-/* Switch to a station programmatically (for WebSocket use) */
-void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station);
 bool BarUiSwitchStationById (BarApp_t * const app, const char *stationId);
 
 /* Disconnect from Pandora - shared by BarUiActPandoraDisconnect, idle timeout, playlist failure

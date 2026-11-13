@@ -90,7 +90,6 @@ bool BarUiDoPandoraReconnect (BarApp_t *app,
 		const char *resume_station_id_override);
 bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
 		const char *resume_station_id_override);
-void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station);
 bool BarUiSwitchStationById (BarApp_t *app, const char *stationId);
 bool BarTransformIfShared (BarApp_t *app, PianoStation_t *station);
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
@@ -1446,6 +1445,8 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_parked_manager)
 }
 END_TEST
 
+/* Formerly through BarUiSwitchStation (pointer API, removed: no production
+ * caller); the same behaviour through the production switch by ID */
 START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
 {
 	BarApp_t app;
@@ -1460,14 +1461,16 @@ START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
 	ck_assert_ptr_nonnull (tail);
 	BarSettingsInit (&app.settings);
 	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
 	player_primitives_init (&app);
 	from.id = "from"; from.name = "From";
 	to.id = "to"; to.name = "To";
 	song.head.next = &tail->head;
 	app.curStation = &from;
 	app.playlist = &song;
+	app.ph.stations = &to;
 
-	BarUiSwitchStation (&app, &to);
+	ck_assert (BarUiSwitchStationById (&app, "to"));
 
 	ck_assert_ptr_eq (BarStateGetNextStation (&app), &to);
 	{
@@ -1477,6 +1480,7 @@ START_TEST (test_ui_switch_station_sets_next_and_drains_playlist)
 	}
 
 	player_primitives_destroy (&app);
+	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 }

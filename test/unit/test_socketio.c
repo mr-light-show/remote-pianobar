@@ -39,7 +39,7 @@ THE SOFTWARE.
 #include "../../src/system_volume.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket_bridge.h"
-#include "../../src/websocket/core/queue.h"
+#include "../../src/websocket/core/conn_id.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "test_ws_capture.h"
 #include <math.h>

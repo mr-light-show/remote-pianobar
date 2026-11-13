@@ -29,7 +29,7 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include "queue.h"
+#include "conn_id.h"
 #include "outbox.h"
 #include "commands.h"
 
@@ -204,7 +204,5 @@ void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs);
 /* Execute a due debounced volume event using the current canonical value. */
 void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
-/* Close every WebSocket client (used by app.stop). Service thread only. */
-void BarWebsocketDisconnectAllClients(BarApp_t *app);
 
 #endif /* _WEBSOCKET_H */
