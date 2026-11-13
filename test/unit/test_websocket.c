@@ -1383,21 +1383,36 @@ START_TEST (test_websocket_init_destroy_stops_when_app_quits)
 }
 END_TEST
 
-/* Init must fail cleanly (no context left behind) when it cannot listen */
+/* Init must fail cleanly (no context left behind) when it cannot listen.
+ * The port is already held by a listening socket, so bind() fails with
+ * EADDRINUSE on every platform. (A non-local address does not work: on Linux
+ * libwebsockets retries EADDRNOTAVAIL in a busy loop and never returns.) */
 START_TEST (test_websocket_init_fails_cleanly_when_bind_fails)
 {
 	BarApp_t app;
+	struct sockaddr_in addr;
+	socklen_t len = sizeof (addr);
+
+	int holder = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (holder, 0);
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	ck_assert_int_eq (bind (holder, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	ck_assert_int_eq (listen (holder, 1), 0);
+	ck_assert_int_eq (getsockname (holder, (struct sockaddr *) &addr, &len), 0);
 
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
-	/* TEST-NET-3: never a local address, so bind() fails */
-	app.settings.websocketHost = strdup ("203.0.113.1");
-	app.settings.websocketPort = 18083;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = ntohs (addr.sin_port);
 
 	ck_assert (!BarWebsocketInit (&app));
 	ck_assert_ptr_null (app.wsContext);
 	BarSettingsDestroy (&app.settings);
+	close (holder);
 }
 END_TEST
 
