@@ -42,8 +42,9 @@ void BarWsBroadcastVolume(BarApp_t *app);
 /* Query replies to one web client (`requester` is its connection ID) */
 void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
                             const char *explanation);
-void BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester,
-                         PianoSong_t *songs, int count);
+/* Up to `count` queued songs, read from state under its lock; false when
+ * nothing is queued */
+bool BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester, int count);
 void BarWsBroadcastSongStart(BarApp_t *app);
 /** Full state sync for in-place changes (e.g. song.rating). Emits `process`, not `start`. */
 void BarWsBroadcastProcess(BarApp_t *app);

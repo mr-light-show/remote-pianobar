@@ -659,6 +659,41 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 
 ---
 
+## Command worker: handler pointer audit (draft)
+
+> **DRAFT (PR3, Task 3.1).** This records the audit done before WebSocket commands move to a single worker thread. Task 3.3 finalizes it.
+
+**What frees or changes libpiano data, and under which lock:**
+
+- Station list (`app->ph.stations`), genre list, and station fields set by Pandora responses: changed only in `PianoResponse` (`BarStatePianoResponse`, `stateRwlock` write) or reset (`BarStateResetPianoHandle`). Both run inside `pianoHttpMutex`. `DELETE_STATION` frees the struct and `RENAME_STATION` frees `name`. So **holding `pianoHttpMutex` keeps a resolved station pointer alive.**
+- `station->displayName`: freed and rebuilt by `BarStateUpdateStationDisplayNames`, which holds `stateRwlock` write but **not** `pianoHttpMutex`.
+- `useQuickMix`: CLI QuickMix selection (`ui_act.c` `BarUiActQuickmixCallback`/`BarUiActSelectQuickMix`) toggles it with **no lock**.
+- Playlist songs: the head is freed by `BarStateDrainPlaylist` (session teardown, stale URLs) and the tail by `BarStateTruncatePlaylistTail`/`BarStatePrepareStationSwitch*`, all under `stateRwlock` but **not** `pianoHttpMutex`. A finished song moves to `songHistory` and is freed there by `BarUiHistoryPrepend` with **no lock**, immediately when `history = 0`.
+- `BarStateGet*`/`BarStateFindStationById` return raw pointers after releasing `stateRwlock`. The pointer is a borrow, not a reference: libpiano does no refcounting. Pattern 1 above wrongly says "reference-counted".
+
+**Handlers reachable from `BarSocketIoHandleMessage`:**
+
+| Handler | Pointers | Protection (after this audit) | Verdict |
+|---|---|---|---|
+| query / CONNECT, `query.stations`, start/process/stations builders | none borrowed | `BarStateSnapshot*` copies under `stateRwlock` read | Safe |
+| `station.change` | none borrowed | `BarStatePrepareStationSwitchById` resolves under write lock | Safe for pointers. `app->lastStationId` free races the teardown/CLI writers (class b) |
+| `station.setQuickMix` | station list | `pianoHttpMutex` + `BarStateApplyQuickMixIds` write lock | Safe in the handler. The CLI toggles `useQuickMix` with no lock (class b) |
+| `station.addMusic`, `rename`, `getModes`, `setMode`, `getInfo`, `deleteSeed`, `deleteFeedback` | station by ID | **Fixed:** `pianoHttpMutex` from lookup to last use. Results (modes/info/seeds) are request-owned | Safe |
+| `station.delete` | station by ID, QuickMix station | **Fixed:** lookup, delete and QuickMix ID copy under `pianoHttpMutex`; switch by ID afterwards | Handler safe. `curStation`/`nextStation` dangle after the free until cleared (class b) |
+| `station.getGenres` | `app->ph.genreStations` | **Fixed:** `pianoHttpMutex` across check, fetch and walk | Safe |
+| `station.addGenre`, `addShared`, `createFrom`, `music.search` | none (IDs from JSON; results request-owned) | n/a | Safe |
+| `action` `query.upcoming` | playlist tail | **Fixed:** `BarStateSnapshotUpcoming` copies under `stateRwlock` read | Safe |
+| `action` `song.love` / `song.ban` / `song.tired` / `song.explain` (+ eventcmd) | `currentSong`, `currentStation` from getters; `realStation` by `selSong->stationId` | None: the borrowed pointers cross `BarUiPianoCall` and `BarUiStartEventCmd` | **Unsafe** (class b: song lifetime is not covered by `pianoHttpMutex`) |
+| `action` `song.info` | `selStation`, `selSong`, station by `selSong->stationId` | None: prints borrowed pointers to the terminal | **Unsafe** (class b, same song lifetime) |
+| `action` `song.createStationFrom`, `station.change/create/delete/rename/addMusic/addGenre/addShared/selectQuickMix` | `selStation`/`selSong`, station list, genre list | Interactive CLI callbacks: `BarReadline` on `app->input` while holding borrowed pointers | **Unsafe**, and can block the executing thread on terminal input (the web UI uses the dedicated events instead) |
+| `action` playback, volume, `app.quit`, `app.pandora-disconnect`/`reconnect` | none dereferenced (reconnect ignores the passed pointers) | player/state APIs | Safe for pointers |
+
+**Outside the handlers:** the playback manager reads `nextStation` before `BarUiPianoCall` (`playback_lifecycle.c`) and dereferences `curStation`/songs (`BarUiPrintStation`, `BarUiStartEventCmd`) with no lock. The CLI holds `app->ph.genreStations` and station-list pointers across `BarReadline`.
+
+These races already exist today, with the service thread in the worker's place. The worker does not widen them: it is still one thread, it resolves IDs at execution time, and after PR3 the service thread only calls the snapshot builders.
+
+---
+
 ## Logging
 
 Pianobar uses a single logging API for diagnostics and errors.
