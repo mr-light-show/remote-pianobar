@@ -179,13 +179,23 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 		return false;
 	}
 
+	/* The player thread reads the URL until the stream is open, outside
+	 * pianoHttpMutex, so it gets its own copy (a drain may free the song).
+	 * The playback manager frees it after joining the player thread. */
+	char *url = strdup (curSong->audioUrl);
+	if (url == NULL) {
+		BarUiPianoRelease (app);
+		return false;
+	}
 	player_t * const player = &app->player;
 	if (!BarPlayerReset (player)) {
+		free (url);
 		BarUiPianoRelease (app);
 		return false;
 	}
 
-	app->player.url = curSong->audioUrl;
+	free (app->player.url);
+	app->player.url = url;
 	app->player.gain = curSong->fileGain;
 	app->player.songDuration = curSong->length;
 
@@ -207,6 +217,8 @@ bool BarPlaybackStartSong (BarApp_t *app, pthread_t *playerThread) {
 		pthread_mutex_lock (&player->lock);
 		player->threadJoinPending = false;
 		pthread_mutex_unlock (&player->lock);
+		free (app->player.url);
+		app->player.url = NULL;
 		BarInterruptSetTarget (&app->doQuit);
 		BarPlayerSetMode (&app->player, PLAYER_DEAD);
 		return false;
