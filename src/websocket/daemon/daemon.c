@@ -265,7 +265,7 @@ bool BarDaemonKillRunning(const char *pidFile) {
 char *BarDaemonGetLockFilePath(void) {
 	const char *home = getenv("HOME");
 	if (!home) {
-		struct passwd *pw = getpwuid(getuid());
+		const struct passwd *pw = getpwuid(getuid());
 		if (pw) {
 			home = pw->pw_dir;
 		}

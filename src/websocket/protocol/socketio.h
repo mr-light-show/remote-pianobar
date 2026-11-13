@@ -60,8 +60,8 @@ void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
                       struct json_object *data);
 
 /* Payload builders — each returns a new json_object reference; caller must json_object_put(). */
-struct json_object *BarSocketIoBuildStartPayload    (BarApp_t *app);
-struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app);
+struct json_object *BarSocketIoBuildStartPayload    (const BarApp_t *app);
+struct json_object *BarSocketIoBuildStationsPayload (const BarApp_t *app);
 struct json_object *BarSocketIoBuildProcessPayload  (BarApp_t *app);
 
 /* Song start/stop, progress and play state are broadcast only through the
@@ -125,7 +125,6 @@ void BarSocketIoHandleAddShared(BarApp_t *app, struct json_object *data);
 
 /* Handle music search and emit results */
 void BarSocketIoHandleSearchMusic(BarApp_t *app, struct json_object *data);
-void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searchResult);
 
 /* Handle 'station.addMusic' with musicId and stationId */
 void BarSocketIoHandleAddMusic(BarApp_t *app, struct json_object *data);
@@ -135,14 +134,12 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, struct json_object *data);
 
 /* Handle 'station.getModes' - fetch available modes for a station */
 void BarSocketIoHandleGetStationModes(BarApp_t *app, struct json_object *data);
-void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData);
 
 /* Handle 'station.setMode' - set station mode */
 void BarSocketIoHandleSetStationMode(BarApp_t *app, struct json_object *data);
 
 /* Handle 'station.getInfo' - fetch station info for seed/feedback management */
 void BarSocketIoHandleGetStationInfo(BarApp_t *app, struct json_object *data);
-void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData);
 
 /* Handle 'station.deleteSeed' and 'station.deleteFeedback' */
 void BarSocketIoHandleDeleteSeed(BarApp_t *app, struct json_object *data);

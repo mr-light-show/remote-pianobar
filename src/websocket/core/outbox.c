@@ -50,9 +50,6 @@ struct BarWsQueueEntry {
 	BarWsQueueEntry_t *next;
 };
 
-/* outbox.c is linted without websocket.c, its consumer, so functions used
- * only there (or only by tests) are suppressed one by one below */
-// cppcheck-suppress staticFunction
 BarWsFrame_t *BarWsFrameNew (const char *text, size_t len) {
 	if (len > WS_FRAME_MAX_BYTES || (!text && len > 0)) {
 		return NULL;
@@ -69,7 +66,6 @@ BarWsFrame_t *BarWsFrameNew (const char *text, size_t len) {
 	return f;
 }
 
-// cppcheck-suppress staticFunction
 BarWsFrame_t *BarWsFrameRef (BarWsFrame_t *f) {
 	if (f) {
 		atomic_fetch_add_explicit (&f->refs, 1, memory_order_relaxed);
@@ -77,7 +73,6 @@ BarWsFrame_t *BarWsFrameRef (BarWsFrame_t *f) {
 	return f;
 }
 
-// cppcheck-suppress staticFunction
 void BarWsFrameUnref (BarWsFrame_t *f) {
 	if (f && atomic_fetch_sub_explicit (&f->refs, 1, memory_order_acq_rel) == 1) {
 		free (f);
@@ -88,12 +83,10 @@ unsigned char *BarWsFrameData (const BarWsFrame_t *f) {
 	return f ? (unsigned char *) f->buf + LWS_PRE : NULL;
 }
 
-// cppcheck-suppress staticFunction
 size_t BarWsFrameLen (const BarWsFrame_t *f) {
 	return f ? f->len : 0;
 }
 
-// cppcheck-suppress staticFunction
 void BarWsClientQueueInit (BarWsClientQueue_t *q) {
 	memset (q, 0, sizeof (*q));
 }
@@ -212,7 +205,6 @@ BarWsOutbox_t *BarWsOutboxNew (void) {
 	return o;
 }
 
-// cppcheck-suppress staticFunction
 void BarWsPendingFree (BarWsPending_t *list) {
 	while (list) {
 		BarWsPending_t *next = list->next;

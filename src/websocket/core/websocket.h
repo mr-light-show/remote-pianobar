@@ -175,7 +175,7 @@ int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi);
  * full. Remove frees the connection's pending frames and partial message. */
 BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
                                   const char *protocol);
-void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi);
+void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi);
 /* Receive-callback body: queue a message from `wsi` for the command worker
  * as its connection's request; nothing is executed here. `final` is false
  * for every part of a message but the last; parts are collected per

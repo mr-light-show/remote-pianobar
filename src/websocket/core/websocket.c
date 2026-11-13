@@ -189,7 +189,7 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
 	if (!app || !app->wsContext) {
 		return;
 	}
-	BarWsContext_t *ctx = app->wsContext;
+	const BarWsContext_t *ctx = app->wsContext;
 	BarWsConnection_t *conn = BarWsConnectionFind (ctx, wsi);
 	if (conn == NULL) {
 		/* Untracked (table was full): its replies would have no recipient */
@@ -242,7 +242,7 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
 	BarWsConnectionRxReset (conn);
 }
 
-void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
+void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi) {
 	BarWsConnection_t *conn = BarWsConnectionFind (ctx, wsi);
 	if (conn == NULL) {
 		return;
@@ -920,6 +920,9 @@ static bool BarWsSent (const BarWsContext_t *ctx, bool queued) {
 	return queued;
 }
 
+/* The BarWebsocket* senders keep the non-const BarApp_t API of websocket.h:
+ * const here would cascade through the whole websocket_bridge.h family. */
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
                        char *message) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
@@ -930,6 +933,7 @@ bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
 			strlen (message)));
 }
 
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 bool BarWebsocketBroadcastSongStart (BarApp_t *app, char *message) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
 	if (!ctx) {
@@ -946,6 +950,7 @@ uint32_t BarWebsocketSongGeneration (BarApp_t *app) {
 	return BarWsOutboxGeneration (((BarWsContext_t *) app->wsContext)->outbox);
 }
 
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 bool BarWebsocketBroadcastProgress (BarApp_t *app, uint32_t observedGeneration,
                                     char *message) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
@@ -956,6 +961,7 @@ bool BarWebsocketBroadcastProgress (BarApp_t *app, uint32_t observedGeneration,
 			observedGeneration, message, strlen (message)));
 }
 
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
                                              uint64_t epoch) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
