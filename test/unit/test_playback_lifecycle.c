@@ -310,13 +310,27 @@ END_TEST
 START_TEST (test_playback_fetch_playlist_without_next_station_skips_request)
 {
 	BarApp_t app;
+	char dir[512], script[600], marker[600];
 	setup_playback_app_with_piano (&app);
+
+	/* No fetch happened, so no stationfetchplaylist event either */
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "fetch_eventcmd"));
+	snprintf (marker, sizeof (marker), "%s/ran", dir);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	fprintf (f, "#!/bin/sh\ncat > /dev/null\ntouch '%s'\n", marker);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	free (app.settings.eventCmd);
+	app.settings.eventCmd = strdup (script);
 
 	BarUiPianoCallSetTestHook (mock_fetch_records_mutex);
 	ck_assert (!BarPlaybackFetchPlaylist (&app));
 	ck_assert_ptr_null (BarStateGetPlaylist (&app));
 	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
 	ck_assert_ptr_null (app.lastStationId);
+	ck_assert_int_ne (access (marker, F_OK), 0);
 
 	teardown_playback_app_with_piano (&app);
 }

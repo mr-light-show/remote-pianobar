@@ -40,11 +40,15 @@ extern bool BarSessionTryAutoRecover (BarApp_t *app, const char *reason,
 /*	One getPlaylist attempt for the next station.
  *	@param pRet libpiano status of the attempt
  *	@param wRet curl status of the attempt
+ *	@param requested set to false when no station was left to request
  *	@return true when the request succeeded (the playlist may still be empty)
+ *		or was not needed
  */
 static bool BarPlaybackFetchPlaylistOnce (BarApp_t *app, PianoReturn_t *pRet,
-		CURLcode *wRet) {
+		CURLcode *wRet, bool *requested) {
 	PianoRequestDataGetPlaylist_t reqData;
+
+	*requested = false;
 
 	/* Resolve the station after taking pianoHttpMutex, not before waiting
 	 * for it: a delete or session reset frees stations only while it is
@@ -58,6 +62,7 @@ static bool BarPlaybackFetchPlaylistOnce (BarApp_t *app, PianoReturn_t *pRet,
 		return true;
 	}
 
+	*requested = true;
 	BarUiMsg (&app->settings, MSG_INFO, "%s",
 	          BarL10nGet (&app->l10n, "cli.receiving_playlist"));
 	const bool fetched = BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
@@ -86,8 +91,9 @@ static bool BarPlaybackFetchPlaylistOnce (BarApp_t *app, PianoReturn_t *pRet,
 bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 	PianoReturn_t pRet = PIANO_RET_OK;
 	CURLcode wRet = CURLE_OK;
+	bool requested;
 
-	if (!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet)) {
+	if (!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet, &requested)) {
 		/* Station pointers do not survive the session teardown: keep our own
 		 * copy of the id we were fetching so it can be resumed. */
 		char *resumeId = NULL;
@@ -108,7 +114,8 @@ bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 			/* Session is healthy again.  Retry the fetch when a station was
 			 * resumed; otherwise stay connected and let the user pick one. */
 			if (BarStateGetNextStation (app) != NULL &&
-					!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet)) {
+					!BarPlaybackFetchPlaylistOnce (app, &pRet, &wRet,
+					&requested)) {
 				BarUiDoPandoraDisconnect (app, "playlist_session_error",
 						resumeId);
 			}
@@ -117,6 +124,10 @@ bool BarPlaybackFetchPlaylist (BarApp_t *app) {
 		}
 
 		free (resumeId);
+	} else if (!requested) {
+		/* The station was cleared while we waited: nothing was fetched, so
+		 * no station change and no stationfetchplaylist event */
+		return false;
 	}
 
 	/* eventcmd dereferences stations and songs: keep them alive */
