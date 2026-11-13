@@ -1754,8 +1754,7 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 	
 	if (BarUiSwitchStationById(app, stationId)) {
 		/* Clear saved station - user made explicit choice */
-		free(app->lastStationId);
-		app->lastStationId = NULL;
+		free(BarStateTakeLastStationId(app));
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);

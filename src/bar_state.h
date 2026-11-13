@@ -192,6 +192,11 @@ void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station);
 PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app);
 void BarStateSetCurrentStation(BarApp_t *app, PianoStation_t *station);
 PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id);
+
+/* Station to resume after reconnect (app->lastStationId), thread-safe.
+ * Set stores a copy (NULL clears); Take returns the owned copy and clears it. */
+void BarStateSetLastStationId(BarApp_t *app, const char *stationId);
+char *BarStateTakeLastStationId(BarApp_t *app);
 PianoStation_t *BarStateGetStationList(const BarApp_t *app);
 
 /* Playlist access (thread-safe) */
