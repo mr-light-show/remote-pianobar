@@ -116,7 +116,33 @@ START_TEST (test_cmd_byte_limit_returns_full) {
 	free (bytes);
 	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, big, WS_CMD_MAX_REQUEST_BYTES),
 			BAR_WS_CMD_OK);
+	/* with exactly one byte of room left, two bytes are refused, one fits */
+	ck_assert (BarWsCommandQueuePop (q, &id, &bytes, &len));
+	free (bytes);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, big, WS_CMD_MAX_REQUEST_BYTES - 1),
+			BAR_WS_CMD_OK);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, big, 2), BAR_WS_CMD_FULL);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, big, 1), BAR_WS_CMD_OK);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, big, 1), BAR_WS_CMD_FULL);
 	free (big);
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* A request larger than the whole byte cap never fits, even when empty */
+START_TEST (test_cmd_request_over_byte_cap_on_empty_queue_returns_full) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	char *huge = malloc (WS_CMD_MAX_BYTES + 1);
+	ck_assert_ptr_nonnull (huge);
+	memset (huge, 'h', WS_CMD_MAX_BYTES + 1);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, huge, WS_CMD_MAX_BYTES + 1),
+			BAR_WS_CMD_FULL);
+	/* the refused request left nothing behind: the cap itself still fits */
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, huge, WS_CMD_MAX_BYTES),
+			BAR_WS_CMD_OK);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 1, huge, 1), BAR_WS_CMD_FULL);
+	free (huge);
 	BarWsCommandQueueFree (q);
 }
 END_TEST
@@ -179,6 +205,47 @@ START_TEST (test_cmd_close_wakes_blocked_pop) {
 	BarWsCommandQueueFree (w.q);
 	pthread_cond_destroy (&w.cond);
 	pthread_mutex_destroy (&w.lock);
+}
+END_TEST
+
+/* Close must wake every blocked consumer (broadcast, not signal). Each
+ * round lets both waiters reach Pop before closing; with a single signal the
+ * second waiter would stay blocked and the join would hang (test timeout). */
+START_TEST (test_cmd_close_wakes_two_blocked_pops) {
+	for (int round = 0; round < 20; round++) {
+		BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+		ck_assert_ptr_nonnull (q);
+		PopWaiter_t w[2];
+		pthread_t t[2];
+		for (int i = 0; i < 2; i++) {
+			w[i].q = q;
+			w[i].started = false;
+			atomic_init (&w[i].popResult, -1);
+			pthread_mutex_init (&w[i].lock, NULL);
+			pthread_cond_init (&w[i].cond, NULL);
+			ck_assert_int_eq (pthread_create (&t[i], NULL, pop_waiter, &w[i]), 0);
+		}
+		for (int i = 0; i < 2; i++) {
+			pthread_mutex_lock (&w[i].lock);
+			while (!w[i].started) {
+				pthread_cond_wait (&w[i].cond, &w[i].lock);
+			}
+			pthread_mutex_unlock (&w[i].lock);
+		}
+		/* Give both a chance to block in Pop; the outcome does not depend on
+		 * it, only how strongly a signal-only Close is caught does. */
+		for (int i = 0; i < 1000; i++) {
+			sched_yield ();
+		}
+		BarWsCommandQueueClose (q);
+		for (int i = 0; i < 2; i++) {
+			pthread_join (t[i], NULL);
+			ck_assert_int_eq (atomic_load (&w[i].popResult), 0);
+			pthread_cond_destroy (&w[i].cond);
+			pthread_mutex_destroy (&w[i].lock);
+		}
+		BarWsCommandQueueFree (q);
+	}
 }
 END_TEST
 
@@ -333,8 +400,10 @@ Suite *ws_commands_suite (void) {
 	tcase_add_test (tc, test_cmd_copies_input);
 	tcase_add_test (tc, test_cmd_item_limit_returns_full);
 	tcase_add_test (tc, test_cmd_byte_limit_returns_full);
+	tcase_add_test (tc, test_cmd_request_over_byte_cap_on_empty_queue_returns_full);
 	tcase_add_test (tc, test_cmd_push_after_close_returns_closed);
 	tcase_add_test (tc, test_cmd_close_wakes_blocked_pop);
+	tcase_add_test (tc, test_cmd_close_wakes_two_blocked_pops);
 	tcase_add_test (tc, test_cmd_pop_blocks_until_push);
 	tcase_add_test (tc, test_cmd_close_frees_queued);
 	tcase_add_test (tc, test_cmd_free_releases_queued);
