@@ -698,11 +698,11 @@ The service thread never runs a command, never takes `pianoHttpMutex` and never 
 
 | Queue | Producer → consumer | Limits (`bar_constants.h`) | When full |
 |---|---|---|---|
-| Command queue (`commands.c`) | receive callback → worker | `WS_CMD_MAX_REQUEST_BYTES` (4 KiB, one receive callback), `WS_CMD_MAX_ITEMS` 32, `WS_CMD_MAX_BYTES` 64 KiB | The requester gets an `error` event (`web.socket.busy`); nothing is queued |
+| Command queue (`commands.c`) | receive callback → worker | `WS_CMD_MAX_REQUEST_BYTES` (4 KiB per message, collected from its parts per connection), `WS_CMD_MAX_ITEMS` 32, `WS_CMD_MAX_BYTES` 64 KiB | Nothing is queued; the requester gets one `error` event (`web.socket.busy`) per overload |
 | Outbox ingress (`outbox.c`) | any producer → service thread | `WS_FRAME_MAX_BYTES` per frame, `WS_INGRESS_MAX_MSGS`, `WS_INGRESS_MAX_BYTES` | Every client is closed (1011) and resyncs on reconnect |
 | Per-client pending (`outbox.c`) | service thread → that client's writable callbacks | `WS_CLIENT_MAX_MSGS`, `WS_CLIENT_MAX_BYTES` | Only that client is closed (1008) |
 
-A request larger than `WS_CMD_MAX_REQUEST_BYTES`, or one that does not arrive as one frame in one receive callback, is dropped and logged; the connection stays open. After shutdown starts the command queue is closed and receives are dropped without a reply.
+A message that arrives in parts is collected per connection (the buffer is freed when the message completes or the connection closes). One longer than `WS_CMD_MAX_REQUEST_BYTES` is dropped whole, tail included, and logged; the connection stays open. A client is sent the busy error once per overload (until one of its requests is accepted again), so a burst cannot flood the shared ingress. After shutdown starts the command queue is closed and receives are dropped without a reply.
 
 ### Shutdown order
 

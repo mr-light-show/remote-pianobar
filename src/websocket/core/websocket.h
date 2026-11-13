@@ -45,7 +45,10 @@ typedef struct {
 	int closeStatus;              /* WebSocket close status for pendingClose */
 	const char *closeReason;      /* Static, bounded close reason */
 	char protocol[64];            /* Protocol: "socketio" or "homeassistant" */
+	char *rxBuf;                  /* Parts of the message being received */
+	size_t rxLen;                 /* Bytes in rxBuf */
 	bool rxDropping;              /* Dropping the rest of an oversize message */
+	bool busyNotified;            /* Told "busy" since its last accepted request */
 	BarWsClientQueue_t pending;   /* Frames not yet written to this client */
 } BarWsConnection_t;
 
@@ -161,17 +164,18 @@ void BarWsServiceOutbox (BarWsContext_t *ctx);
 int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi);
 
 /* Service-thread connection table updates (exposed for tests).
- * Add returns the new connection's ID, or 0 if the table is full. Remove
- * frees the connection's pending frames. */
+ * Add returns the new connection's ID, or BAR_WS_CONN_NONE if the table is
+ * full. Remove frees the connection's pending frames and partial message. */
 BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
                                   const char *protocol);
 void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi);
-/* Receive-callback body: queue a frame from `wsi` for the command worker as
- * its connection's request; nothing is executed here. `final` is false for
- * every part of a message but the last. A message that does not arrive
- * whole in one callback, or is longer than WS_CMD_MAX_REQUEST_BYTES, is
- * dropped (the connection stays open). A full command queue answers the
- * requester with a localized error; a closed one (shutdown) drops silently.
+/* Receive-callback body: queue a message from `wsi` for the command worker
+ * as its connection's request; nothing is executed here. `final` is false
+ * for every part of a message but the last; parts are collected per
+ * connection. A message longer than WS_CMD_MAX_REQUEST_BYTES is dropped
+ * whole, tail included (the connection stays open). A full command queue
+ * answers the requester with a localized error, once until one of its
+ * requests is accepted again; a closed one (shutdown) drops silently.
  * Frames from a connection missing from the table (e.g. it was full) are
  * dropped, never handled as requester 0. Service thread only. */
 void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,

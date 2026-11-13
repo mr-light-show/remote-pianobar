@@ -94,8 +94,8 @@ static void BarWsWake (const BarWsContext_t *ctx) {
 }
 
 /* Add a client to the connection table (service thread) and assign its
- * ID. IDs come from a monotonic counter and are never reused. Returns 0
- * if the table is full. */
+ * ID. IDs come from a monotonic counter and are never reused. Returns
+ * BAR_WS_CONN_NONE if the table is full. */
 BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
                                   const char *protocol) {
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
@@ -105,14 +105,17 @@ BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
 			conn->wsi = wsi;
 			conn->pendingClose = false;
 			conn->closeReason = NULL;
+			conn->rxBuf = NULL;
+			conn->rxLen = 0;
 			conn->rxDropping = false;
+			conn->busyNotified = false;
 			BarWsClientQueueInit (&conn->pending);
 			snprintf (conn->protocol, sizeof (conn->protocol), "%s", protocol);
 			ctx->numConnections++;
 			return conn->id;
 		}
 	}
-	return BAR_WS_DEST_BROADCAST;
+	return BAR_WS_CONN_NONE;
 }
 
 /* Tracked connection for `wsi`, or NULL */
@@ -142,7 +145,43 @@ static void BarWsConnectionClose (const BarWsContext_t *ctx, BarWsConnection_t *
 	BarWsRequestWritable (ctx, conn->wsi);
 }
 
-/* Queue a frame received from `wsi` for the command worker (service
+/* Hand one whole request to the command worker */
+static void BarWsQueueRequest (BarApp_t *app, BarWsConnection_t *conn,
+                               const void *bytes, size_t len) {
+	BarWsContext_t *ctx = app->wsContext;
+	switch (BarWsCommandQueuePush (ctx->commands, conn->id, bytes, len)) {
+		case BAR_WS_CMD_OK:
+			conn->busyNotified = false;
+			break;
+		case BAR_WS_CMD_FULL:
+			log_write (DEBUG_WEBSOCKET, "Command queue full; refusing a request from client %llu\n",
+			           (unsigned long long) conn->id);
+			/* Once per overload: a burst must not flood the shared ingress */
+			if (!conn->busyNotified) {
+				conn->busyNotified = true;
+				BarSocketIoEmitErrorTo (app, conn->id, "command",
+						BarL10nGet (&app->l10n, "web.socket.busy"));
+			}
+			break;
+		case BAR_WS_CMD_CLOSED:
+			/* Shutting down (or no worker): not an overload, no reply */
+			log_write (DEBUG_WEBSOCKET, "Command queue closed; dropping a request\n");
+			break;
+		case BAR_WS_CMD_NOMEM:
+			log_write (LOG_ERROR, "Out of memory queueing a request from client %llu\n",
+			           (unsigned long long) conn->id);
+			break;
+	}
+}
+
+/* Forget a partly received message */
+static void BarWsConnectionRxReset (BarWsConnection_t *conn) {
+	free (conn->rxBuf);
+	conn->rxBuf = NULL;
+	conn->rxLen = 0;
+}
+
+/* Queue a message received from `wsi` for the command worker (service
  * thread). Nothing runs here, so a slow command never stalls connection
  * servicing. A received message always has a nonzero requester. */
 void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
@@ -158,38 +197,49 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
 		           wsi);
 		return;
 	}
-	/* libwebsockets hands over at most LWS_RX_BUFFER_SIZE bytes per callback,
-	 * so a request must arrive whole in one callback. Drop every part of a
-	 * longer (or fragmented) message; the connection stays open. */
-	if (conn->rxDropping || !final || len > WS_CMD_MAX_REQUEST_BYTES) {
-		if (!conn->rxDropping) {
-			log_write (LOG_ERROR, "Dropping request from client %llu: not one frame of at most %d bytes\n",
-			           (unsigned long long) conn->id, WS_CMD_MAX_REQUEST_BYTES);
-		}
+	if (!in) {
+		len = 0;
+	}
+	/* The rest of a message already found too long */
+	if (conn->rxDropping) {
 		conn->rxDropping = !final;
 		return;
 	}
-	if (!in || len == 0) {
+	/* A message can arrive in parts (TCP segments, the lws receive buffer,
+	 * WebSocket fragments). Collect them up to WS_CMD_MAX_REQUEST_BYTES; a
+	 * longer message is dropped whole, its tail included, and the connection
+	 * stays open. */
+	if (conn->rxLen + len > WS_CMD_MAX_REQUEST_BYTES) {
+		log_write (LOG_ERROR, "Dropping request from client %llu: longer than %d bytes\n",
+		           (unsigned long long) conn->id, WS_CMD_MAX_REQUEST_BYTES);
+		BarWsConnectionRxReset (conn);
+		conn->rxDropping = !final;
 		return;
 	}
-	switch (BarWsCommandQueuePush (ctx->commands, conn->id, in, len)) {
-		case BAR_WS_CMD_OK:
-			break;
-		case BAR_WS_CMD_FULL:
-			log_write (DEBUG_WEBSOCKET, "Command queue full; refusing a request from client %llu\n",
-			           (unsigned long long) conn->id);
-			BarSocketIoEmitErrorTo (app, conn->id, "command",
-					BarL10nGet (&app->l10n, "web.socket.busy"));
-			break;
-		case BAR_WS_CMD_CLOSED:
-			/* Shutting down (or no worker): not an overload, no reply */
-			log_write (DEBUG_WEBSOCKET, "Command queue closed; dropping a request\n");
-			break;
-		case BAR_WS_CMD_NOMEM:
-			log_write (LOG_ERROR, "Out of memory queueing a request from client %llu\n",
-			           (unsigned long long) conn->id);
-			break;
+	if (!final || conn->rxLen > 0) {
+		if (conn->rxBuf == NULL) {
+			conn->rxBuf = malloc (WS_CMD_MAX_REQUEST_BYTES);
+			if (conn->rxBuf == NULL) {
+				log_write (LOG_ERROR, "Out of memory receiving from client %llu\n",
+				           (unsigned long long) conn->id);
+				conn->rxDropping = !final;
+				return;
+			}
+		}
+		if (len > 0) {
+			memcpy (conn->rxBuf + conn->rxLen, in, len);
+		}
+		conn->rxLen += len;
+		if (!final) {
+			return;
+		}
+		in = conn->rxBuf;
+		len = conn->rxLen;
 	}
+	if (len > 0) {
+		BarWsQueueRequest (app, conn, in, len);
+	}
+	BarWsConnectionRxReset (conn);
 }
 
 void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
@@ -200,6 +250,7 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
 	log_write(DEBUG_WEBSOCKET, "Client removed (id %llu, total %zu)\n",
 	           (unsigned long long) conn->id, ctx->numConnections - 1);
 	BarWsClientQueueClear (&conn->pending);
+	BarWsConnectionRxReset (conn);
 	conn->id = 0;
 	conn->wsi = NULL;
 	conn->pendingClose = false;
@@ -286,7 +337,10 @@ int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi) {
 	           (unsigned long long) conn->id, len, (int) LOG_MESSAGE_TRUNCATE_LEN,
 	           text, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
-	/* The frame keeps LWS_PRE bytes in front of its payload for lws_write */
+	/* The frame keeps LWS_PRE bytes in front of its payload for lws_write,
+	 * which writes the frame header there. A broadcast frame is shared, so
+	 * this is safe only because every write happens on the service thread,
+	 * one at a time, and no WebSocket extension (compression) is enabled. */
 	int written = (ctx->writeFrame ? ctx->writeFrame : BarWsLwsWriteFrame)
 			(wsi, BarWsFrameData (frame), len);
 	BarWsFrameUnref (frame);
@@ -344,7 +398,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 			
 			BarWsConnId_t id = BarWsConnectionAdd (ctx, wsi,
 					lws_get_protocol (wsi)->name);
-			if (id != 0) {
+			if (id != BAR_WS_CONN_NONE) {
 				log_write(DEBUG_WEBSOCKET, "Client tracked (id %llu, total %zu)\n",
 				           (unsigned long long) id, ctx->numConnections);
 
@@ -657,6 +711,7 @@ static void BarWsContextFree (BarApp_t *app) {
 	if (ctx->connections) {
 		for (size_t i = 0; i < ctx->maxConnections; i++) {
 			BarWsClientQueueClear (&ctx->connections[i].pending);
+			BarWsConnectionRxReset (&ctx->connections[i]);
 		}
 		free (ctx->connections);
 		ctx->connections = NULL;

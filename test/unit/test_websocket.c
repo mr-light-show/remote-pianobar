@@ -330,7 +330,7 @@ static void test_teardown_clients (BarApp_t *app, BarWsContext_t *ctx) {
 
 static BarWsConnId_t test_add_client (BarWsContext_t *ctx, int client) {
 	BarWsConnId_t id = BarWsConnectionAdd (ctx, &test_fake_sockets[client], "socketio");
-	ck_assert_uint_ne (id, BAR_WS_DEST_BROADCAST);
+	ck_assert_uint_ne (id, BAR_WS_CONN_NONE);
 	return id;
 }
 
@@ -2460,8 +2460,8 @@ START_TEST (test_oversize_request_frame_is_dropped_connection_stays_open)
 
 	/* Longer than one request */
 	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES + 1, true);
-	/* A message that arrives in parts (as libwebsockets delivers a frame
-	 * larger than its receive buffer): every part is dropped, even a tail
+	/* A message whose parts add up to more than the limit (as when
+	 * libwebsockets delivers a long frame in pieces): every part is dropped, even a tail
 	 * that would parse as a command on its own */
 	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES, false);
 	BarWsHandleReceive (&app, a, big, 100, false);
@@ -2488,6 +2488,187 @@ START_TEST (test_oversize_request_frame_is_dropped_connection_stays_open)
 	ck_assert_uint_eq (ctx.numConnections, 1);
 	test_drain_all (&ctx);
 	ck_assert_uint_eq (test_written_count, 0);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+
+/* One client's burst (lws parses a whole read before the service thread
+ * flushes) must not flood the shared ingress with busy errors: it is told
+ * once until one of its requests is accepted again, and nobody is closed. */
+START_TEST (test_busy_burst_notifies_once_and_closes_nobody)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_ws_cap.sockets[0];
+
+	for (int i = 0; i < 200; i++) {
+		BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	}
+	TestWsCaptureFlush ();
+	for (size_t i = 0; i < ctx.maxConnections; i++) {
+		ck_assert (!ctx.connections[i].pendingClose);
+	}
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 0);
+	ck_assert (strstr (test_ws_cap.frames[0], "busy") != NULL);
+
+	/* Accepted again once there is room; the next refusal is reported */
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	ck_assert_int_eq (test_ws_cap.frameClient[1], 0);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+/* Pop the next queued command; assert its requester and text */
+static void test_expect_command (BarWsContext_t *ctx, BarWsConnId_t id,
+		const char *text) {
+	BarWsConnId_t got = 0;
+	char *bytes = NULL;
+	size_t len = 0;
+	ck_assert (BarWsCommandQueuePop (ctx->commands, &got, &bytes, &len));
+	ck_assert_uint_eq (got, id);
+	ck_assert_uint_eq (len, strlen (text));
+	ck_assert_str_eq (bytes, text);
+	free (bytes);
+}
+
+/* Nothing else is queued: a sentinel pushed now comes out next */
+static void test_expect_no_command (BarWsContext_t *ctx) {
+	ck_assert_int_eq (BarWsCommandQueuePush (ctx->commands, 999, "s", 1), BAR_WS_CMD_OK);
+	test_expect_command (ctx, 999, "s");
+}
+
+static void test_receive_part (BarApp_t *app, int client, const char *text,
+		bool final) {
+	BarWsHandleReceive (app, &test_fake_sockets[client], text, strlen (text), final);
+}
+
+/* A message that arrives in several parts (TCP segments, lws buffer
+ * boundaries or WebSocket fragments) runs once, as a whole */
+START_TEST (test_split_message_is_reassembled)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+
+	test_receive_part (&app, 0, "2[\"qu", false);
+	test_receive_part (&app, 0, "er", false);
+	test_receive_part (&app, 0, "y\"]", true);
+	test_expect_command (&ctx, a, TEST_QUERY);
+
+	/* Exactly the limit, in two parts, still fits */
+	char *half = malloc (WS_CMD_MAX_REQUEST_BYTES / 2 + 1);
+	ck_assert_ptr_nonnull (half);
+	memset (half, 'x', WS_CMD_MAX_REQUEST_BYTES / 2);
+	half[WS_CMD_MAX_REQUEST_BYTES / 2] = '\0';
+	test_receive_part (&app, 0, half, false);
+	test_receive_part (&app, 0, half, true);
+	free (half);
+	size_t len = 0;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, &len));
+	ck_assert_uint_eq (len, WS_CMD_MAX_REQUEST_BYTES);
+	/* The next message starts afresh */
+	test_receive (&app, 0, TEST_PING);
+	test_expect_command (&ctx, a, TEST_PING);
+	test_expect_no_command (&ctx);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* Over the limit: every part is dropped, including a tail that would parse
+ * as a command on its own; the connection stays usable */
+START_TEST (test_split_message_over_limit_is_dropped_with_tail)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'x', WS_CMD_MAX_REQUEST_BYTES - 1);
+	big[WS_CMD_MAX_REQUEST_BYTES - 1] = '\0';
+
+	test_receive_part (&app, 0, big, false);
+	test_receive_part (&app, 0, "xx", false);   /* over the limit here */
+	test_receive_part (&app, 0, "2[\"x\"]", false);
+	test_receive_part (&app, 0, TEST_QUERY, true);
+	free (big);
+	test_receive (&app, 0, TEST_PING);
+	test_expect_command (&ctx, a, TEST_PING);
+	test_expect_no_command (&ctx);
+	ck_assert (!test_conn (&ctx, 0)->pendingClose);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_split_messages_do_not_interleave_between_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	BarWsConnId_t b = test_add_client (&ctx, 1);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+
+	test_receive_part (&app, 0, "2[\"qu", false);
+	test_receive_part (&app, 1, "2[\"pi", false);
+	test_receive_part (&app, 0, "ery\"]", true);
+	test_receive_part (&app, 1, "ng\"]", true);
+	test_expect_command (&ctx, a, TEST_QUERY);
+	test_expect_command (&ctx, b, TEST_PING);
+	test_expect_no_command (&ctx);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* A connection that closes mid-message frees its partial message (ASan),
+ * and the client that reuses the slot does not inherit it */
+START_TEST (test_partial_message_freed_on_close)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+
+	test_receive_part (&app, 0, "2[\"qu", false);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[0]);
+	ck_assert_ptr_null (ctx.connections[0].rxBuf);
+	ck_assert_uint_eq (ctx.connections[0].rxLen, 0);
+	BarWsConnId_t c = test_add_client (&ctx, 2);
+	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[2]);
+	test_receive_part (&app, 2, TEST_PING, true);
+	test_expect_command (&ctx, c, TEST_PING);
+	test_expect_no_command (&ctx);
 
 	BarWsCommandQueueFree (ctx.commands);
 	test_teardown_clients (&app, &ctx);
@@ -2746,9 +2927,9 @@ START_TEST (test_repeated_start_stop)
 END_TEST
 
 /* Real commands from a real client. An oversize frame (a valid query padded
- * past the limit, which libwebsockets delivers in parts) and a message sent
- * in two fragments (the second a valid query on its own) are dropped
- * without closing the connection; later commands are answered in order. */
+ * past the limit, which libwebsockets delivers in parts) is dropped without
+ * closing the connection; a query sent in two fragments is reassembled and
+ * answered once; later commands are answered in order. */
 START_TEST (test_end_to_end_commands_over_lws)
 {
 	BarApp_t app;
@@ -2765,19 +2946,21 @@ START_TEST (test_end_to_end_commands_over_lws)
 	memcpy (oversize, "2[\"query\"", 9);
 	memcpy (oversize + sizeof (oversize) - 2, "]", 2);
 	test_e2e_send (&a, oversize);
-	test_e2e_send_flags (&a, "2[\"pad\",", LWS_WRITE_TEXT | LWS_WRITE_NO_FIN);
-	test_e2e_send_flags (&a, TEST_QUERY, LWS_WRITE_CONTINUATION);
+	test_e2e_send_flags (&a, "2[\"que", LWS_WRITE_TEXT | LWS_WRITE_NO_FIN);
+	test_e2e_send_flags (&a, "ry\"]", LWS_WRITE_CONTINUATION);
 	test_e2e_send (&a, TEST_EXPLAIN);
 	test_e2e_send (&a, TEST_QUERY);
-	test_e2e_pump_until (cctx, &a, 4, &none, 0);
-	test_e2e_expect (&a, 1, "why-1");
-	test_e2e_expect (&a, 2, "\"process\"");
-	test_e2e_expect (&a, 3, "\"stations\"");
+	test_e2e_pump_until (cctx, &a, 6, &none, 0);
+	test_e2e_expect (&a, 1, "\"process\"");
+	test_e2e_expect (&a, 2, "\"stations\"");
+	test_e2e_expect (&a, 3, "why-1");
+	test_e2e_expect (&a, 4, "\"process\"");
+	test_e2e_expect (&a, 5, "\"stations\"");
 	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
 			strdup ("2[\"end\"]")));
-	test_e2e_pump_until (cctx, &a, 5, &none, 0);
-	test_e2e_expect (&a, 4, "\"end\"");
-	ck_assert_uint_eq (a.count, 5);
+	test_e2e_pump_until (cctx, &a, 7, &none, 0);
+	test_e2e_expect (&a, 6, "\"end\"");
+	ck_assert_uint_eq (a.count, 7);
 	ck_assert (!a.closed);
 
 	lws_context_destroy (cctx);
@@ -2868,6 +3051,11 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_admission_full_returns_localized_error_to_requester);
 	tcase_add_test (tc_worker, test_oversize_request_frame_is_dropped_connection_stays_open);
 	tcase_add_test (tc_worker, test_end_to_end_commands_over_lws);
+	tcase_add_test (tc_worker, test_busy_burst_notifies_once_and_closes_nobody);
+	tcase_add_test (tc_worker, test_split_message_is_reassembled);
+	tcase_add_test (tc_worker, test_split_message_over_limit_is_dropped_with_tail);
+	tcase_add_test (tc_worker, test_split_messages_do_not_interleave_between_clients);
+	tcase_add_test (tc_worker, test_partial_message_freed_on_close);
 	tcase_set_timeout (tc_worker, 30);
 	suite_add_tcase (s, tc_worker);
 
