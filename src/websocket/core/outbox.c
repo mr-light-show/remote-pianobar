@@ -24,6 +24,7 @@ THE SOFTWARE.
 #include "../../bar_constants.h"
 
 #include <libwebsockets.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,8 +125,9 @@ BarWsQResult_t BarWsClientQueueAppend (BarWsClientQueue_t *q, BarWsFrame_t *f,
 	}
 
 	if (old) {
-		BarWsFrameUnref (old->frame);
+		BarWsFrame_t *replaced = old->frame;
 		old->frame = BarWsFrameRef (f);
+		BarWsFrameUnref (replaced);
 		old->generation = generation;
 		q->bytes = newBytes;
 		return BAR_WS_Q_OK;
@@ -169,4 +171,160 @@ BarWsFrame_t *BarWsClientQueuePop (BarWsClientQueue_t *q, uint32_t currentGenera
 		BarWsFrameUnref (f);
 	}
 	return NULL;
+}
+
+struct BarWsOutbox {
+	pthread_mutex_t lock;
+	BarWsPending_t *head;
+	BarWsPending_t *tail;
+	size_t count;
+	size_t bytes;
+	uint32_t generation;
+};
+
+BarWsOutbox_t *BarWsOutboxNew (void) {
+	BarWsOutbox_t *o = calloc (1, sizeof (*o));
+	if (!o) {
+		return NULL;
+	}
+	if (pthread_mutex_init (&o->lock, NULL) != 0) {
+		free (o);
+		return NULL;
+	}
+	return o;
+}
+
+void BarWsPendingFree (BarWsPending_t *list) {
+	while (list) {
+		BarWsPending_t *next = list->next;
+		BarWsFrameUnref (list->frame);
+		free (list);
+		list = next;
+	}
+}
+
+void BarWsOutboxFree (BarWsOutbox_t *o) {
+	if (!o) {
+		return;
+	}
+	BarWsPendingFree (o->head);
+	pthread_mutex_destroy (&o->lock);
+	free (o);
+}
+
+/* Caller holds o->lock */
+static bool BarWsOutboxHasRoom (const BarWsOutbox_t *o, size_t len) {
+	return o->count < WS_INGRESS_MAX_MSGS && o->bytes + len <= WS_INGRESS_MAX_BYTES;
+}
+
+bool BarWsOutboxPush (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key,
+		char *text, size_t len) {
+	if (!o || !text || len > WS_FRAME_MAX_BYTES) {
+		free (text);
+		return false;
+	}
+
+	/* Cheap early check so a full ingress fails without allocating */
+	pthread_mutex_lock (&o->lock);
+	bool room = BarWsOutboxHasRoom (o, len);
+	pthread_mutex_unlock (&o->lock);
+	if (!room) {
+		free (text);
+		return false;
+	}
+
+	BarWsFrame_t *frame = BarWsFrameNew (text, len);
+	free (text);
+	BarWsPending_t *p = frame ? malloc (sizeof (*p)) : NULL;
+	if (!p) {
+		BarWsFrameUnref (frame);
+		return false;
+	}
+	p->dest = dest;
+	p->key = key;
+	p->frame = frame;
+	p->next = NULL;
+
+	pthread_mutex_lock (&o->lock);
+	if (!BarWsOutboxHasRoom (o, len)) {
+		/* Lost a race with another producer after the early check */
+		pthread_mutex_unlock (&o->lock);
+		BarWsPendingFree (p);
+		return false;
+	}
+	p->generation = o->generation;
+	if (o->tail) {
+		o->tail->next = p;
+	} else {
+		o->head = p;
+	}
+	o->tail = p;
+	o->count++;
+	o->bytes += len;
+	pthread_mutex_unlock (&o->lock);
+	return true;
+}
+
+BarWsPending_t *BarWsOutboxTake (BarWsOutbox_t *o) {
+	if (!o) {
+		return NULL;
+	}
+	pthread_mutex_lock (&o->lock);
+	BarWsPending_t *list = o->head;
+	o->head = o->tail = NULL;
+	o->count = 0;
+	o->bytes = 0;
+	pthread_mutex_unlock (&o->lock);
+	return list;
+}
+
+uint32_t BarWsOutboxSongStarted (BarWsOutbox_t *o) {
+	if (!o) {
+		return 0;
+	}
+	BarWsPending_t *discard = NULL, *discardTail = NULL;
+
+	pthread_mutex_lock (&o->lock);
+	uint32_t gen = ++o->generation;
+	BarWsPending_t *prev = NULL;
+	BarWsPending_t *p = o->head;
+	while (p) {
+		BarWsPending_t *next = p->next;
+		if (p->key == BAR_WS_KEY_PROGRESS) {
+			if (prev) {
+				prev->next = next;
+			} else {
+				o->head = next;
+			}
+			if (o->tail == p) {
+				o->tail = prev;
+			}
+			o->count--;
+			o->bytes -= BarWsFrameLen (p->frame);
+			p->next = NULL;
+			if (discardTail) {
+				discardTail->next = p;
+			} else {
+				discard = p;
+			}
+			discardTail = p;
+		} else {
+			prev = p;
+		}
+		p = next;
+	}
+	pthread_mutex_unlock (&o->lock);
+
+	BarWsPendingFree (discard);
+	return gen;
+}
+
+uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o) {
+	if (!o) {
+		return 0;
+	}
+	pthread_mutex_lock (&o->lock);
+	uint32_t gen = o->generation;
+	pthread_mutex_unlock (&o->lock);
+	return gen;
 }
