@@ -2993,6 +2993,37 @@ START_TEST (test_end_to_end_commands_over_lws)
 }
 END_TEST
 
+/* The debounced volume broadcast fires on its own deadline: lws_service
+ * sleeps until a socket event, a wake or a due timer, so nothing else must
+ * have to happen for it to go out. */
+START_TEST (test_delayed_volume_broadcast_fires_without_other_traffic)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, false);
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, none;
+	memset (&a, 0, sizeof (a));
+	memset (&none, 0, sizeof (none));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &none, 0);
+
+	/* What volume.set does on the worker: schedule, then nothing else */
+	BarWsScheduleVolumeBroadcast (app.wsContext, 100);
+	struct timespec start, now;
+	clock_gettime (CLOCK_MONOTONIC, &start);
+	test_e2e_pump_until (cctx, &a, 2, &none, 0);
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	test_e2e_expect (&a, 1, "\"volume\"");
+	const double waited = (double) (now.tv_sec - start.tv_sec) +
+			(double) (now.tv_nsec - start.tv_nsec) / 1e9;
+	ck_assert_msg (waited < 2.0, "debounced volume took %.2f s", waited);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_app_destroy (&app);
+}
+END_TEST
+
 Suite *websocket_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -3077,6 +3108,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_oversize_request_frame_is_dropped_connection_stays_open);
 	tcase_add_test (tc_worker, test_end_to_end_commands_over_lws);
 	tcase_add_test (tc_worker, test_busy_burst_notifies_once_and_closes_nobody);
+	tcase_add_test (tc_worker, test_delayed_volume_broadcast_fires_without_other_traffic);
 	tcase_add_test (tc_worker, test_split_message_is_reassembled);
 	tcase_add_test (tc_worker, test_split_message_over_limit_is_dropped_with_tail);
 	tcase_add_test (tc_worker, test_split_messages_do_not_interleave_between_clients);

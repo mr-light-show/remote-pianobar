@@ -88,6 +88,9 @@ typedef struct {
 		bool pending;           /* Whether broadcast is pending */
 	} delayedVolumeBroadcast;
 	pthread_mutex_t volumeBroadcastMutex;
+	/* Service-loop timer (lws_sorted_usec_list_t) for the volume debounce
+	 * and the system-volume poll; service thread only */
+	void *timer;
 	
 	/* System volume polling (for detecting external changes) */
 	int lastPolledVolume;         /* Last known system volume (-1 = unknown) */

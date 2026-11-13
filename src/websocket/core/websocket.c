@@ -577,6 +577,40 @@ static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
 	}
 }
 
+/* The timer only has to end lws_service(): the loop below does the work */
+static void BarWsTimerWake (lws_sorted_usec_list_t *sul) {
+	(void) sul;
+}
+
+/* Arm the service-loop timer for the next due work: the debounced volume
+ * deadline and, in system volume mode, the 1 s poll. Nothing is armed when
+ * idle, so the thread sleeps until a socket event or a producer's wake.
+ * Service thread only (lws_sul is not thread-safe). */
+static void BarWsArmTimer (BarWsContext_t *ctx, const BarApp_t *app) {
+	long long delayMs = -1;
+
+	pthread_mutex_lock (&ctx->volumeBroadcastMutex);
+	if (ctx->delayedVolumeBroadcast.pending) {
+		struct timespec ts;
+		clock_gettime (CLOCK_MONOTONIC, &ts);
+		const long long nowMs = (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+		delayMs = (long long) ctx->delayedVolumeBroadcast.scheduleTime - nowMs;
+		if (delayMs < 0) {
+			delayMs = 0;
+		}
+	}
+	pthread_mutex_unlock (&ctx->volumeBroadcastMutex);
+	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM &&
+			(delayMs < 0 || delayMs > 1000)) {
+		delayMs = 1000;
+	}
+	if (delayMs >= 0) {
+		lws_sul_schedule ((struct lws_context *) ctx->context, 0,
+				(lws_sorted_usec_list_t *) ctx->timer, BarWsTimerWake,
+				(lws_usec_t) delayMs * LWS_US_PER_MS);
+	}
+}
+
 /* WebSocket service thread - runs lws_service() loop */
 static void* BarWebsocketThread(void *arg) {
 	BarApp_t *app = (BarApp_t *)arg;
@@ -590,9 +624,10 @@ static void* BarWebsocketThread(void *arg) {
 	
 	while (atomic_load_explicit (&ctx->threadRunning, memory_order_relaxed) && !atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 		/* Returns after socket activity, a producer's lws_cancel_service()
-		 * wakeup, or WEBSOCKET_POLL_MS (keeps the volume timers below ticking) */
+		 * wakeup or the timer armed below. Its timeout argument is ignored
+		 * (libwebsockets >= 3.2). */
 		if (ctx->context) {
-			lws_service(ctx->context, WEBSOCKET_POLL_MS);
+			lws_service(ctx->context, 0);
 		}
 		
 		/* Process delayed volume broadcast (debouncing) */
@@ -603,6 +638,8 @@ static void* BarWebsocketThread(void *arg) {
 		
 		/* Deliver what producers (and the callbacks above) queued */
 		BarWsServiceOutbox (ctx);
+		
+		BarWsArmTimer (ctx, app);
 		
 		/* NOTE: Progress broadcasting now handled by playback_manager thread
 		 * This ensures timing is independent of WebSocket servicing delays
@@ -718,6 +755,7 @@ static void BarWsContextFree (BarApp_t *app) {
 		lws_context_destroy (ctx->context);
 		ctx->context = NULL;
 	}
+	free (ctx->timer);
 	if (ctx->connections) {
 		for (size_t i = 0; i < ctx->maxConnections; i++) {
 			BarWsClientQueueClear (&ctx->connections[i].pending);
@@ -754,8 +792,9 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->maxConnections = 32;
 	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	ctx->outbox = BarWsOutboxNew ();
-	if (!ctx->connections || !ctx->outbox) {
-		log_write(LOG_ERROR, "Failed to allocate connection table or outbound queue\n");
+	ctx->timer = calloc (1, sizeof (lws_sorted_usec_list_t));
+	if (!ctx->connections || !ctx->outbox || !ctx->timer) {
+		log_write(LOG_ERROR, "Failed to allocate the WebSocket context\n");
 		BarWsContextFree (app);
 		return false;
 	}

@@ -685,7 +685,7 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 | Thread | Owns | Runs |
 |---|---|---|
 | Main (lifecycle owner) | `BarWebsocketInit`/`BarWebsocketDestroy` (they start and stop the worker; `BarWebsocketWorkerStart`/`Stop` are public only as test seams) | CLI input in Both mode |
-| Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks validate a frame and queue a copy; the initial `process` snapshot on connect; delayed volume and system-volume polling |
+| Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks collect a message and queue a copy; the initial `process` snapshot on connect; the debounced volume broadcast and the 1 s system-volume poll, on an `lws_sul` timer armed only while such work is due (`lws_service` otherwise sleeps until socket activity or a producer's `lws_cancel_service`) |
 | Command worker (`BarWsWorkerThread`) | nothing shared; pops one command at a time | `BarSocketIoHandleMessage` for every client command, FIFO, with the handlers' own locking (below) |
 | Any producer (worker, playback manager, CLI) | nothing | `BarWebsocketSend` and friends: push to the outbox and `lws_cancel_service()`; never blocks on a client |
 | Playback manager | `ctx->progress` (progress de-duplication) | `BarWsBroadcastProgress` |
