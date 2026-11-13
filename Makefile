@@ -43,8 +43,16 @@ endif
 PIANOBAR_DIR:=src
 # Third-party miniaudio wrapper: omit from cppcheck (vendored, multi-config noise)
 PIANOBAR_LINT_C:=$(filter-out ${PIANOBAR_DIR}/miniaudio_impl.c,$(wildcard ${PIANOBAR_DIR}/*.c))
-# New WebSocket modules covered by lint (the rest of src/websocket predates lint coverage)
-PIANOBAR_LINT_WS:=src/websocket/core/outbox.c src/websocket/core/commands.c
+# Every WebSocket source we own (lws itself is a system library, not linted)
+PIANOBAR_LINT_WS:=\
+		src/websocket/core/websocket.c \
+		src/websocket/core/websocket_lws_log.c \
+		src/websocket/core/outbox.c \
+		src/websocket/core/commands.c \
+		src/websocket/http/http_server.c \
+		src/websocket/protocol/socketio.c \
+		src/websocket/protocol/error_messages.c \
+		src/websocket/daemon/daemon.c
 LOCALE_YAML:=$(wildcard locale/*.yaml)
 LOCALE_GEN_MARKER:=${PIANOBAR_DIR}/l10n_defaults_gen.c
 # Updated when codegen runs; avoids re-running Python on every `make locale-codegen` (e.g. after
