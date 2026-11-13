@@ -3,7 +3,6 @@
 # main.c: used in platform-specific daemon paths / config-dependent code
 unreadVariable:src/main.c
 constVariablePointer:src/main.c
-unusedVariable:src/main.c
 # Style / optional const and scope (triage; fix in follow-up if desired)
 staticFunction:src/bar_state.c
 constVariablePointer:src/playback_manager.c
