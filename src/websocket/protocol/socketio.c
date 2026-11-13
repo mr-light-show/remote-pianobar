@@ -1697,7 +1697,7 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 	/* Note: Play/pause/toggle broadcast completed snapshots in ui_act.c.
 	 * song.love / song.ban emit a full `process` (not `start`) via BarWsBroadcastProcess
 	 * in BarUiActLoveSong/BarUiActBanSong after a successful PIANO_REQUEST_RATE_SONG —
-	 * do not add BarSocketIoEmitStart here (duplicate). */
+	 * do not add a `start` broadcast here (duplicate). */
 }
 
 /* Handle 'changeStation' event from client */
