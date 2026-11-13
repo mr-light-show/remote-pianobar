@@ -180,6 +180,9 @@ struct BarWsOutbox {
 	size_t count;
 	size_t bytes;
 	uint32_t generation;
+	uint64_t playStateEpoch;   /* newest accepted completed play-state epoch */
+	bool playStateEpochValid;
+	bool overflowed;           /* a push was rejected since the last check */
 };
 
 BarWsOutbox_t *BarWsOutboxNew (void) {
@@ -217,42 +220,33 @@ static bool BarWsOutboxHasRoom (const BarWsOutbox_t *o, size_t len) {
 	return o->count < WS_INGRESS_MAX_MSGS && o->bytes + len <= WS_INGRESS_MAX_BYTES;
 }
 
-bool BarWsOutboxPush (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key,
+/* Copy text into a new pending node and free text. NULL if the frame is too
+ * large or memory is short. */
+static BarWsPending_t *BarWsPendingNew (BarWsConnId_t dest, BarWsKey_t key,
 		char *text, size_t len) {
-	if (!o || !text || len > WS_FRAME_MAX_BYTES) {
-		free (text);
-		return false;
-	}
-
-	/* Cheap early check so a full ingress fails without allocating */
-	pthread_mutex_lock (&o->lock);
-	bool room = BarWsOutboxHasRoom (o, len);
-	pthread_mutex_unlock (&o->lock);
-	if (!room) {
-		free (text);
-		return false;
-	}
-
 	BarWsFrame_t *frame = BarWsFrameNew (text, len);
 	free (text);
 	BarWsPending_t *p = frame ? malloc (sizeof (*p)) : NULL;
 	if (!p) {
 		BarWsFrameUnref (frame);
-		return false;
+		return NULL;
 	}
 	p->dest = dest;
 	p->key = key;
+	p->generation = 0;
 	p->frame = frame;
 	p->next = NULL;
+	return p;
+}
 
-	pthread_mutex_lock (&o->lock);
+/* Caller holds o->lock. Appends p if there is room; otherwise records the
+ * overflow and leaves p to the caller. */
+static bool BarWsOutboxAppendLocked (BarWsOutbox_t *o, BarWsPending_t *p) {
+	size_t len = BarWsFrameLen (p->frame);
 	if (!BarWsOutboxHasRoom (o, len)) {
-		/* Lost a race with another producer after the early check */
-		pthread_mutex_unlock (&o->lock);
-		BarWsPendingFree (p);
+		o->overflowed = true;
 		return false;
 	}
-	p->generation = o->generation;
 	if (o->tail) {
 		o->tail->next = p;
 	} else {
@@ -261,31 +255,13 @@ bool BarWsOutboxPush (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key,
 	o->tail = p;
 	o->count++;
 	o->bytes += len;
-	pthread_mutex_unlock (&o->lock);
 	return true;
 }
 
-BarWsPending_t *BarWsOutboxTake (BarWsOutbox_t *o) {
-	if (!o) {
-		return NULL;
-	}
-	pthread_mutex_lock (&o->lock);
-	BarWsPending_t *list = o->head;
-	o->head = o->tail = NULL;
-	o->count = 0;
-	o->bytes = 0;
-	pthread_mutex_unlock (&o->lock);
-	return list;
-}
-
-uint32_t BarWsOutboxSongStarted (BarWsOutbox_t *o) {
-	if (!o) {
-		return 0;
-	}
+/* Caller holds o->lock. Unlinks unsent PROGRESS entries and returns them
+ * for the caller to free after unlocking. */
+static BarWsPending_t *BarWsOutboxUnlinkProgressLocked (BarWsOutbox_t *o) {
 	BarWsPending_t *discard = NULL, *discardTail = NULL;
-
-	pthread_mutex_lock (&o->lock);
-	uint32_t gen = ++o->generation;
 	BarWsPending_t *prev = NULL;
 	BarWsPending_t *p = o->head;
 	while (p) {
@@ -313,10 +289,146 @@ uint32_t BarWsOutboxSongStarted (BarWsOutbox_t *o) {
 		}
 		p = next;
 	}
+	return discard;
+}
+
+static void BarWsOutboxMarkOverflow (BarWsOutbox_t *o) {
+	pthread_mutex_lock (&o->lock);
+	o->overflowed = true;
+	pthread_mutex_unlock (&o->lock);
+}
+
+/* Push with the generation either current at push time or observed by the
+ * producer. */
+static bool BarWsOutboxPushTagged (BarWsOutbox_t *o, BarWsConnId_t dest,
+		BarWsKey_t key, char *text, size_t len, const uint32_t *observed) {
+	if (!o || !text) {
+		free (text);
+		return false;
+	}
+
+	/* Cheap early check so a full ingress fails without allocating */
+	pthread_mutex_lock (&o->lock);
+	bool room = BarWsOutboxHasRoom (o, len);
+	if (!room) {
+		o->overflowed = true;
+	}
+	pthread_mutex_unlock (&o->lock);
+	if (!room) {
+		free (text);
+		return false;
+	}
+
+	BarWsPending_t *p = BarWsPendingNew (dest, key, text, len);
+	if (!p) {
+		BarWsOutboxMarkOverflow (o);
+		return false;
+	}
+
+	pthread_mutex_lock (&o->lock);
+	p->generation = observed ? *observed : o->generation;
+	/* May lose a race with another producer after the early check */
+	bool queued = BarWsOutboxAppendLocked (o, p);
+	pthread_mutex_unlock (&o->lock);
+	if (!queued) {
+		BarWsPendingFree (p);
+	}
+	return queued;
+}
+
+bool BarWsOutboxPush (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key,
+		char *text, size_t len) {
+	return BarWsOutboxPushTagged (o, dest, key, text, len, NULL);
+}
+
+bool BarWsOutboxPushProgress (BarWsOutbox_t *o, uint32_t observedGeneration,
+		char *text, size_t len) {
+	return BarWsOutboxPushTagged (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_PROGRESS,
+			text, len, &observedGeneration);
+}
+
+bool BarWsOutboxPushSongStart (BarWsOutbox_t *o, char *text, size_t len) {
+	if (!o || !text) {
+		free (text);
+		return false;
+	}
+	BarWsPending_t *p = BarWsPendingNew (BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			text, len);
+
+	pthread_mutex_lock (&o->lock);
+	uint32_t gen = ++o->generation;
+	BarWsPending_t *discard = BarWsOutboxUnlinkProgressLocked (o);
+	bool queued = false;
+	if (p) {
+		p->generation = gen;
+		queued = BarWsOutboxAppendLocked (o, p);
+	} else {
+		o->overflowed = true;
+	}
 	pthread_mutex_unlock (&o->lock);
 
 	BarWsPendingFree (discard);
-	return gen;
+	if (!queued) {
+		BarWsPendingFree (p);
+	}
+	return queued;
+}
+
+bool BarWsOutboxPushPlayState (BarWsOutbox_t *o, uint64_t epoch, char *text,
+		size_t len) {
+	if (!o || !text) {
+		free (text);
+		return false;
+	}
+	BarWsPending_t *p = BarWsPendingNew (BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			text, len);
+
+	pthread_mutex_lock (&o->lock);
+	bool queued = false;
+	if (o->playStateEpochValid && epoch < o->playStateEpoch) {
+		/* An older completed state lost the race: never publish it */
+	} else {
+		/* Accepted even if the frame is rejected below: clients then resync
+		 * from current state, which an older epoch must not overwrite */
+		o->playStateEpoch = epoch;
+		o->playStateEpochValid = true;
+		if (p) {
+			p->generation = o->generation;
+			queued = BarWsOutboxAppendLocked (o, p);
+		} else {
+			o->overflowed = true;
+		}
+	}
+	pthread_mutex_unlock (&o->lock);
+
+	if (!queued) {
+		BarWsPendingFree (p);
+	}
+	return queued;
+}
+
+BarWsPending_t *BarWsOutboxTake (BarWsOutbox_t *o) {
+	if (!o) {
+		return NULL;
+	}
+	pthread_mutex_lock (&o->lock);
+	BarWsPending_t *list = o->head;
+	o->head = o->tail = NULL;
+	o->count = 0;
+	o->bytes = 0;
+	pthread_mutex_unlock (&o->lock);
+	return list;
+}
+
+bool BarWsOutboxTakeOverflow (BarWsOutbox_t *o) {
+	if (!o) {
+		return false;
+	}
+	pthread_mutex_lock (&o->lock);
+	bool overflowed = o->overflowed;
+	o->overflowed = false;
+	pthread_mutex_unlock (&o->lock);
+	return overflowed;
 }
 
 uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o) {
