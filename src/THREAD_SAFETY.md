@@ -9,8 +9,10 @@ This document describes the threading model, lock hierarchy, and safe coding pat
 3. [Safe Patterns](#safe-patterns)
 4. [Unsafe Patterns](#unsafe-patterns)
 5. [Guidelines for Contributors](#guidelines-for-contributors)
-6. [Logging](#logging)
-7. [Debugging Tools](#debugging-tools)
+6. [WebSocket threads and queues](#websocket-threads-and-queues)
+7. [Command worker: handler pointer audit](#command-worker-handler-pointer-audit)
+8. [Logging](#logging)
+9. [Debugging Tools](#debugging-tools)
 
 ---
 
@@ -19,25 +21,25 @@ This document describes the threading model, lock hierarchy, and safe coding pat
 Pianobar supports three `ui_mode` values (WebSocket builds):
 
 - **CLI-only** (`BAR_UI_MODE_CLI`): Terminal input only; WebSocket server and playback manager **do not** start. No `stateRwlock` (single-threaded access to playlist/station pointers from main).
-- **Web** (`BAR_UI_MODE_WEB`): Daemon; main thread sleeps; **WebSocket thread** + **playback manager thread** share state via `stateRwlock`.
-- **Both** (`BAR_UI_MODE_BOTH`): Foreground CLI + WebSocket + playback manager (three threads touching shared playlist/station pointers).
+- **Web** (`BAR_UI_MODE_WEB`): Daemon; main thread sleeps; the **WebSocket command worker** + **playback manager thread** share state via `stateRwlock` (the **WebSocket service thread** only reads snapshots).
+- **Both** (`BAR_UI_MODE_BOTH`): Foreground CLI + WebSocket + playback manager (the CLI, the command worker and the playback manager mutate shared playlist/station pointers).
 
-Multiple WebSocket clients are serialized on the **one** WebSocket service thread; extra connections do not add threads.
+The WebSocket server has exactly **two** threads however many clients connect: the **service thread** does transport work only, and the **command worker** runs every client command, one at a time (see [WebSocket threads and queues](#websocket-threads-and-queues)).
 
 ### Threading Model (Web and Both)
 
 **Web mode** — main sleeps; WebSocket + playback manager:
 
 ```
-┌──────────────────────┐      ┌──────────────────────┐      ┌─────────────────────┐
-│ Playback Mgr Thread  │      │   Player Thread      │      │   WebSocket Thread  │
-├──────────────────────┤      ├──────────────────────┤      ├─────────────────────┤
-│ - Auto-advance queue │      │ - Audio decoding     │      │ - libwebsockets     │
-│ - Fetch playlist     │      │ - Playback timing    │      │ - Client connections│
-│ - Start playback     │      │ - Buffer management  │      │ - WebUI commands    │
-└──────────────────────┘      └──────────────────────┘      └─────────────────────┘
-         │                            │                              │
-         └────────────────────────────┴──────────────────────────────┘
+┌──────────────────────┐   ┌──────────────────────┐   ┌─────────────────────┐   ┌─────────────────────┐
+│ Playback Mgr Thread  │   │   Player Thread      │   │ WS Command Worker   │   │ WS Service Thread   │
+├──────────────────────┤   ├──────────────────────┤   ├─────────────────────┤   ├─────────────────────┤
+│ - Auto-advance queue │   │ - Audio decoding     │   │ - WebUI commands    │   │ - libwebsockets     │
+│ - Fetch playlist     │   │ - Playback timing    │   │   (FIFO, one at a   │   │ - Connections, I/O  │
+│ - Start playback     │   │ - Buffer management  │   │   time; Pandora)    │   │ - Snapshots only    │
+└──────────────────────┘   └──────────────────────┘   └─────────────────────┘   └─────────────────────┘
+         │                          │                          │                         │
+         └──────────────────────────┴──────────────────────────┴─────────────────────────┘
                                       │
                          ┌────────────▼───────────┐
                          │   Shared State (app)   │
@@ -50,6 +52,8 @@ Multiple WebSocket clients are serialized on the **one** WebSocket service threa
 
 **Both mode** adds a **main/CLI thread** (user input, fifo) alongside the WebSocket and playback manager threads shown above.
 
+The service thread and the worker exchange only owned bytes: request copies with a connection ID (command queue) and formatted frames with a destination (outbox). Neither queue hands over JSON nodes, stations, songs or `struct lws *`.
+
 ### Locks (state, player, HTTP)
 
 Pianobar uses **several synchronization primitives**:
@@ -60,6 +64,8 @@ Pianobar uses **several synchronization primitives**:
 | `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | `BAR_UI_MODE_WEB` and `BAR_UI_MODE_BOTH` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
+| Command queue lock | Protects the bounded command FIFO (service thread pushes, worker pops) | Web and both | [`websocket/core/commands.c`](websocket/core/commands.c) |
+| Outbox lock | Protects producer ingress, song generation and play-state watermark | Web and both | [`websocket/core/outbox.c`](websocket/core/outbox.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
 
 **`pianoHttpMutex` usage:** Initialized with `PTHREAD_MUTEX_RECURSIVE` after `curl_easy_init()` (`BarUiPianoHttpMutexInit`). Every call path that performs Pandora RPC must go through [`BarUiPianoCall`](ui.c) (or `BarUiPianoCallLogged`, which delegates to it). The mutex is held for the full outer call, including nested re-authentication (`LOGIN` from inside the same thread). Destroyed before `curl_easy_cleanup()` (`BarUiPianoHttpMutexDestroy`).
@@ -213,11 +219,12 @@ all application locks are released, `BarWsBroadcastPlayStateSnapshot` publishes
 that completed result without resampling or dropping it for an unrelated audio
 owner. Generic `BarWsBroadcastPlayState` still snapshots only with no audio
 owner or waiting control, then unlocks before JSON construction or enqueue.
-The existing STATE bucket mutex atomically rejects
-epochs older than its last accepted play-state snapshot; its watermark survives
-message consumption and generic STATE events. Thus a delayed producer cannot
-replace a newer final event. Epoch stays internal, not in the wire payload.
-No bucket mutex overlaps an application mutex, and no new mutex is introduced.
+The outbox ingress lock (`BarWsOutboxPushPlayState`) atomically rejects
+epochs older than the last accepted play-state snapshot; the watermark survives
+delivery and generic events. Thus a delayed producer cannot replace a newer
+final event. Epoch stays internal, not in the wire payload. The outbox lock is
+a leaf: it never overlaps an application mutex and is never held across a
+socket call.
 
 **Example from audio thread** ([`player.c`](player.c)):
 ```c
@@ -252,6 +259,13 @@ pthread_mutex_unlock(&player->decoderLock);
 `stateRwlock`, `player.lock`, and `decoderLock` are sequential locks, not a
 nested hierarchy. A path may acquire the next only after releasing the prior
 one. Use state getters/snapshots to finish state access before player APIs.
+
+The full order is **`pianoHttpMutex` → `stateRwlock`**, and **`pianoHttpMutex` →
+player audio reservation / `player.lock`** (see the
+[handler pointer audit](#command-worker-handler-pointer-audit)). The command
+queue and outbox locks are leaves: they are taken last, held only to link or
+unlink an entry, and nothing is called while they are held (except the
+worker's `pthread_cond_wait`). No lock is held across a thread join.
 
 When Pandora RPCs need both `pianoHttpMutex` and `stateRwlock`, the order is
 **`pianoHttpMutex` first, then `stateRwlock`**. This order is limited to the
@@ -607,6 +621,11 @@ BarUiActCallback(BarUiActMyNewAction) {
 
 #### Scenario 2: Adding a New WebSocket Handler
 
+Handlers run on the command worker, never on the service thread. They may
+block (Pandora HTTP), but every later command waits for them. Reply with an
+explicit destination (`BarSocketIoEmit*To (app, requester, ...)`) or a
+broadcast; never touch the connection table (service thread only).
+
 ```c
 // Template for thread-safe WebSocket handler
 void BarSocketIoHandleMyEvent(BarApp_t *app, json_object *data) {
@@ -659,9 +678,47 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 
 ---
 
-## Command worker: handler pointer audit (draft)
+## WebSocket threads and queues
 
-> **DRAFT (PR3, Task 3.1).** This records the audit done before WebSocket commands move to a single worker thread, and the fixes for its findings. Task 3.3 finalizes it.
+### Thread ownership
+
+| Thread | Owns | Runs |
+|---|---|---|
+| Main (lifecycle owner) | `BarWebsocketInit`/`BarWebsocketDestroy`, `BarWebsocketWorkerStart`/`Stop` | CLI input in Both mode |
+| Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks validate a frame and queue a copy; the initial `process` snapshot on connect; delayed volume and system-volume polling |
+| Command worker (`BarWsWorkerThread`) | nothing shared; pops one command at a time | `BarSocketIoHandleMessage` for every client command, FIFO, with the handlers' own locking (below) |
+| Any producer (worker, playback manager, CLI) | nothing | `BarWebsocketSend` and friends: push to the outbox and `lws_cancel_service()`; never blocks on a client |
+| Playback manager | `ctx->progress` (progress de-duplication) | `BarWsBroadcastProgress` |
+
+`BarWebsocketDisconnectAllClients` touches the connection table and is service-thread only.
+
+The service thread never runs a command, never takes `pianoHttpMutex` and never waits on the command queue (it only pushes, which does not wait). The initial `process` frame for a new connection is still built on the service thread: `BarSocketIoBuildProcessPayload` takes only `stateRwlock` (read, via `BarStateSnapshotPlayback`) and `player.lock`, which are never held across network I/O. Pandora HTTP runs under `pianoHttpMutex` only, and `stateRwlock` is taken after it for in-memory updates, so a slow Pandora call cannot make that snapshot wait. Moving it to the worker would delay a new client's first state behind any slow command.
+
+### Queues and limits
+
+| Queue | Producer → consumer | Limits (`bar_constants.h`) | When full |
+|---|---|---|---|
+| Command queue (`commands.c`) | receive callback → worker | `WS_CMD_MAX_REQUEST_BYTES` (4 KiB, one receive callback), `WS_CMD_MAX_ITEMS` 32, `WS_CMD_MAX_BYTES` 64 KiB | The requester gets an `error` event (`web.socket.busy`); nothing is queued |
+| Outbox ingress (`outbox.c`) | any producer → service thread | `WS_FRAME_MAX_BYTES` per frame, `WS_INGRESS_MAX_MSGS`, `WS_INGRESS_MAX_BYTES` | Every client is closed (1011) and resyncs on reconnect |
+| Per-client pending (`outbox.c`) | service thread → that client's writable callbacks | `WS_CLIENT_MAX_MSGS`, `WS_CLIENT_MAX_BYTES` | Only that client is closed (1008) |
+
+A request larger than `WS_CMD_MAX_REQUEST_BYTES`, or one that does not arrive as one frame in one receive callback, is dropped and logged; the connection stays open. After shutdown starts the command queue is closed and receives are dropped without a reply.
+
+### Shutdown order
+
+`BarWebsocketDestroy` runs on the lifecycle owner after the other producers stopped (`BarMainLoop` stops the playback manager, which joins the player thread; the CLI runs on the owner itself):
+
+1. `BarWebsocketWorkerStop`: close the command queue (later pushes fail with CLOSED; queued commands are dropped and freed), then `BarInterruptIncrement ()` to interrupt the in-flight Pandora request (during a request the interrupt target is that request's own flag, which curl's progress callback polls, exactly as for SIGINT), then join the worker.
+2. Stop and join the service thread.
+3. Destroy the lws context (closes connections), then free the command queue, the per-client queues and the outbox. Replies not yet written are abandoned by design; clients that reconnect resync from one `process` frame.
+
+`app.quit` arriving as a command runs on the worker: it sets `doQuit` and stops the player, which the main loop notices as it does for the CLI `q` key. The worker never joins itself; `BarWebsocketWorkerStop` called on the worker logs and returns.
+
+Limit: the interrupt reaches a request only while it is in curl. A command that is between Pandora calls, or a target redirected by the playback manager meanwhile, is not interrupted; its next request runs until curl's own timeout (`timeout`, 30 s by default) and the join waits for it.
+
+## Command worker: handler pointer audit
+
+This records the audit done before WebSocket commands moved to the single command worker (PR3), and the fixes for its findings. Every handler below now runs on the worker; the CLI (Both mode) and the playback manager remain concurrent mutators.
 
 ### Invariant
 
@@ -711,12 +768,14 @@ The mutex is never held across waits for the playback manager: teardown (disconn
 
 ### Known limits
 
-- **Interactive actions over WebSocket (C1).** The `action` commands above that map to interactive CLI callbacks prompt on the terminal and wait for input. In Both mode the executing thread (today the service thread, after PR3 the worker) blocks until the user answers. With stdin closed (daemon) it can block indefinitely. It holds no lock while waiting, but it stalls every queued command. The web UI uses the dedicated events instead. The protocol is unchanged here by decision.
+- **Interactive actions over WebSocket (C1).** The `action` commands above that map to interactive CLI callbacks prompt on the terminal and wait for input. In Both mode the command worker blocks until the user answers; with stdin closed (daemon) it can block indefinitely. It holds no lock while waiting and connections keep being serviced, but every later command waits, and once 32 are queued clients get the busy error. The web UI uses the dedicated events instead. The protocol is unchanged here by decision.
+- **One command at a time.** A slow command (a Pandora call up to curl's timeout, an eventcmd script) delays every later command, including cheap ones such as volume or pause. That is by design: commands run in the order received and Pandora calls stay serialized.
 - eventcmd's input is formatted under the caller's hold. The write to the script and the wait for it run with the thread's holds released (`BarUiStartEventCmd` suspends and restores them), so a slow script delays only its own thread. Callers resolve stations/songs again afterwards (`BarUiActEventcmd`).
-- The playback manager now contends with in-flight Pandora HTTP at song boundaries: advancing, history trims, drains and the song-start/finish sections take `pianoHttpMutex`, so they wait for a WebSocket or CLI Pandora call that is already running.
+- The playback manager contends with in-flight Pandora HTTP at song boundaries: advancing, history trims, drains and the song-start/finish sections take `pianoHttpMutex`, so they wait for a worker or CLI Pandora call that is already running (and the worker waits for theirs). eventcmd scripts run with the holds released, so they do not add to this.
 - `BarStateAdvancePlaylist` writes `finished->head.next = NULL` under `stateRwlock` only. The song stays alive (it moves to the history), so there is no lifetime issue (no song is freed without the mutex), but eventcmd's next-song walk, which runs under `pianoHttpMutex` alone, races benignly on that link, and TSan would flag it.
 - The player thread borrows `player.url` (the playlist head's `audioUrl`) until `avformat_open_input`. Teardown drains the playlist before stopping the player, so a drain in that window frees the URL. This is outside the handlers and not covered by the mutex.
 - `station_sort.c` passes the sort order to `qsort` through a global, so concurrent sorts on two threads can use each other's order. That is a data race on display order, not on pointer lifetime.
+- Settings are not locked. The worker writes `settings.activeAccountIndex` (account switch) while snapshot builders on other threads read it; the index is word-sized and checked against `accountCount` on read. System-volume state in `system_volume.c` is shared by the worker (`volume.set`) and the service thread's poll; only the PulseAudio backend has its own mutex.
 
 ---
 
