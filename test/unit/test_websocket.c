@@ -117,6 +117,7 @@ static void test_setup_web_app (BarApp_t *app, BarWsContext_t *ctx) {
 	app->settings.volume = 40;
 	app->wsContext = ctx;
 	test_ws_context_init_buckets (ctx);
+	pthread_mutex_init (&ctx->connMutex, NULL);
 	BarStateInit (app);
 	pthread_mutex_init (&app->player.lock, NULL);
 	pthread_cond_init (&app->player.cond, NULL);
@@ -131,6 +132,7 @@ static void test_teardown_web_app (BarApp_t *app, BarWsContext_t *ctx) {
 	pthread_mutex_destroy (&app->player.lock);
 	BarStateDestroy (app);
 	test_ws_context_destroy_buckets (ctx);
+	pthread_mutex_destroy (&ctx->connMutex);
 	BarSettingsDestroy (&app->settings);
 }
 
@@ -276,29 +278,60 @@ static void test_setup_clients (BarApp_t *app, BarWsContext_t *ctx) {
 	ctx->maxConnections = TEST_MAX_CLIENTS;
 	ctx->connections = calloc (TEST_MAX_CLIENTS, sizeof (BarWsConnection_t));
 	ck_assert_ptr_nonnull (ctx->connections);
-	pthread_mutex_init (&ctx->connMutex, NULL);
 }
 
 static void test_teardown_clients (BarApp_t *app, BarWsContext_t *ctx) {
-	pthread_mutex_destroy (&ctx->connMutex);
 	free (ctx->connections);
 	test_teardown_web_app (app, ctx);
 }
 
 static char test_fake_sockets[TEST_MAX_CLIENTS];
 
+/* Records which fake sockets a delivery wrote to, and what. */
+static void *test_written_wsi[16];
+static char test_written_msg[16][64];
+static size_t test_written_count;
+
+static int test_write_frame (void *wsi, unsigned char *buf, size_t len) {
+	ck_assert_uint_lt (test_written_count, 16);
+	test_written_wsi[test_written_count] = wsi;
+	snprintf (test_written_msg[test_written_count], 64, "%.*s", (int) len, buf);
+	test_written_count++;
+	return (int) len;
+}
+
+static void test_clients_hook_writer (BarWsContext_t *ctx) {
+	test_written_count = 0;
+	ctx->writeFrame = test_write_frame;
+}
+
+/* Run the service-thread side: drain a bucket and deliver it. */
+static void test_drain_bucket (BarWsContext_t *ctx, BarWsBucketType_t bucket) {
+	BarWsMessage_t *msg = ctx->buckets[bucket].message;
+	ctx->buckets[bucket].message = NULL;
+	ck_assert_ptr_nonnull (msg);
+	BarWsDeliver (ctx, msg->data, msg->dataLen, msg->dest);
+	BarWsMessageFree (msg);
+}
+
 START_TEST (test_send_broadcast_reaches_all_clients)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
 	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
 	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio"), 0);
 
 	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_VOLUME,
 			strdup ("2[\"volume\",40]")));
-	ck_assert_str_eq (test_bucket_payload (&ctx, BUCKET_VOLUME), "2[\"volume\",40]");
-	ck_assert_uint_eq (ctx.buckets[BUCKET_VOLUME].message->dest, BAR_WS_DEST_BROADCAST);
+	ck_assert_uint_eq (test_written_count, 0); /* queued, not yet written */
+	test_drain_bucket (&ctx, BUCKET_VOLUME);
+
+	ck_assert_uint_eq (test_written_count, 2);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[0]);
+	ck_assert_ptr_eq (test_written_wsi[1], &test_fake_sockets[1]);
+	ck_assert_str_eq (test_written_msg[0], "2[\"volume\",40]");
 
 	test_teardown_clients (&app, &ctx);
 }
@@ -309,6 +342,7 @@ START_TEST (test_send_to_id_reaches_only_that_client)
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
 	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
 	BarWsConnId_t b = BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
 	ck_assert_uint_ne (a, 0);
@@ -316,9 +350,13 @@ START_TEST (test_send_to_id_reaches_only_that_client)
 	ck_assert_uint_ne (a, b);
 
 	ck_assert (BarWebsocketSend (&app, b, BUCKET_STATIONS, strdup ("2[\"stations\"]")));
-	ck_assert_str_eq (test_bucket_payload (&ctx, BUCKET_STATIONS), "2[\"stations\"]");
-	/* The queued message is addressed to B alone, never to A or everyone. */
-	ck_assert_uint_eq (ctx.buckets[BUCKET_STATIONS].message->dest, b);
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[1]);
+	ck_assert_str_eq (test_written_msg[0], "2[\"stations\"]");
+	/* Delivered directly: nothing parked in a bucket */
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		ck_assert_ptr_null (ctx.buckets[i].message);
+	}
 
 	test_teardown_clients (&app, &ctx);
 }
@@ -329,6 +367,7 @@ START_TEST (test_send_to_reused_slot_does_not_reach_new_client)
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
 	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
 	ck_assert_uint_eq (a, 1);
 	BarWsConnectionRemove (&ctx, &test_fake_sockets[0]);
@@ -337,12 +376,62 @@ START_TEST (test_send_to_reused_slot_does_not_reach_new_client)
 	ck_assert_uint_eq (b, 2);
 	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[1]);
 
+	/* Send-time resolution rejects the stale ID */
 	ck_assert (!BarWebsocketSend (&app, a, BUCKET_STATE, strdup ("2[\"reply\"]")));
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		ck_assert_ptr_null (ctx.buckets[i].message);
-	}
+	ck_assert_uint_eq (test_written_count, 0);
+	/* Delivery-time filter also skips it (message queued before the swap) */
+	BarWsDeliver (&ctx, "2[\"reply\"]", 11, a);
+	ck_assert_uint_eq (test_written_count, 0);
 	/* B itself is still addressable */
 	ck_assert (BarWebsocketSend (&app, b, BUCKET_STATE, strdup ("2[\"reply\"]")));
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[1]);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_targeted_and_broadcast_do_not_replace_each_other)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+
+	/* Broadcast pending in a bucket, then a targeted reply in the same bucket */
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATIONS,
+			strdup ("2[\"bcast\"]")));
+	ck_assert (BarWebsocketSend (&app, a, BUCKET_STATIONS, strdup ("2[\"reply\"]")));
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_str_eq (test_written_msg[0], "2[\"reply\"]");
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[0]);
+	/* The pending broadcast survived and still reaches both clients */
+	test_drain_bucket (&ctx, BUCKET_STATIONS);
+	ck_assert_uint_eq (test_written_count, 3);
+	ck_assert_str_eq (test_written_msg[1], "2[\"bcast\"]");
+	ck_assert_str_eq (test_written_msg[2], "2[\"bcast\"]");
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_targeted_state_keeps_pending_progress_broadcast)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	ctx.progress.lastBroadcast = 7;
+
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_PROGRESS,
+			strdup ("2[\"progress\"]")));
+	ck_assert (BarWebsocketSend (&app, a, BUCKET_STATE, strdup ("2[\"start\"]")));
+	/* Targeted STATE must not clear everyone's pending PROGRESS */
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_PROGRESS].message);
+	ck_assert_uint_eq (ctx.progress.lastBroadcast, 7);
 
 	test_teardown_clients (&app, &ctx);
 }
@@ -353,6 +442,7 @@ START_TEST (test_send_unknown_id_frees_message_and_returns_false)
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
 	BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
 
 	/* Run under ASan/valgrind to catch a leak; NULL args must not crash. */
@@ -362,6 +452,7 @@ START_TEST (test_send_unknown_id_frees_message_and_returns_false)
 	app.wsContext = NULL;
 	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATE, strdup ("x")));
 	app.wsContext = &ctx;
+	ck_assert_uint_eq (test_written_count, 0);
 	for (int i = 0; i < BUCKET_COUNT; i++) {
 		ck_assert_ptr_null (ctx.buckets[i].message);
 	}
@@ -1026,6 +1117,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_core, test_send_broadcast_reaches_all_clients);
 	tcase_add_test (tc_core, test_send_to_id_reaches_only_that_client);
 	tcase_add_test (tc_core, test_send_to_reused_slot_does_not_reach_new_client);
+	tcase_add_test (tc_core, test_send_targeted_and_broadcast_do_not_replace_each_other);
+	tcase_add_test (tc_core, test_send_targeted_state_keeps_pending_progress_broadcast);
 	tcase_add_test (tc_core, test_send_unknown_id_frees_message_and_returns_false);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
