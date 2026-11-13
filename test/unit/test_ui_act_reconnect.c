@@ -2991,6 +2991,433 @@ START_TEST (test_ui_act_bookmark_artist)
 }
 END_TEST
 
+
+/* --- Interactive CLI actions: prompt, re-resolve by ID, "gone" paths --- */
+
+typedef void (*BarTestCliAction_fn) (BarApp_t *, PianoStation_t *,
+		PianoSong_t *, int);
+void BarUiActSelectStation (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActSelectQuickMix (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActStationFromGenre (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActCreateStation (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActAddSharedStation (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActAddMusic (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+void BarUiActRenameStation (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
+
+#define CLI_MAX_CALLS 16
+static PianoRequestType_t g_cliTypes[CLI_MAX_CALLS];
+static unsigned g_cliCount;
+static atomic_int g_cliModesFetched;
+
+static unsigned cli_calls (PianoRequestType_t type) {
+	unsigned n = 0;
+	for (unsigned i = 0; i < g_cliCount; i++) {
+		if (g_cliTypes[i] == type) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/* Records every Pandora request (main thread); answers station info with
+ * one seed of each kind, modes with one mode, search with one artist */
+static bool
+mock_cli_record (BarApp_t *app, const PianoRequestType_t type, void *data,
+                 PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	ck_assert_uint_lt (g_cliCount, CLI_MAX_CALLS);
+	g_cliTypes[g_cliCount++] = type;
+	if (type == PIANO_REQUEST_GET_STATION_INFO) {
+		PianoRequestDataGetStationInfo_t *req = data;
+		PianoArtist_t *artist = calloc (1, sizeof (*artist));
+		PianoSong_t *seed = calloc (1, sizeof (*seed));
+		PianoStation_t *seedStation = calloc (1, sizeof (*seedStation));
+		PianoSong_t *feedback = calloc (1, sizeof (*feedback));
+		ck_assert (artist && seed && seedStation && feedback);
+		artist->name = strdup ("Seed Artist");
+		seed->title = strdup ("Seed Song");
+		seed->artist = strdup ("Seed Artist");
+		seedStation->name = strdup ("Seed Station");
+		seedStation->id = strdup ("SEED");
+		feedback->title = strdup ("Liked Song");
+		feedback->artist = strdup ("Liked Artist");
+		seed->stationId = strdup ("S1");
+		feedback->stationId = strdup ("S1");
+		req->info.artistSeeds = artist;
+		req->info.songSeeds = seed;
+		req->info.stationSeeds = seedStation;
+		req->info.feedback = feedback;
+	} else if (type == PIANO_REQUEST_GET_STATION_MODES) {
+		PianoRequestDataGetStationModes_t *req = data;
+		PianoStationMode_t *mode = calloc (1, sizeof (*mode));
+		ck_assert_ptr_nonnull (mode);
+		mode->name = strdup ("Discovery");
+		mode->description = strdup ("New music");
+		req->retModes = mode;
+		atomic_store (&g_cliModesFetched, 1);
+	} else if (type == PIANO_REQUEST_SEARCH) {
+		PianoRequestDataSearch_t *req = data;
+		memset (&req->searchResult, 0, sizeof (req->searchResult));
+		PianoArtist_t *artist = calloc (1, sizeof (*artist));
+		ck_assert_ptr_nonnull (artist);
+		artist->name = strdup ("Found Artist");
+		artist->musicId = strdup ("M42");
+		req->searchResult.artists = artist;
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+static void cli_app_setup (BarApp_t *app, BarWsContext_t *ctx,
+		PianoStation_t *keep, PianoStation_t *other) {
+	delete_wait_app_setup (app, ctx, keep, other);
+	ck_assert_int_eq (pthread_cond_init (&app->player.audioCond, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&app->player.decoderLock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app->player.decoderCond, NULL), 0);
+	keep->isCreator = true;
+	other->isCreator = true;
+	/* song lists are printed with these */
+	app->settings.loveIcon = strdup ("+");
+	app->settings.banIcon = strdup ("-");
+	app->settings.tiredIcon = strdup ("t");
+	app->settings.atIcon = strdup ("@");
+	free (app->settings.listSongFormat);
+	app->settings.listSongFormat = strdup ("%i) %a - %t%r");
+	g_cliCount = 0;
+	atomic_store (&g_cliModesFetched, 0);
+	BarUiPianoCallSetTestHook (mock_cli_record);
+}
+
+static void cli_app_teardown (BarApp_t *app, BarWsContext_t *ctx) {
+	BarUiPianoCallClearTestHook ();
+	pthread_cond_destroy (&app->player.decoderCond);
+	pthread_mutex_destroy (&app->player.decoderLock);
+	pthread_cond_destroy (&app->player.audioCond);
+	delete_wait_app_teardown (app, ctx);
+}
+
+/* Run an action as the CLI dispatcher does (inside the hold) with all of
+ * its input typed ahead. Every prompt must be answered: a pipe at EOF never
+ * ends a read (BarReadline only drops an EOFed stdin). */
+static void cli_run (BarApp_t *app, BarTestCliAction_fn action,
+		PianoStation_t *station, PianoSong_t *song, const char *input) {
+	int pipefd[2];
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_input_from_fd (&app->input, pipefd[0]);
+	rl_write_input (pipefd[1], input);
+	BarUiPianoHold (app);
+	action (app, station, song, 1 /* BAR_DC_GLOBAL */);
+	BarUiPianoRelease (app);
+	close (pipefd[0]);
+}
+
+/* Types `input` once the action waits for input without the hold
+ * and, with `gate`, only after the gate opened; before typing it unlinks a
+ * station or empties the history, as another thread could. Results are
+ * read by the main thread after the join (no assertions here). */
+typedef struct {
+	BarApp_t *app;
+	int writeFd;
+	const char *input;
+	atomic_int *gate;
+	PianoStation_t *removeStation;
+	bool clearHistory;
+	atomic_bool sawReleased;
+} BarTestCliFeeder_t;
+
+static void *cli_feeder_thread (void *arg) {
+	BarTestCliFeeder_t *f = arg;
+	for (int i = 0; i < 2000; i++) {
+		if ((f->gate == NULL || atomic_load (f->gate) != 0) &&
+				pthread_mutex_trylock (&f->app->pianoHttpMutex) == 0) {
+			atomic_store (&f->sawReleased, true);
+			pthread_rwlock_wrlock (&f->app->stateRwlock);
+			if (f->removeStation != NULL) {
+				f->app->ph.stations = PianoListDeleteP (f->app->ph.stations,
+						f->removeStation);
+			}
+			if (f->clearHistory) {
+				f->app->songHistory = NULL;
+			}
+			pthread_rwlock_unlock (&f->app->stateRwlock);
+			pthread_mutex_unlock (&f->app->pianoHttpMutex);
+			break;
+		}
+		usleep (1000);
+	}
+	if (write (f->writeFd, f->input, strlen (f->input)) < 0) {
+		/* the reader sees EOF and the main thread's assertions fail */
+	}
+	close (f->writeFd);
+	return NULL;
+}
+
+/* Like cli_run, but the feeder types `later` after mutating the state;
+ * `ahead` is typed before the action starts */
+static void cli_run_with_feeder (BarApp_t *app, BarTestCliAction_fn action,
+		PianoStation_t *station, PianoSong_t *song, const char *ahead,
+		BarTestCliFeeder_t *feeder, const char *later) {
+	int pipefd[2];
+	pthread_t thread;
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_input_from_fd (&app->input, pipefd[0]);
+	ck_assert (write (pipefd[1], ahead, strlen (ahead)) >= 0);
+	feeder->app = app;
+	feeder->writeFd = pipefd[1];
+	feeder->input = later;
+	atomic_init (&feeder->sawReleased, false);
+	BarUiPianoHold (app);
+	ck_assert_int_eq (pthread_create (&thread, NULL, cli_feeder_thread, feeder), 0);
+	action (app, station, song, 1 /* BAR_DC_GLOBAL */);
+	BarUiPianoRelease (app);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	close (pipefd[0]);
+}
+
+START_TEST (test_cli_select_station_by_index_sets_next)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	cli_app_setup (&app, &ctx, &keep, &other);
+	app.ph.stations = &keep; /* one station: index 0 */
+	keep.head.next = NULL;
+	BarStateSetLastStationId (&app, "old");
+
+	cli_run (&app, BarUiActSelectStation, NULL, NULL, "0\n");
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &keep);
+	ck_assert_ptr_null (app.lastStationId); /* explicit choice clears it */
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_cli_select_station_gone_while_choosing)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	BarTestCliFeeder_t feeder = { 0 };
+	cli_app_setup (&app, &ctx, &keep, &other);
+	app.ph.stations = &keep;
+	keep.head.next = NULL;
+
+	/* listed, then deleted before the user's "0" arrives */
+	feeder.removeStation = &keep;
+	cli_run_with_feeder (&app, BarUiActSelectStation, NULL, NULL, "", &feeder, "0\n");
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* Every manage-station branch: delete an artist/song/station seed or
+ * feedback, or pick a mode */
+START_TEST (test_cli_manage_station_branches)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	cli_app_setup (&app, &ctx, &keep, &other);
+
+	cli_run (&app, BarUiActManageStation, &keep, NULL, "a0\n");
+	cli_run (&app, BarUiActManageStation, &keep, NULL, "s0\n");
+	cli_run (&app, BarUiActManageStation, &keep, NULL, "t0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_DELETE_SEED), 3);
+	cli_run (&app, BarUiActManageStation, &keep, NULL, "f0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_DELETE_FEEDBACK), 1);
+	cli_run (&app, BarUiActManageStation, &keep, NULL, "m0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_GET_STATION_MODES), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SET_STATION_MODE), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_GET_STATION_INFO), 5);
+	/* Aborting at a selection deletes nothing */
+	cli_run (&app, BarUiActManageStation, &keep, NULL, "a\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_DELETE_SEED), 3);
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* The station is deleted while the user picks a mode: no mode is set */
+START_TEST (test_cli_manage_station_gone_while_picking_mode)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	BarTestCliFeeder_t feeder = { 0 };
+	cli_app_setup (&app, &ctx, &keep, &other);
+
+	feeder.gate = &g_cliModesFetched;
+	feeder.removeStation = &other;
+	cli_run_with_feeder (&app, BarUiActManageStation, &other, NULL, "m", &feeder, "0\n");
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_GET_STATION_MODES), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SET_STATION_MODE), 0);
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* QuickMix: t/a/n toggle all/select all/none, a number toggles one, an
+ * empty answer saves */
+START_TEST (test_cli_quickmix_edit_and_save)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	cli_app_setup (&app, &ctx, &keep, &other);
+	keep.isQuickMix = true;
+
+	cli_run (&app, BarUiActSelectQuickMix, &keep, NULL, "n\n\n");
+	ck_assert (!keep.useQuickMix && !other.useQuickMix);
+	cli_run (&app, BarUiActSelectQuickMix, &keep, NULL, "a\n\n");
+	ck_assert (other.useQuickMix);
+	cli_run (&app, BarUiActSelectQuickMix, &keep, NULL, "t\n\n");
+	ck_assert (!other.useQuickMix);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SET_QUICKMIX), 3);
+	/* toggle one station by number: exactly one changes */
+	cli_run (&app, BarUiActSelectQuickMix, &keep, NULL, "0\n\n");
+	ck_assert_int_eq ((int) keep.useQuickMix + (int) other.useQuickMix, 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SET_QUICKMIX), 4);
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_cli_genre_station_by_category_and_genre)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	PianoGenreCategory_t cat;
+	PianoGenre_t genre;
+	cli_app_setup (&app, &ctx, &keep, &other);
+	memset (&cat, 0, sizeof (cat));
+	memset (&genre, 0, sizeof (genre));
+	cat.name = "Jazz";
+	cat.genres = &genre;
+	genre.name = "Bebop";
+	genre.musicId = "G1";
+	app.ph.genreStations = &cat;
+
+	/* out-of-range answers are asked again */
+	cli_run (&app, BarUiActStationFromGenre, NULL, NULL, "7\n0\n9\n0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_CREATE_STATION), 1);
+	/* aborting at the genre creates nothing */
+	cli_run (&app, BarUiActStationFromGenre, NULL, NULL, "0\n\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_CREATE_STATION), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_GET_GENRE_STATIONS), 0);
+
+	app.ph.genreStations = NULL;
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* Station creation prompts: from a search, from the playing song, by id;
+ * adding music to a station */
+START_TEST (test_cli_create_add_and_rename_prompts)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	PianoSong_t song;
+	cli_app_setup (&app, &ctx, &keep, &other);
+	memset (&song, 0, sizeof (song));
+	song.title = "Playing";
+	song.trackToken = "T1";
+	app.playlist = &song; /* re-resolved by token after the prompt */
+
+	cli_run (&app, BarUiActCreateStation, NULL, NULL, "query\n0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SEARCH), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_CREATE_STATION), 1);
+	cli_run (&app, BarUiActCreateStationFromSong, &keep, &song, "s");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_CREATE_STATION), 2);
+	cli_run (&app, BarUiActAddSharedStation, &keep, &song, "123\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_CREATE_STATION), 3);
+	cli_run (&app, BarUiActAddMusic, &keep, &song, "query\n0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_ADD_SEED), 1);
+	cli_run (&app, BarUiActRenameStation, &keep, &song, "Renamed\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_RENAME_STATION), 1);
+
+	app.playlist = NULL;
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* Selection deleted while typing: add music and rename stop */
+START_TEST (test_cli_add_music_and_rename_gone_while_typing)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	BarTestCliFeeder_t feeder = { 0 };
+	cli_app_setup (&app, &ctx, &keep, &other);
+
+	feeder.removeStation = &other;
+	cli_run_with_feeder (&app, BarUiActRenameStation, &other, NULL, "", &feeder, "New\n");
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_RENAME_STATION), 0);
+
+	memset (&feeder, 0, sizeof (feeder));
+	ck_assert_ptr_nonnull (PianoListAppend (&keep.head, &other.head));
+	feeder.removeStation = &other;
+	cli_run_with_feeder (&app, BarUiActAddMusic, &other, NULL, "", &feeder, "query\n0\n");
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SEARCH), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_ADD_SEED), 0);
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* History: abort, pick, and the picked song gone while choosing */
+START_TEST (test_cli_history_pick_abort_and_gone)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	PianoSong_t hist;
+	BarTestCliFeeder_t feeder = { 0 };
+	cli_app_setup (&app, &ctx, &keep, &other);
+	memset (&hist, 0, sizeof (hist));
+	hist.title = "Earlier";
+	hist.artist = "Someone";
+	hist.trackToken = "H1";
+	hist.stationId = "S1";
+	app.songHistory = &hist;
+
+	/* an empty answer at the song prompt: nothing happens */
+	cli_run (&app, BarUiActHistory, NULL, NULL, "\n");
+	ck_assert_uint_eq (g_cliCount, 0);
+	/* pick it and leave the action prompt empty. (An action key cannot be
+	 * used here: history dispatches with BAR_DC_UNDEFINED, so actions that
+	 * need BAR_DC_PANDORA_CONNECTED or BAR_DC_GLOBAL are refused; a
+	 * pre-existing limit, reported.) "?" re-asks. */
+	cli_run (&app, BarUiActHistory, NULL, NULL, "0\n?\n");
+	ck_assert_uint_eq (g_cliCount, 0);
+	ck_assert_ptr_eq (app.songHistory, &hist);
+	/* the history goes away before the choice arrives */
+	feeder.clearHistory = true;
+	cli_run_with_feeder (&app, BarUiActHistory, NULL, NULL, "", &feeder, "0\n");
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_ptr_null (app.songHistory);
+	ck_assert_uint_eq (g_cliCount, 0);
+
+	app.songHistory = NULL;
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -3052,6 +3479,15 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_delete_station_releases_hold_during_prompt);
 	tcase_add_test (tc, test_ui_act_delete_station_gone_after_prompt_skips_call);
 	tcase_add_test (tc, test_ui_act_manage_station_gone_after_eventcmd_stops);
+	tcase_add_test (tc, test_cli_select_station_by_index_sets_next);
+	tcase_add_test (tc, test_cli_select_station_gone_while_choosing);
+	tcase_add_test (tc, test_cli_manage_station_branches);
+	tcase_add_test (tc, test_cli_manage_station_gone_while_picking_mode);
+	tcase_add_test (tc, test_cli_quickmix_edit_and_save);
+	tcase_add_test (tc, test_cli_genre_station_by_category_and_genre);
+	tcase_add_test (tc, test_cli_create_add_and_rename_prompts);
+	tcase_add_test (tc, test_cli_add_music_and_rename_gone_while_typing);
+	tcase_add_test (tc, test_cli_history_pick_abort_and_gone);
 	tcase_add_test (tc, test_ui_act_history_pick_parses_number_like_before);
 	tcase_add_test (tc, test_ui_act_create_from_song_gone_only_reported_on_choice);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
