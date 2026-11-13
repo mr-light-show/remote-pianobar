@@ -39,6 +39,7 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/ui.h"
 #include <errno.h>
+#include <stdint.h>
 
 /* Substitute only the OS creation failure; lifecycle/reset behavior stays real. */
 static int failed_player_create (pthread_t *thread, const pthread_attr_t *attr,
@@ -123,7 +124,7 @@ static void setup_playback_app_with_piano (BarApp_t *app) {
 	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
 	BarPlayerInit (&app->player, &app->settings);
 
-	ck_assert_int_eq (pthread_mutex_init (&app->pianoHttpMutex, NULL), 0);
+	BarUiPianoHttpMutexInit (app);
 	ck_assert_int_eq (PianoInit (&app->ph, app->settings.partnerUser,
 	                             app->settings.partnerPassword,
 	                             app->settings.device, app->settings.inkey,
@@ -136,7 +137,7 @@ static void teardown_playback_app_with_piano (BarApp_t *app) {
 	free (app->lastStationId);
 	app->lastStationId = NULL;
 	PianoDestroy (&app->ph);
-	pthread_mutex_destroy (&app->pianoHttpMutex);
+	BarUiPianoHttpMutexDestroy (app);
 	teardown_playback_app (app);
 }
 
@@ -241,6 +242,81 @@ START_TEST (test_playback_fetch_playlist_auto_recovers_session)
 	ck_assert_ptr_nonnull (BarStateGetNextStation (&app));
 	ck_assert_str_eq (BarStateGetNextStation (&app)->id, "station-recover");
 	ck_assert (!atomic_load (&app.autoRecoverFailed));
+
+	teardown_playback_app_with_piano (&app);
+}
+END_TEST
+
+static void *lifecycle_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static bool lifecycle_mutex_held (BarApp_t *app) {
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, lifecycle_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	return (intptr_t) rc == EBUSY;
+}
+
+static bool g_fetch_station_was_locked;
+
+/* The hook replaces BarUiPianoCall: the mutex is held only if the fetch took
+ * it before reading nextStation */
+static bool mock_fetch_records_mutex (BarApp_t * const app,
+                                      const PianoRequestType_t type,
+                                      void * const data,
+                                      PianoReturn_t * const pRet,
+                                      CURLcode * const wRet) {
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	ck_assert_int_eq (type, PIANO_REQUEST_GET_PLAYLIST);
+	PianoRequestDataGetPlaylist_t *req = data;
+	ck_assert_ptr_eq (req->station, app->nextStation);
+	g_fetch_station_was_locked = lifecycle_mutex_held (app);
+	req->retPlaylist = alloc_song ("Fetched");
+	return true;
+}
+
+/* B3: nextStation is resolved inside pianoHttpMutex, not read before
+ * waiting for it */
+START_TEST (test_playback_fetch_playlist_resolves_station_under_piano_mutex)
+{
+	BarApp_t app;
+	PianoStation_t *station;
+
+	setup_playback_app_with_piano (&app);
+	station = alloc_station ("station-locked", "Locked");
+	app.ph.stations = station;
+	BarStateSetNextStation (&app, station);
+
+	g_fetch_station_was_locked = false;
+	BarUiPianoCallSetTestHook (mock_fetch_records_mutex);
+	ck_assert (BarPlaybackFetchPlaylist (&app));
+	ck_assert (g_fetch_station_was_locked);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), station);
+	ck_assert (!lifecycle_mutex_held (&app));
+
+	teardown_playback_app_with_piano (&app);
+}
+END_TEST
+
+/* The station can disappear while the fetch waits for the mutex */
+START_TEST (test_playback_fetch_playlist_without_next_station_skips_request)
+{
+	BarApp_t app;
+	setup_playback_app_with_piano (&app);
+
+	BarUiPianoCallSetTestHook (mock_fetch_records_mutex);
+	ck_assert (!BarPlaybackFetchPlaylist (&app));
+	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
+	ck_assert_ptr_null (app.lastStationId);
 
 	teardown_playback_app_with_piano (&app);
 }
@@ -639,6 +715,8 @@ Suite *playback_lifecycle_suite (void) {
 	tcase_add_test (tc, test_playback_start_song_rearms_auto_recover);
 	tcase_add_test (tc, test_playback_start_stops_after_terminal_reset_failure);
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_session);
+	tcase_add_test (tc, test_playback_fetch_playlist_resolves_station_under_piano_mutex);
+	tcase_add_test (tc, test_playback_fetch_playlist_without_next_station_skips_request);
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_only_once);
 	tcase_add_test (tc, test_playback_fetch_playlist_disconnects_when_retry_fails);
 	tcase_add_test (tc, test_playback_fetch_playlist_interrupted_skips_recovery);
