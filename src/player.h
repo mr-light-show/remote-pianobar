@@ -151,7 +151,7 @@ struct player {
 
 	/* settings (must be set before starting the thread) */
 	double gain;
-	char *url;
+	char *url;                 /* Owned copy; BarPlaybackStartSong sets it, freed after the player thread is joined */
 	BarSettings_t *settings;
 };
 

@@ -71,6 +71,10 @@ static void setup_playback_app (BarApp_t *app) {
 }
 
 static void teardown_playback_app (BarApp_t *app) {
+	/* The playback manager frees the URL copy after joining the player; a
+	 * test that started one directly and joined it itself frees it here */
+	free (app->player.url);
+	app->player.url = NULL;
 	BarStateSetPlaylist (app, NULL);
 	BarPlayerDestroy (&app->player);
 	BarStateDestroy (app);
@@ -597,6 +601,45 @@ START_TEST (test_playback_start_succeeds_with_http_url)
 }
 END_TEST
 
+/* The player owns a copy of the URL: a drain that frees the song while the
+ * player thread is still opening the stream must not leave it reading freed
+ * memory (ASan). The copy is released after the player thread is joined. */
+START_TEST (test_playback_start_copies_audio_url)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station = {.id = "station-copy", .name = "Copy Station"};
+	pthread_t playerThread = 0;
+
+	memset (&song, 0, sizeof (song));
+	setup_playback_app (&app);
+	song.title = "Copy Song";
+	song.artist = "Artist";
+	song.audioUrl = strdup ("http://127.0.0.1:9/unreachable.mp3");
+	ck_assert_ptr_nonnull (song.audioUrl);
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetPlaylist (&app, &song);
+
+	ck_assert (BarPlaybackStartSong (&app, &playerThread));
+	ck_assert_ptr_nonnull (app.player.url);
+	ck_assert_ptr_ne (app.player.url, song.audioUrl);
+	ck_assert_str_eq (app.player.url, song.audioUrl);
+	/* The song goes away (as in a teardown drain) at once */
+	free (song.audioUrl);
+	song.audioUrl = NULL;
+
+	BarInterruptSetTarget (&app.player.interrupted);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.doQuit = true;
+	pthread_cond_broadcast (&app.player.cond);
+	pthread_mutex_unlock (&app.player.lock);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
+	BarInterruptSetTarget (NULL);
+
+	teardown_playback_app (&app);
+}
+END_TEST
+
 START_TEST (test_playback_start_quickmix_uses_song_station_lookup)
 {
 	BarApp_t app;
@@ -725,6 +768,7 @@ Suite *playback_lifecycle_suite (void) {
 	tcase_add_test (tc, test_playback_start_rejects_missing_current_station);
 	tcase_add_test (tc, test_playback_start_rejects_non_http_audio_url);
 	tcase_add_test (tc, test_playback_start_succeeds_with_http_url);
+	tcase_add_test (tc, test_playback_start_copies_audio_url);
 	tcase_add_test (tc, test_playback_start_quickmix_uses_song_station_lookup);
 	tcase_add_test (tc, test_playback_start_song_rearms_auto_recover);
 	tcase_add_test (tc, test_playback_start_stops_after_terminal_reset_failure);

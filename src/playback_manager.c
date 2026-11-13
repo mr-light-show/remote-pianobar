@@ -148,6 +148,9 @@ static bool force_join_player_thread(BarApp_t *app, pthread_t *playerThread,
 			return false;
 		}
 	}
+	/* The thread is gone: release its copy of the stream URL */
+	free (app->player.url);
+	app->player.url = NULL;
 	return true;
 }
 
