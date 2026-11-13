@@ -113,10 +113,14 @@ bool BarWebsocketInit(BarApp_t *app);
  * producer (playback manager, CLI) must have stopped first. */
 void BarWebsocketDestroy(BarApp_t *app);
 
-/* Start the command worker and its queue (BarWebsocketInit does this before
- * the service thread starts). A closed queue left by an earlier Stop is freed
- * first, so no service thread may be running. Returns false, with nothing
- * started or allocated, on failure. */
+/* Command worker lifecycle. Production code only reaches these through
+ * BarWebsocketInit/BarWebsocketDestroy; they are public as test seams
+ * (worker tests on a fake-client context).
+ *
+ * Start the command worker and its queue (Init does this before the service
+ * thread starts). A closed queue left by an earlier Stop is freed first (a
+ * restart exists only for tests), so no service thread may be running.
+ * Returns false, with nothing started or allocated, on failure. */
 bool BarWebsocketWorkerStart (BarApp_t *app);
 /* Stop admission (queued commands are dropped and freed), interrupt an
  * in-flight Pandora call through the interrupt target and join the worker.

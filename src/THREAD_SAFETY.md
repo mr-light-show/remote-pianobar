@@ -684,7 +684,7 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 
 | Thread | Owns | Runs |
 |---|---|---|
-| Main (lifecycle owner) | `BarWebsocketInit`/`BarWebsocketDestroy`, `BarWebsocketWorkerStart`/`Stop` | CLI input in Both mode |
+| Main (lifecycle owner) | `BarWebsocketInit`/`BarWebsocketDestroy` (they start and stop the worker; `BarWebsocketWorkerStart`/`Stop` are public only as test seams) | CLI input in Both mode |
 | Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks validate a frame and queue a copy; the initial `process` snapshot on connect; delayed volume and system-volume polling |
 | Command worker (`BarWsWorkerThread`) | nothing shared; pops one command at a time | `BarSocketIoHandleMessage` for every client command, FIFO, with the handlers' own locking (below) |
 | Any producer (worker, playback manager, CLI) | nothing | `BarWebsocketSend` and friends: push to the outbox and `lws_cancel_service()`; never blocks on a client |
@@ -708,9 +708,11 @@ A message that arrives in parts is collected per connection (the buffer is freed
 
 `BarWebsocketDestroy` runs on the lifecycle owner after the other producers stopped (`BarMainLoop` stops the playback manager, which joins the player thread; the CLI runs on the owner itself):
 
-1. `BarWebsocketWorkerStop`: close the command queue (later pushes fail with CLOSED; queued commands are dropped and freed), then `BarInterruptIncrement ()` to interrupt the in-flight Pandora request (during a request the interrupt target is that request's own flag, which curl's progress callback polls, exactly as for SIGINT), then join the worker.
+1. Stop the worker: close the command queue (later pushes fail with CLOSED; queued commands are dropped and freed), then `BarInterruptIncrement ()` to interrupt the in-flight Pandora request (during a request the interrupt target is that request's own flag, which curl's progress callback polls, exactly as for SIGINT), then join the worker.
 2. Stop and join the service thread.
 3. Destroy the lws context (closes connections), then free the command queue, the per-client queues and the outbox. Replies not yet written are abandoned by design; clients that reconnect resync from one `process` frame.
+
+If `BarWebsocketInit` fails after the worker started (the service thread cannot be created), it closes the queue and joins the idle worker without an interrupt: at startup the interrupt target is `app->doQuit`, so interrupting would quit the player instead of continuing without the web server.
 
 `app.quit` arriving as a command runs on the worker: it sets `doQuit` and stops the player, which the main loop notices as it does for the CLI `q` key. The worker never joins itself; `BarWebsocketWorkerStop` called on the worker logs and returns.
 

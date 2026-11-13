@@ -674,6 +674,24 @@ bool BarWebsocketWorkerStart (BarApp_t *app) {
 	return true;
 }
 
+/* Close admission and join the worker; `interrupt` also aborts the
+ * in-flight Pandora request. Not for an idle worker: at startup the interrupt
+ * target is app->doQuit, so an interrupt would quit the player. */
+static void BarWsWorkerJoin (BarApp_t *app, bool interrupt) {
+	BarWsContext_t *ctx = app->wsContext;
+	/* Refuse new commands and drop the queued ones, so the worker exits
+	 * after the command in flight. Interrupt that command's Pandora call
+	 * the way SIGINT does: during a request the interrupt target is the
+	 * request's own flag, which curl's progress callback polls. */
+	BarWsCommandQueueClose (ctx->commands);
+	if (interrupt) {
+		BarInterruptIncrement ();
+	}
+	log_write (DEBUG_WEBSOCKET, "Waiting for the command worker...\n");
+	pthread_join (ctx->worker, NULL);
+	ctx->workerStarted = false;
+}
+
 void BarWebsocketWorkerStop (BarApp_t *app) {
 	if (!app || !app->wsContext) {
 		return;
@@ -687,15 +705,7 @@ void BarWebsocketWorkerStop (BarApp_t *app) {
 		log_write (LOG_ERROR, "Command worker cannot stop itself\n");
 		return;
 	}
-	/* Refuse new commands and drop the queued ones, so the worker exits
-	 * after the command in flight. Interrupt that command's Pandora call
-	 * the way SIGINT does: during a request the interrupt target is the
-	 * request's own flag, which curl's progress callback polls. */
-	BarWsCommandQueueClose (ctx->commands);
-	BarInterruptIncrement ();
-	log_write (DEBUG_WEBSOCKET, "Waiting for the command worker...\n");
-	pthread_join (ctx->worker, NULL);
-	ctx->workerStarted = false;
+	BarWsWorkerJoin (app, true);
 }
 
 /* Free the transport; neither the worker nor the service thread may run */
@@ -794,7 +804,8 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->threadRunning = true;
 	if (BarWsThreadCreate (&ctx->thread, BarWebsocketThread, app) != 0) {
 		log_write(LOG_ERROR, "Failed to create thread\n");
-		BarWebsocketWorkerStop (app);
+		/* No client could connect yet: the worker is idle */
+		BarWsWorkerJoin (app, false);
 		BarWsContextFree (app);
 		return false;
 	}

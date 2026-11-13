@@ -2722,6 +2722,30 @@ START_TEST (test_worker_start_failure_rolls_back)
 }
 END_TEST
 
+/* A failed start rolls back without interrupting anything: at startup the
+ * interrupt target is app->doQuit, so an interrupt would quit the player
+ * (Both mode continues without the web server instead). */
+START_TEST (test_service_thread_start_failure_does_not_quit)
+{
+	BarApp_t srv;
+	memset (&srv, 0, sizeof (srv));
+	BarSettingsInit (&srv.settings);
+	srv.settings.uiMode = BAR_UI_MODE_BOTH;
+	srv.settings.websocketHost = strdup ("127.0.0.1");
+	srv.settings.websocketPort = test_free_loopback_port ();
+	BarInterruptSetTarget (&srv.doQuit);
+	BarWebsocketSetTestThreadCreateHook (test_thread_create);
+	test_create_calls = 0;
+	test_fail_create_at = 2; /* the service thread, after the worker */
+	ck_assert (!BarWebsocketInit (&srv));
+	BarWebsocketSetTestThreadCreateHook (NULL);
+	BarInterruptSetTarget (NULL);
+	ck_assert_ptr_null (srv.wsContext);
+	ck_assert_int_eq (atomic_load (&srv.doQuit), 0);
+	BarSettingsDestroy (&srv.settings);
+}
+END_TEST
+
 /* Real server for the command tests: the E2E setup plus the worker needs */
 static void test_e2e_app_init (BarApp_t *app, bool block) {
 	memset (app, 0, sizeof (*app));
@@ -3043,6 +3067,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_commands_execute_in_fifo_order);
 	tcase_add_test (tc_worker, test_requester_disconnect_before_reply_is_dropped);
 	tcase_add_test (tc_worker, test_worker_start_failure_rolls_back);
+	tcase_add_test (tc_worker, test_service_thread_start_failure_does_not_quit);
 	tcase_add_test (tc_worker, test_shutdown_empty_queue);
 	tcase_add_test (tc_worker, test_shutdown_with_queued_commands_frees_them);
 	tcase_add_test (tc_worker, test_shutdown_with_blocked_http_interrupts_and_joins);
