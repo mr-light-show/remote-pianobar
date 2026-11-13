@@ -32,7 +32,6 @@ THE SOFTWARE.
 #include "../../src/station_display.h"
 #include "../../src/log.h"
 
-
 /* Minimal station for FindStationById tests (list has one element). */
 static PianoStation_t station_a;
 static const char *station_a_id = "station-a";

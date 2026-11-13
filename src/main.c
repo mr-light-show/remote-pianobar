@@ -453,16 +453,6 @@ static void BarMainPrintTime (BarApp_t *app) {
 /*	main loop
  */
 static void BarMainLoop (BarApp_t *app) {
-
-
-
-	pthread_t playerThread;
-
-
-
-
-
-
 	if (!BarMainGetLoginCredentials (app, &app->input)) {
 		return;
 	}
