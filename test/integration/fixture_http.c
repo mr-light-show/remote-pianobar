@@ -32,6 +32,10 @@ THE SOFTWARE.
 #include <sys/socket.h>
 #include <unistd.h>
 
+bool FixtureSendErrorExpected (int err, bool cancelExpected) {
+	return cancelExpected && (err == EPIPE || err == ECONNRESET);
+}
+
 static void serve_client (BarFixtureHttp_t *srv, int client_fd) {
 	char request[4096];
 	(void)read (client_fd, request, sizeof (request) - 1);
