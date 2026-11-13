@@ -69,7 +69,9 @@ BarUiActCallback(BarUiActPandoraReconnect);
 
 /* Web-request variants of query actions: the reply goes to the client
  * `requester` only. The terminal callbacks above (BarUiActExplain,
- * BarUiActPrintUpcoming) print instead and never send a web reply. */
+ * BarUiActPrintUpcoming) print instead and never send a web reply. Station
+ * and song mirror the callback arguments and are used the same way (the
+ * station only feeds the explain eventcmd). */
 void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 		PianoSong_t *selSong, BarWsConnId_t requester);
 void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,

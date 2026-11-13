@@ -65,7 +65,10 @@ TestWsCaptureClear (void)
 }
 
 /* Attach `clients` fake clients (IDs in test_ws_cap.ids) and start capturing.
- * Call after the test has set app->wsContext, if it uses its own context. */
+ * Call after the test has set app->wsContext, if it uses its own context.
+ * Initialises connMutex on that context (Detach destroys it), so do not use
+ * it on a context whose connMutex the test already initialised; call Detach
+ * before the test destroys its context. */
 static inline BarWsContext_t *
 TestWsCaptureAttach (BarApp_t *app, size_t clients, TestWsSink_t sink)
 {

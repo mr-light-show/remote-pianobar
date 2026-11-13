@@ -626,7 +626,6 @@ void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
 		PianoSong_t *selSong, BarWsConnId_t requester) {
 	PianoSong_t * const nextSong = PianoListNextP (selSong);
 
-	(void) selStation;
 	if (nextSong != NULL) {
 		BarWsEmitUpcomingTo(app, requester, nextSong, 5);
 	} else {

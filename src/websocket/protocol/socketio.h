@@ -44,8 +44,9 @@ typedef enum {
 	SOCKETIO_BINARY_ACK = 6,
 } BarSocketIoType_t;
 
-/* Handle incoming Socket.IO message from the client `requester`
- * (BAR_WS_DEST_BROADCAST: no requester, replies go to every client) */
+/* Handle incoming Socket.IO message from the client `requester`. The
+ * transport only passes connected clients' (nonzero) IDs; replies go to that
+ * client alone. BAR_WS_DEST_BROADCAST is a destination for emitters only. */
 void BarSocketIoHandleMessage (BarApp_t *app, const char *message, BarWsConnId_t requester);
 
 /* Returns a heap-allocated Socket.IO text frame for event + data.

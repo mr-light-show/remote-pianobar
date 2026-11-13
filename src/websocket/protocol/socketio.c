@@ -1706,7 +1706,9 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 	}
 
 	/* Query actions (explain, upcoming) reply to the requesting client only.
-	 * The context check above is the one BarUiDispatchById would make. */
+	 * The context check above is the one BarUiDispatchById would make.
+	 * Received messages always carry a requester; without one (direct
+	 * callers) the terminal callbacks run as before. */
 	if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_EXPLAIN) {
 		BarUiActExplainTo (app, currentStation, currentSong, requester);
 		return;
