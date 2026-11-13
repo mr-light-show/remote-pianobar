@@ -2623,8 +2623,9 @@ START_TEST (test_delete_current_station_switches_to_quickmix) {
 
 	run_station_handler_under_probe (&app, BarSocketIoHandleDeleteStation,
 			"{\"stationId\":\"S1\"}", "delete");
+	/* Clearing current/next is the delete response's job (BarStatePianoResponse),
+	 * which the hook bypasses */
 	ck_assert_ptr_eq (BarStateGetNextStation (&app), &quickMix);
-	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
 
 	pthread_cond_destroy (&app.player.decoderCond);
 	pthread_mutex_destroy (&app.player.decoderLock);

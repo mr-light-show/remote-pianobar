@@ -448,7 +448,22 @@ PianoReturn_t BarStatePianoResponse(BarApp_t *app, PianoRequest_t *req) {
 
 	PianoReturn_t ret;
 	state_rwlock_wrlock_internal(app, "PianoResponse");
+	/* DELETE_STATION frees the station: drop current/next references to it
+	 * in the same critical section so no reader sees a freed station. */
+	bool deletedIsCurrent = false, deletedIsNext = false;
+	if (req->type == PIANO_REQUEST_DELETE_STATION && req->data != NULL) {
+		deletedIsCurrent = app->curStation == req->data;
+		deletedIsNext = app->nextStation == req->data;
+	}
 	ret = PianoResponse(&app->ph, req);
+	if (ret == PIANO_RET_OK) {
+		if (deletedIsCurrent) {
+			app->curStation = NULL;
+		}
+		if (deletedIsNext) {
+			app->nextStation = NULL;
+		}
+	}
 	state_rwlock_unlock_internal(app, "PianoResponse", NULL);
 	return ret;
 }
