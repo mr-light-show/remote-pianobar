@@ -433,7 +433,7 @@ char *BarSocketIoFormatEventMessage(const char *event, json_object *data) {
 	return formatted;
 }
 
-/* Emit event now to `dest` (unbucketed, BUCKET_NONE lane) */
+/* Queue event for `dest` as an ordered (unkeyed) frame */
 void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
                       json_object *data) {
 	char *message;
@@ -459,8 +459,8 @@ void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
 	           strlen(message), (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
 	/* Takes ownership of message */
-	if (!BarWebsocketSend (app, dest, BUCKET_NONE, message)) {
-		log_write(dbgFlag, "Socket.IO: Emit '%s' not delivered (no server or client)\n", event);
+	if (!BarWebsocketSend (app, dest, BAR_WS_KEY_NONE, message)) {
+		log_write(dbgFlag, "Socket.IO: Emit '%s' not queued (no server or ingress full)\n", event);
 	}
 	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
 }

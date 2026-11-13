@@ -52,6 +52,16 @@ static void mockBroadcastCallback(const char *message, size_t len) {
 	lastBroadcastLen = len;
 }
 
+/* Latest frame a client received, after running the service-thread side
+ * when a capture is attached (frames are written only from writable
+ * callbacks) */
+static const char *test_last_broadcast (void) {
+	if (test_ws_cap.ctx != NULL) {
+		TestWsCaptureFlush ();
+	}
+	return lastBroadcastMessage;
+}
+
 static void clearBroadcastMock() {
 	free(lastBroadcastMessage);
 	lastBroadcastMessage = NULL;
@@ -66,10 +76,10 @@ START_TEST(test_socketio_emit_event_only) {
 	
 	BarSocketIoEmit(&app, BAR_WS_DEST_BROADCAST, "test_event", NULL);
 	
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
 	/* json-c adds spaces: "2[ "test_event" ]" */
-	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "test_event") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "test_event") != NULL);
 	
 	clearBroadcastMock();
 	TestWsCaptureDetach (&app);
@@ -88,11 +98,11 @@ START_TEST(test_socketio_emit_with_data) {
 	BarSocketIoEmit(&app, BAR_WS_DEST_BROADCAST, "test_event", data);
 	json_object_put(data);
 	
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "test_event") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "key") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "value") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "test_event") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "key") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "value") != NULL);
 	
 	clearBroadcastMock();
 	TestWsCaptureDetach (&app);
@@ -108,9 +118,9 @@ START_TEST(test_socketio_emit_stop) {
 	
 	BarSocketIoEmitStop(&app);
 	
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "stop") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "stop") != NULL);
 	
 	clearBroadcastMock();
 	TestWsCaptureDetach (&app);
@@ -126,15 +136,15 @@ START_TEST(test_socketio_emit_progress) {
 	
 	BarSocketIoEmitProgress(&app, 60, 180);
 	
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "progress") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "elapsed") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "60") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "duration") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "180") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "percentage") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "33.") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "progress") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "elapsed") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "60") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "duration") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "180") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "percentage") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "33.") != NULL);
 	
 	clearBroadcastMock();
 	TestWsCaptureDetach (&app);
@@ -150,10 +160,10 @@ START_TEST(test_socketio_emit_volume) {
 	
 	BarSocketIoEmitVolume(&app, 75);
 	
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "2[") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "volume") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "75") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "volume") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "75") != NULL);
 	
 	clearBroadcastMock();
 	TestWsCaptureDetach (&app);
@@ -324,8 +334,8 @@ START_TEST(test_socketio_handle_query) {
 	BarSocketIoHandleQuery(&app, BAR_WS_DEST_BROADCAST);
 	
 	/* At least one message should be broadcast */
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "process") != NULL ||
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "process") != NULL ||
 	          strstr(lastBroadcastMessage, "stations") != NULL);
 	
 	pthread_rwlock_destroy(&app.stateRwlock);
@@ -351,7 +361,7 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	BarSocketIoHandleMessage(&app, "2[\"ping\"]", BAR_WS_DEST_BROADCAST);
 
 	/* Ping is explicitly a no-op: no broadcast should be sent */
-	ck_assert_ptr_null(lastBroadcastMessage);
+	ck_assert_ptr_null(test_last_broadcast ());
 
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarSettingsDestroy(&app.settings);
@@ -377,9 +387,9 @@ START_TEST(test_socketio_handle_query_stations_event_emits_station_list) {
 
 	BarSocketIoHandleMessage(&app, "2[\"query.stations\"]", BAR_WS_DEST_BROADCAST);
 
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "\"stations\"") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "Station One") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "\"stations\"") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "Station One") != NULL);
 
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
@@ -401,9 +411,9 @@ START_TEST(test_socketio_handle_action_object_command_emits_not_implemented_erro
 
 	BarSocketIoHandleMessage(&app, "2[\"action\",{\"command\":\"app.settings\"}]", BAR_WS_DEST_BROADCAST);
 
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "\"error\"") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "app.settings") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "\"error\"") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "app.settings") != NULL);
 
 	BarL10nDestroy(&app.l10n);
 	BarSettingsDestroy(&app.settings);
@@ -423,9 +433,9 @@ START_TEST(test_socketio_handle_station_change_missing_station_reports_error) {
 
 	BarSocketIoHandleMessage(&app, "2[\"station.change\",{\"id\":\"missing-station\"}]", BAR_WS_DEST_BROADCAST);
 
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "\"error\"") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "missing-station") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "\"error\"") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "missing-station") != NULL);
 
 	BarL10nDestroy(&app.l10n);
 	BarSettingsDestroy(&app.settings);
@@ -444,13 +454,13 @@ START_TEST(test_socketio_dispatches_legacy_query_and_station_change_string) {
 	clearBroadcastMock();
 
 	BarSocketIoHandleMessage(&app, "2[\"query.state\",{}]", BAR_WS_DEST_BROADCAST);
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "[") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "[") != NULL);
 
 	clearBroadcastMock();
 	BarSocketIoHandleMessage(&app, "2[\"changeStation\",\"missing-station\"]", BAR_WS_DEST_BROADCAST);
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "missing-station") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "missing-station") != NULL);
 
 	BarL10nDestroy(&app.l10n);
 	BarSettingsDestroy(&app.settings);
@@ -527,13 +537,13 @@ START_TEST(test_socketio_rating_emits_state) {
 	
 	BarSocketIoEmitProcess(&app);
 	
-	ck_assert_ptr_nonnull(lastBroadcastMessage);
-	ck_assert(strstr(lastBroadcastMessage, "process") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "\"song\"") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "rating") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "1") != NULL);  /* PIANO_RATE_LOVE = 1 */
-	ck_assert(strstr(lastBroadcastMessage, "songStationName") != NULL);
-	ck_assert(strstr(lastBroadcastMessage, "Display Station") != NULL);
+	ck_assert_ptr_nonnull(test_last_broadcast ());
+	ck_assert(strstr(test_last_broadcast (), "process") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "\"song\"") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "rating") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "1") != NULL);  /* PIANO_RATE_LOVE = 1 */
+	ck_assert(strstr(test_last_broadcast (), "songStationName") != NULL);
+	ck_assert(strstr(test_last_broadcast (), "Display Station") != NULL);
 	
 	pthread_mutex_destroy(&app.player.lock);
 	pthread_rwlock_destroy(&app.stateRwlock);
@@ -638,9 +648,9 @@ START_TEST (test_socketio_emit_stations_empty_when_list_missing) {
 
 	BarSocketIoEmitStations (&app);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
-	ck_assert (strncmp (lastBroadcastMessage, "2[", 2) == 0);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stations") != NULL);
+	ck_assert (strncmp (test_last_broadcast (), "2[", 2) == 0);
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
@@ -660,9 +670,9 @@ START_TEST (test_socketio_emit_play_state_reports_paused_flag) {
 
 	BarSocketIoEmitPlayState (&app);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "playState") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "true") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "playState") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "true") != NULL);
 
 	pthread_mutex_destroy (&app.player.lock);
 	BarSettingsDestroy (&app.settings);
@@ -679,8 +689,8 @@ START_TEST (test_socketio_emit_pandora_disconnected_includes_reason) {
 
 	BarSocketIoEmitPandoraDisconnected (&app, "idle_timeout");
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "idle_timeout") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "idle_timeout") != NULL);
 
 	clearBroadcastMock ();
 	TestWsCaptureDetach (&app);
@@ -797,8 +807,8 @@ START_TEST (test_socketio_handle_set_quickmix_applies_before_save) {
 
 	ck_assert (!first.useQuickMix);
 	ck_assert (second.useQuickMix);
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stations") != NULL);
 
 	clearBroadcastMock ();
 	app.ph.stations = NULL;
@@ -839,8 +849,8 @@ START_TEST (test_socketio_handle_set_quickmix_empty_clears_all) {
 
 	ck_assert (!first.useQuickMix);
 	ck_assert (!second.useQuickMix);
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stations") != NULL);
 
 	clearBroadcastMock ();
 	app.ph.stations = NULL;
@@ -886,7 +896,7 @@ START_TEST (test_socketio_handle_set_quickmix_rejects_too_many_ids) {
 
 	ck_assert (first.useQuickMix);
 	ck_assert (!second.useQuickMix);
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 
 	clearBroadcastMock ();
 	app.ph.stations = NULL;
@@ -1066,7 +1076,7 @@ START_TEST (test_socketio_unknown_action_emits_nothing) {
 	clearBroadcastMock ();
 
 	BarSocketIoHandleAction (&app, "not.a.real.action", NULL, BAR_WS_DEST_BROADCAST);
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
@@ -1116,13 +1126,13 @@ START_TEST (test_socketio_emit_process_includes_accounts) {
 
 	BarSocketIoEmitProcess (&app);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "process") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "accounts") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "alpha") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "beta") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "current_account") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "Beta") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "process") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "accounts") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "alpha") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "beta") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "current_account") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "Beta") != NULL);
 
 	free_settings_accounts (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1163,9 +1173,9 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 	json_object_put (data);
 
 	ck_assert_uint_eq (app.settings.activeAccountIndex, 0);
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "ghost") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "error") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "ghost") != NULL);
 
 	free_settings_accounts (&app);
 	BarUiPianoHttpMutexDestroy (&app);
@@ -1187,10 +1197,10 @@ START_TEST (test_socketio_emit_error_ex_with_station_id) {
 
 	BarSocketIoEmitErrorEx (&app, "station.rename", "Network error", "station-42");
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "stationId") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "station-42") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "error") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "stationId") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "station-42") != NULL);
 
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
@@ -1211,7 +1221,7 @@ START_TEST (test_socketio_emit_error_ex_null_message) {
 
 	BarSocketIoEmitErrorEx (&app, "op", NULL, "sid");
 
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
@@ -1226,7 +1236,7 @@ START_TEST (test_socketio_emit_error_ex_null_app) {
 
 	BarSocketIoEmitErrorEx (NULL, "music.search", "Network error", NULL);
 
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 }
 END_TEST
 
@@ -1242,9 +1252,9 @@ START_TEST (test_socketio_emit_error_ex_empty_station_id) {
 
 	BarSocketIoEmitErrorEx (&app, "station.change", "Station not found", "");
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "stationId") == NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "error") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "stationId") == NULL);
 
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
@@ -1265,9 +1275,9 @@ START_TEST (test_socketio_emit_error_wrapper) {
 
 	BarSocketIoEmitError (&app, "playback.play", "Not connected to Pandora");
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "stationId") == NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "error") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "stationId") == NULL);
 
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
@@ -1296,11 +1306,11 @@ START_TEST (test_socketio_unimplemented_actions_emit_error)
 	for (size_t i = 0; unimplemented[i] != NULL; i++) {
 		clearBroadcastMock ();
 		BarSocketIoHandleAction (&app, unimplemented[i], NULL, BAR_WS_DEST_BROADCAST);
-		ck_assert_msg (lastBroadcastMessage != NULL,
+		ck_assert_msg (test_last_broadcast () != NULL,
 		               "Expected error broadcast for action '%s'", unimplemented[i]);
-		ck_assert_msg (strstr (lastBroadcastMessage, "\"error\"") != NULL,
+		ck_assert_msg (strstr (test_last_broadcast (), "\"error\"") != NULL,
 		               "Expected 'error' event for action '%s'", unimplemented[i]);
-		ck_assert_msg (strstr (lastBroadcastMessage, unimplemented[i]) != NULL,
+		ck_assert_msg (strstr (test_last_broadcast (), unimplemented[i]) != NULL,
 		               "Expected operation name in error payload for '%s'", unimplemented[i]);
 	}
 
@@ -1339,9 +1349,9 @@ START_TEST (test_socketio_emit_explanation_includes_text)
 
 	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], "Because you liked jazz.");
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "song.explanation") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "Because you liked jazz.") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "song.explanation") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "Because you liked jazz.") != NULL);
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
@@ -1359,7 +1369,7 @@ START_TEST (test_socketio_emit_explanation_null_args_noop)
 	BarSocketIoEmitExplanationTo (NULL, test_ws_cap.ids[0], "ignored");
 	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], NULL);
 
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 	clearBroadcastMock ();
 	TestWsCaptureDetach (&app);
 }
@@ -1392,10 +1402,10 @@ START_TEST (test_socketio_emit_upcoming_lists_songs)
 
 	BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], &first, 5);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "query.upcoming.result") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "First") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "Second") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "query.upcoming.result") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "First") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "Second") != NULL);
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
@@ -1423,9 +1433,9 @@ START_TEST (test_socketio_emit_genres_from_cached_categories)
 
 	BarSocketIoEmitGenres (&app);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "Classic Rock") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "genres") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "Classic Rock") != NULL);
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
@@ -1455,9 +1465,9 @@ START_TEST (test_socketio_handle_get_genres_emits_cached_payload)
 
 	BarSocketIoHandleGetGenres (&app);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "Top Pop") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "genres") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "Top Pop") != NULL);
 
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1494,8 +1504,8 @@ START_TEST (test_socketio_handle_get_genres_auth_failure_notifies_disconnect)
 
 	BarSocketIoHandleGetGenres (&app);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "error") != NULL);
 
 	BarUiPianoCallClearTestHook ();
 	BarUiPianoHttpMutexDestroy (&app);
@@ -1526,8 +1536,8 @@ START_TEST (test_socketio_handle_message_station_get_genres_event)
 
 	BarSocketIoHandleMessage (&app, "2[\"station.getGenres\"]", BAR_WS_DEST_BROADCAST);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "genres") != NULL);
 
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1560,9 +1570,10 @@ START_TEST (test_socketio_emit_process_to_targets_client)
 	clearBroadcastMock ();
 
 	BarSocketIoEmitProcessTo (&app, test_ws_cap.ids[1]);
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "process") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "Unicast Song") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "process") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "Unicast Song") != NULL);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_int_eq (test_ws_cap.frameClient[0], 1);
 
@@ -1585,7 +1596,7 @@ START_TEST (test_socketio_handle_add_genre_missing_music_id)
 
 	BarSocketIoHandleAddGenre (&app, json_object_new_object ());
 
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1667,8 +1678,8 @@ START_TEST (test_socketio_handle_rename_station_success)
 	BarSocketIoHandleRenameStation (&app, data);
 	BarUiPianoCallClearTestHook ();
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stations") != NULL);
 
 	json_object_put (data);
 	clearBroadcastMock ();
@@ -1765,8 +1776,8 @@ START_TEST (test_socketio_handle_delete_station_success)
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stations") != NULL);
 	clearBroadcastMock ();
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
@@ -1783,7 +1794,7 @@ START_TEST (test_socketio_handle_add_music_missing_fields_noop)
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarSocketIoHandleAddMusic (&app, json_object_new_object ());
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 	clearBroadcastMock ();
 	BarSettingsDestroy (&app.settings);
 	TestWsCaptureDetach (&app);
@@ -1814,9 +1825,6 @@ START_TEST (test_socketio_handle_add_shared_station_success)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.wsContext = &ctx;
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		pthread_mutex_init (&ctx.buckets[i].mutex, NULL);
-	}
 	BarStateInit (&app);
 	BarUiPianoHttpMutexInit (&app);
 
@@ -1829,12 +1837,9 @@ START_TEST (test_socketio_handle_add_shared_station_success)
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stations") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stations") != NULL);
 	clearBroadcastMock ();
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		pthread_mutex_destroy (&ctx.buckets[i].mutex);
-	}
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1854,7 +1859,7 @@ START_TEST (test_socketio_handle_add_shared_rejects_non_digit_station_id)
 	json_object_object_add (data, "stationId", json_object_new_string ("abc"));
 	BarSocketIoHandleAddShared (&app, data);
 	json_object_put (data);
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 	clearBroadcastMock ();
 	BarSettingsDestroy (&app.settings);
 	TestWsCaptureDetach (&app);
@@ -1871,9 +1876,6 @@ START_TEST (test_socketio_handle_create_station_from_song)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.wsContext = &ctx;
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		pthread_mutex_init (&ctx.buckets[i].mutex, NULL);
-	}
 	BarStateInit (&app);
 	BarUiPianoHttpMutexInit (&app);
 
@@ -1887,11 +1889,8 @@ START_TEST (test_socketio_handle_create_station_from_song)
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
 	clearBroadcastMock ();
-	for (int i = 0; i < BUCKET_COUNT; i++) {
-		pthread_mutex_destroy (&ctx.buckets[i].mutex);
-	}
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1944,8 +1943,8 @@ START_TEST (test_socketio_handle_get_station_modes_success)
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stationModes") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stationModes") != NULL);
 	clearBroadcastMock ();
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
@@ -1973,7 +1972,7 @@ START_TEST (test_socketio_handle_get_station_modes_skips_quickmix)
 	json_object_object_add (data, "stationId", json_object_new_string ("QM"));
 	BarSocketIoHandleGetStationModes (&app, data);
 	json_object_put (data);
-	ck_assert_ptr_null (lastBroadcastMessage);
+	ck_assert_ptr_null (test_last_broadcast ());
 	clearBroadcastMock ();
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -2063,8 +2062,8 @@ START_TEST (test_socketio_handle_get_station_info_success)
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "stationInfo") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "stationInfo") != NULL);
 	clearBroadcastMock ();
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
@@ -2109,8 +2108,8 @@ START_TEST (test_socketio_handle_search_music_success)
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "searchResults") != NULL);
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "searchResults") != NULL);
 	clearBroadcastMock ();
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -2122,6 +2121,7 @@ END_TEST
 
 /* Captured frame `i` went to `client` and carries `event`. */
 static void assert_frame (size_t i, int client, const char *event) {
+	TestWsCaptureFlush ();
 	ck_assert_uint_lt (i, test_ws_cap.frameCount);
 	ck_assert_int_eq (test_ws_cap.frameClient[i], client);
 	ck_assert_int_eq (test_ws_cap.frames[i][0], '2');
@@ -2142,6 +2142,7 @@ static json_object *frame_payload (size_t i) {
 
 /* Broadcast frame `event` reached exactly clients 0 and 1, once each. */
 static void assert_broadcast_frame (const char *event) {
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 	assert_frame (0, 0, event);
 	assert_frame (1, 1, event);
@@ -2183,6 +2184,7 @@ START_TEST (test_query_process_reaches_only_requester) {
 
 	BarSocketIoHandleQuery (&app, test_ws_cap.ids[1]);
 
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 	assert_frame (0, 1, "process");
 	assert_frame (1, 1, "stations");
@@ -2208,6 +2210,7 @@ START_TEST (test_query_message_routes_reply_to_sender) {
 	BarSocketIoHandleMessage (&app, "0", test_ws_cap.ids[0]);
 	BarSocketIoHandleMessage (&app, "2[\"query\"]", test_ws_cap.ids[0]);
 
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 4);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "process"), 2);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "stations"), 2);
@@ -2332,6 +2335,7 @@ START_TEST (test_capture_error_broadcast_and_to_requester) {
 
 	TestWsCaptureClear ();
 	BarSocketIoEmitErrorTo (&app, test_ws_cap.ids[1], "query.upcoming", "No songs in queue");
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	assert_frame (0, 1, "error");
 	e = frame_payload (0);
@@ -2369,6 +2373,7 @@ START_TEST (test_capture_explanation_and_upcoming_to_requester) {
 
 	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], "Because jazz.");
 	BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], &song, 5);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 	assert_frame (0, 0, "song.explanation");
 	assert_frame (1, 0, "query.upcoming.result");
@@ -2378,6 +2383,7 @@ START_TEST (test_capture_explanation_and_upcoming_to_requester) {
 	/* A requester that has gone away gets nothing, and nobody else does */
 	TestWsCaptureClear ();
 	BarSocketIoEmitProcessTo (&app, test_ws_cap.ids[1] + 100);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	capture_app_destroy (&app);
@@ -2408,6 +2414,7 @@ START_TEST (test_action_query_replies_reach_only_requester) {
 	BarUiPianoCallSetTestHook (mockExplainText);
 	BarSocketIoHandleAction (&app, "song.explain", NULL, test_ws_cap.ids[1]);
 	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	assert_frame (0, 1, "song.explanation");
 	ck_assert (strstr (test_ws_cap.frames[0], "Because routing.") != NULL);
@@ -2415,6 +2422,7 @@ START_TEST (test_action_query_replies_reach_only_requester) {
 	/* Only one song queued: the "no songs" error goes to the requester only */
 	TestWsCaptureClear ();
 	BarSocketIoHandleAction (&app, "query.upcoming", NULL, test_ws_cap.ids[0]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	assert_frame (0, 0, "error");
 	ck_assert (strstr (test_ws_cap.frames[0], "query.upcoming") != NULL);
