@@ -26,7 +26,7 @@ THE SOFTWARE.
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "queue.h"
+#include "conn_id.h"
 
 /* Bounded FIFO that hands WebSocket commands from the receive callbacks
  * (producers, service thread) to the command worker (one consumer).

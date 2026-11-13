@@ -20,8 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#ifndef _WEBSOCKET_QUEUE_H
-#define _WEBSOCKET_QUEUE_H
+#pragma once
 
 #include <stdint.h>
 
@@ -31,4 +30,3 @@ typedef uint64_t BarWsConnId_t;
 /* No connection (e.g. the table was full); same value, different meaning */
 #define BAR_WS_CONN_NONE ((BarWsConnId_t) 0)
 
-#endif /* _WEBSOCKET_QUEUE_H */

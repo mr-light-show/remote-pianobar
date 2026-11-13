@@ -381,16 +381,6 @@ static void drainPlaylist (BarApp_t * const app) {
 	BarStateTruncatePlaylistTail(app);
 }
 
-/*	Switch to a station (for WebSocket/programmatic use)
- */
-void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station) {
-	assert (app != NULL);
-	assert (station != NULL);
-	
-	drainPlaylist (app);
-	BarStatePrepareStationSwitch(app, station);
-}
-
 /*	Switch to a station by id without exposing station pointers across the
  *	state lock boundary (for WebSocket/programmatic use).
  */

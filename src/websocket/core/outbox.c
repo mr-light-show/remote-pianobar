@@ -30,6 +30,13 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
+/* A client queue and the ingress each hold several maximal frames (a resync
+ * frame always fits an empty queue) */
+_Static_assert (WS_CLIENT_MAX_BYTES >= 4 * WS_FRAME_MAX_BYTES,
+		"per-client byte cap must hold four maximal frames");
+_Static_assert (WS_INGRESS_MAX_BYTES >= 4 * WS_FRAME_MAX_BYTES,
+		"ingress byte cap must hold four maximal frames");
+
 struct BarWsFrame {
 	atomic_uint refs;
 	size_t len;
