@@ -49,6 +49,33 @@ static void compatCapture (const char *msg, size_t len) {
 	g_compatBuf[copy] = '\0';
 }
 
+/* Route real deliveries (BarWsDeliver) into g_compatBuf: one fake client. */
+static char g_compatSocket;
+static int compatWriteFrame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	compatCapture ((const char *) buf, len);
+	return (int) len;
+}
+
+static BarWsConnId_t compatAttach (BarWsContext_t *ctx) {
+	ctx->maxConnections = 1;
+	ctx->connections = calloc (1, sizeof (BarWsConnection_t));
+	ck_assert_ptr_nonnull (ctx->connections);
+	ctx->writeFrame = compatWriteFrame;
+	g_compatBuf[0] = '\0';
+	BarWsConnId_t id = BarWsConnectionAdd (ctx, &g_compatSocket, "socketio");
+	ck_assert_uint_ne (id, BAR_WS_DEST_BROADCAST);
+	return id;
+}
+
+static void compatDetach (BarWsContext_t *ctx) {
+	free (ctx->connections);
+	ctx->connections = NULL;
+	ctx->maxConnections = 0;
+	ctx->numConnections = 0;
+	ctx->writeFrame = NULL;
+}
+
 /* Test: WebSocket initialization with NULL app should fail */
 START_TEST(test_websocket_init_null) {
 	bool result = BarWebsocketInit(NULL);
@@ -480,20 +507,18 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 	test_setup_web_app (&app, &ctx);
 	test_attach_station_and_song (&app, &station, &song);
 
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	g_compatBuf[0] = '\0';
+	BarWsConnId_t requester = compatAttach (&ctx);
 
-	ck_assert (!BarWsIsUnicastRequest ());
-
-	BarWsBroadcastExplanation (&app, "ignored without unicast target");
+	BarWsEmitExplanationTo (&app, requester + 1, "ignored for an unknown client");
 	ck_assert_str_eq (g_compatBuf, "");
 
-	int dummy_wsi = 0;
-	BarSocketIoSetUnicastTarget (&dummy_wsi);
-	ck_assert (BarWsIsUnicastRequest ());
-	BarWsBroadcastExplanation (&app, "Because you like rock.");
+	BarWsEmitExplanationTo (&app, requester, "Because you like rock.");
 	ck_assert (strstr (g_compatBuf, "Because you like rock.") != NULL);
-	BarSocketIoSetUnicastTarget (NULL);
+
+	g_compatBuf[0] = '\0';
+	BarWsEmitErrorTo (&app, requester, "song.explain", "Failed to receive explanation");
+	ck_assert (strstr (g_compatBuf, "\"error\"") != NULL);
+	ck_assert (strstr (g_compatBuf, "song.explain") != NULL);
 
 	g_compatBuf[0] = '\0';
 	BarWsEmitError (&app, "station.change", "Station not found");
@@ -518,7 +543,7 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 		ck_assert (strstr (payload, "unknown") != NULL);
 	}
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
@@ -558,16 +583,13 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoSong_t song;
-	int dummy_wsi = 0;
 
 	test_setup_web_app (&app, &ctx);
 	memset (&song, 0, sizeof (song));
 	song.title = "Up Next";
 
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	BarSocketIoSetUnicastTarget (&dummy_wsi);
-	g_compatBuf[0] = '\0';
-	BarWsBroadcastUpcoming (&app, &song, 1);
+	BarWsConnId_t requester = compatAttach (&ctx);
+	BarWsEmitUpcomingTo (&app, requester, &song, 1);
 	ck_assert (strstr (g_compatBuf, "Up Next") != NULL);
 
 	g_compatBuf[0] = '\0';
@@ -582,8 +604,7 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 	BarWsReleaseSingletonLock (&app);
 	ck_assert_int_eq (app.lockFd, -1);
 
-	BarSocketIoSetUnicastTarget (NULL);
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
@@ -925,8 +946,7 @@ START_TEST (test_websocket_immediate_and_delayed_volume_read_current_player_valu
 	BarWsScheduleVolumeBroadcast (&ctx, 0);
 	ck_assert (BarPlayerSetVolume (&app.player, 84));
 	app.settings.volume = 3;
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	g_compatBuf[0] = '\0';
+	compatAttach (&ctx);
 	BarWsProcessVolumeBroadcast (&ctx, &app);
 	event = json_tokener_parse (g_compatBuf + 1);
 	ck_assert_ptr_nonnull (event);
@@ -934,13 +954,13 @@ START_TEST (test_websocket_immediate_and_delayed_volume_read_current_player_valu
 	ck_assert_int_eq (json_object_get_int (json_object_array_get_idx (event, 1)), 84);
 	ck_assert (!ctx.delayedVolumeBroadcast.pending);
 	json_object_put (event);
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
-START_TEST(test_websocket_bridge_upcoming_skips_without_unicast_target) {
+START_TEST(test_websocket_bridge_upcoming_skips_unknown_requester) {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoSong_t song;
@@ -948,14 +968,11 @@ START_TEST(test_websocket_bridge_upcoming_skips_without_unicast_target) {
 	memset (&song, 0, sizeof (song));
 	song.title = "Hidden Upcoming";
 
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetUnicastTarget (NULL);
-
-	BarWsBroadcastUpcoming (&app, &song, 1);
+	BarWsConnId_t requester = compatAttach (&ctx);
+	BarWsEmitUpcomingTo (&app, requester + 1, &song, 1);
 	ck_assert_str_eq (g_compatBuf, "");
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
@@ -1014,14 +1031,16 @@ END_TEST
 /* Wire-compat: progress must be an object, not bare values */
 START_TEST (test_wire_compat_progress_is_object)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
 	struct json_object *data = json_object_new_object ();
 	json_object_object_add (data, "elapsed",    json_object_new_int (42));
 	json_object_object_add (data, "duration",   json_object_new_int (240));
 	json_object_object_add (data, "percentage", json_object_new_int (17));
-	BarSocketIoEmit ("progress", data);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "progress", data);
 	json_object_put (data);
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
@@ -1029,33 +1048,39 @@ START_TEST (test_wire_compat_progress_is_object)
 	ck_assert (strstr (g_compatBuf, "\"elapsed\"")  != NULL);
 	ck_assert (strstr (g_compatBuf, "\"duration\"") != NULL);
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
 /* Wire-compat: volume must be a bare integer, not wrapped in an object */
 START_TEST (test_wire_compat_volume_is_bare_integer)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
-	BarSocketIoEmit ("volume", json_object_new_int (50));
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "volume", json_object_new_int (50));
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
 	ck_assert (strstr (g_compatBuf, "\"volume\"") != NULL);
 	ck_assert (strstr (g_compatBuf, "{\"volume\"") == NULL);
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
 /* Wire-compat: stop must have no payload element — no comma after "stop" */
 START_TEST (test_wire_compat_stop_has_no_payload)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
-	BarSocketIoEmit ("stop", NULL);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "stop", NULL);
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
 	const char *stopPos = strstr (g_compatBuf, "\"stop\"");
@@ -1063,15 +1088,18 @@ START_TEST (test_wire_compat_stop_has_no_payload)
 	/* No comma after "stop" means no second (payload) element */
 	ck_assert_ptr_null (strchr (stopPos, ','));
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
 /* Wire-compat: stations payload must open as an array bracket, not an object */
 START_TEST (test_wire_compat_stations_is_array)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
 	struct json_object *arr = json_object_new_array ();
 	struct json_object *s   = json_object_new_object ();
@@ -1079,7 +1107,7 @@ START_TEST (test_wire_compat_stations_is_array)
 	json_object_object_add (s, "name",       json_object_new_string ("My Station"));
 	json_object_object_add (s, "isQuickMix", json_object_new_boolean (0));
 	json_object_array_add (arr, s);
-	BarSocketIoEmit ("stations", arr);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "stations", arr);
 	json_object_put (arr);
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
@@ -1090,7 +1118,8 @@ START_TEST (test_wire_compat_stations_is_array)
 	while (*after == ',' || *after == ' ') after++;
 	ck_assert_int_eq (*after, '[');
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
@@ -1124,7 +1153,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test (tc_core, test_websocket_play_state_waits_for_queued_control);
-	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_without_unicast_target);
+	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_unknown_requester);
 	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);

@@ -233,8 +233,8 @@ static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName,
  * ============================================================================
  */
 
-/* Canonical event handler type: (app, data, wsi) */
-typedef void (*BarSocketIoEventFn)(BarApp_t *, json_object *, void *);
+/* Canonical event handler type: (app, data, requester) */
+typedef void (*BarSocketIoEventFn)(BarApp_t *, json_object *, BarWsConnId_t);
 
 typedef struct {
 	const char        *name;
@@ -242,11 +242,11 @@ typedef struct {
 } BarSocketIoEvent_t;
 
 /* Thin adapters for handlers whose native signatures differ from the canonical type */
-static void evtHandleQuery(BarApp_t *a, json_object *d, void *w) {
-	(void)d; BarSocketIoHandleQuery(a, w);
+static void evtHandleQuery(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)d; BarSocketIoHandleQuery(a, r);
 }
-static void evtHandleStationChange(BarApp_t *a, json_object *d, void *w) {
-	(void)w;
+static void evtHandleStationChange(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r;
 	if (!d) { return; }
 	if (json_object_is_type(d, json_type_string)) {
 		const char *id = json_object_get_string(d);
@@ -259,55 +259,55 @@ static void evtHandleStationChange(BarApp_t *a, json_object *d, void *w) {
 		}
 	}
 }
-static void evtEmitStations(BarApp_t *a, json_object *d, void *w) {
-	(void)d; (void)w;
+static void evtEmitStations(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)d; (void)r;
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
 	BarSocketIoEmitStations(a);
 }
-static void evtGetGenres(BarApp_t *a, json_object *d, void *w) {
-	(void)d; (void)w; BarSocketIoHandleGetGenres(a);
+static void evtGetGenres(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)d; (void)r; BarSocketIoHandleGetGenres(a);
 }
-static void evtPingNoop(BarApp_t *a, json_object *d, void *w) {
-	(void)a; (void)d; (void)w; /* client keepalive; no response needed */
+static void evtPingNoop(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)a; (void)d; (void)r; /* client keepalive; no response needed */
 }
-static void evtSetQuickMix(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleSetQuickMix(a, d);
+static void evtSetQuickMix(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleSetQuickMix(a, d);
 }
-static void evtDeleteStation(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleDeleteStation(a, d);
+static void evtDeleteStation(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleDeleteStation(a, d);
 }
-static void evtCreateStationFrom(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleCreateStationFrom(a, d);
+static void evtCreateStationFrom(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleCreateStationFrom(a, d);
 }
-static void evtAddGenre(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleAddGenre(a, d);
+static void evtAddGenre(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleAddGenre(a, d);
 }
-static void evtSearchMusic(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleSearchMusic(a, d);
+static void evtSearchMusic(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleSearchMusic(a, d);
 }
-static void evtAddMusic(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleAddMusic(a, d);
+static void evtAddMusic(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleAddMusic(a, d);
 }
-static void evtAddShared(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleAddShared(a, d);
+static void evtAddShared(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleAddShared(a, d);
 }
-static void evtRenameStation(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleRenameStation(a, d);
+static void evtRenameStation(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleRenameStation(a, d);
 }
-static void evtGetStationModes(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleGetStationModes(a, d);
+static void evtGetStationModes(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleGetStationModes(a, d);
 }
-static void evtSetStationMode(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleSetStationMode(a, d);
+static void evtSetStationMode(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleSetStationMode(a, d);
 }
-static void evtGetStationInfo(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleGetStationInfo(a, d);
+static void evtGetStationInfo(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleGetStationInfo(a, d);
 }
-static void evtDeleteSeed(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleDeleteSeed(a, d);
+static void evtDeleteSeed(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleDeleteSeed(a, d);
 }
-static void evtDeleteFeedback(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleDeleteFeedback(a, d);
+static void evtDeleteFeedback(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleDeleteFeedback(a, d);
 }
 
 static const BarSocketIoEvent_t eventHandlers[] = {
@@ -339,7 +339,7 @@ static const BarSocketIoEvent_t eventHandlers[] = {
 };
 
 /* Handle incoming Socket.IO message */
-void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
+void BarSocketIoHandleMessage (BarApp_t *app, const char *message, BarWsConnId_t requester) {
 	BarSocketIoType_t type;
 	char *eventName = NULL;
 	json_object *data = NULL;
@@ -359,7 +359,7 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 
 	if (type == SOCKETIO_CONNECT) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
-		BarSocketIoHandleQuery(app, wsi);
+		BarSocketIoHandleQuery(app, requester);
 		goto cleanup;
 	}
 
@@ -371,15 +371,15 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	if (strcmp(eventName, "action") == 0) {
 		if (data && json_object_is_type(data, json_type_string)) {
 			const char *action = json_object_get_string(data);
-			BarSocketIoHandleAction(app, action, NULL, wsi);
+			BarSocketIoHandleAction(app, action, NULL, requester);
 		} else if (data && json_object_is_type(data, json_type_object)) {
 			json_object *actionObj;
 			if (json_object_object_get_ex(data, "action", &actionObj)) {
 				const char *action = json_object_get_string(actionObj);
-				if (action) { BarSocketIoHandleAction(app, action, data, wsi); }
+				if (action) { BarSocketIoHandleAction(app, action, data, requester); }
 			} else if (json_object_object_get_ex(data, "command", &actionObj)) {
 				const char *action = json_object_get_string(actionObj);
-				if (action) { BarSocketIoHandleAction(app, action, data, wsi); }
+				if (action) { BarSocketIoHandleAction(app, action, data, requester); }
 			}
 		}
 		goto cleanup;
@@ -388,7 +388,7 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	/* Table-driven dispatch for all other events */
 	for (const BarSocketIoEvent_t *e = eventHandlers; e->name != NULL; e++) {
 		if (strcmp(eventName, e->name) == 0) {
-			e->fn(app, data, wsi);
+			e->fn(app, data, requester);
 			goto cleanup;
 		}
 	}
@@ -399,38 +399,6 @@ cleanup:
 	if (data) {
 		json_object_put(data);
 	}
-}
-
-/* Global broadcast callback (set by WebSocket core) */
-static void (*g_broadcastCallback)(const char *message, size_t len) = NULL;
-
-/* Thread-local unicast target - each thread has its own value
- * WebSocket thread: Sets this when handling query actions
- * CLI thread: Always NULL (never set)
- * This eliminates race conditions from shared global variable */
-static pthread_key_t g_unicastTargetKey;
-static pthread_once_t g_unicastTargetKeyOnce = PTHREAD_ONCE_INIT;
-
-/* Initialize TLS key (called once) */
-static void init_unicast_target_key(void) {
-	pthread_key_create(&g_unicastTargetKey, NULL);
-}
-
-/* Set broadcast callback */
-void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t)) {
-	g_broadcastCallback = callback;
-}
-
-/* Set unicast target (NULL for broadcast mode) */
-void BarSocketIoSetUnicastTarget(void *wsi) {
-	pthread_once(&g_unicastTargetKeyOnce, init_unicast_target_key);
-	pthread_setspecific(g_unicastTargetKey, wsi);
-}
-
-/* Get unicast target (for websocket.c to check) */
-void *BarSocketIoGetUnicastTarget(void) {
-	pthread_once(&g_unicastTargetKeyOnce, init_unicast_target_key);
-	return pthread_getspecific(g_unicastTargetKey);
 }
 
 /* Format Socket.IO event message */
@@ -465,8 +433,9 @@ char *BarSocketIoFormatEventMessage(const char *event, json_object *data) {
 	return formatted;
 }
 
-/* Emit event to all connected clients */
-void BarSocketIoEmit(const char *event, json_object *data) {
+/* Emit event now to `dest` (unbucketed, BUCKET_NONE lane) */
+void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
+                      json_object *data) {
 	char *message;
 	
 	if (!event) {
@@ -489,16 +458,10 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 	log_write(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.*s%s\n",
 	           strlen(message), (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
-	/* Broadcast to all clients if callback is set */
-	if (g_broadcastCallback) {
-		log_write(dbgFlag, "Socket.IO: Calling broadcast callback\n");
-		g_broadcastCallback(message, strlen(message));
-		log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Broadcast callback returned\n");
-	} else {
-		log_write(dbgFlag, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
+	/* Takes ownership of message */
+	if (!BarWebsocketSend (app, dest, BUCKET_NONE, message)) {
+		log_write(dbgFlag, "Socket.IO: Emit '%s' not delivered (no server or client)\n", event);
 	}
-
-	free(message);
 	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
@@ -513,19 +476,19 @@ void BarSocketIoEmitStart(BarApp_t *app) {
 		return;
 	}
 
-	BarSocketIoEmit("start", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "start", data);
 	json_object_put(data);
 }
 
 /* Emit 'stop' event (song stopped) */
 void BarSocketIoEmitStop(BarApp_t *app) {
-	BarSocketIoEmit("stop", NULL);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "stop", NULL);
 }
 
 /* Emit 'volume' event */
 void BarSocketIoEmitVolume(BarApp_t *app, int volume) {
 	json_object *data = json_object_new_int(volume);
-	BarSocketIoEmit("volume", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "volume", data);
 	json_object_put(data);
 }
 
@@ -544,23 +507,33 @@ void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
 	json_object_object_add(data, "duration",   json_object_new_int(duration));
 	json_object_object_add(data, "percentage", json_object_new_double(percentage));
 	
-	BarSocketIoEmit("progress", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "progress", data);
 	json_object_put(data);
 }
 
-/* Emit 'stations' event (station list) */
-void BarSocketIoEmitStations(BarApp_t *app) {
+/* Emit 'stations' event (station list) to `dest` */
+static void BarSocketIoEmitStationsTo (BarApp_t *app, BarWsConnId_t dest) {
 	if (!app) {
 		return;
 	}
 
 	json_object *stations = BarSocketIoBuildStationsPayload (app);
-	BarSocketIoEmit("stations", stations);
+	BarSocketIoEmit(app, dest, "stations", stations);
 	json_object_put(stations);
+}
+
+/* Emit 'stations' event (station list) */
+void BarSocketIoEmitStations(BarApp_t *app) {
+	BarSocketIoEmitStationsTo (app, BAR_WS_DEST_BROADCAST);
 }
 
 /* Emit 'process' event (full state) */
 void BarSocketIoEmitProcess(BarApp_t *app) {
+	BarSocketIoEmitProcessTo (app, BAR_WS_DEST_BROADCAST);
+}
+
+/* Emit 'process' event (full state) to `dest` */
+void BarSocketIoEmitProcessTo (BarApp_t *app, BarWsConnId_t dest) {
 	if (!app) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
 		return;
@@ -571,7 +544,7 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 		return;
 	}
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
-	BarSocketIoEmit("process", data);
+	BarSocketIoEmit(app, dest, "process", data);
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
 	json_object_put(data);
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
@@ -699,17 +672,8 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 	return data;
 }
 
-/* Emit 'process' event to specific client only (unicast) */
-void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi) {
-	/* Set unicast target before emitting */
-	BarSocketIoSetUnicastTarget(wsi);
-	BarSocketIoEmitProcess(app);
-	/* Clear unicast target to return to broadcast mode */
-	BarSocketIoSetUnicastTarget(NULL);
-}
-
-/* Emit 'song.explanation' event (explanation text) */
-void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
+/* Emit 'song.explanation' event (explanation text) to `dest` */
+void BarSocketIoEmitExplanationTo (BarApp_t *app, BarWsConnId_t dest, const char *explanation) {
 	json_object *data;
 	char *explanation_copy;
 	
@@ -726,17 +690,14 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 	data = json_object_new_object();
 	json_object_object_add(data, "explanation", BarJsonStringOrEmpty(explanation_copy));
 	
-	BarSocketIoEmit("song.explanation", data);
+	BarSocketIoEmit(app, dest, "song.explanation", data);
 	json_object_put(data);
 	free(explanation_copy);
 }
 
-/* Emit 'error' event (error notification) */
-void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message) {
-	BarSocketIoEmitErrorEx(app, operation, message, NULL);
-}
-
-void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId) {
+/* Emit 'error' event (error notification) to `dest` */
+static void BarSocketIoEmitErrorDest (BarApp_t *app, BarWsConnId_t dest,
+		const char *operation, const char *message, const char *stationId) {
 	json_object *data;
 	const char *friendlyMessage;
 	const BarL10nContext_t *l10n = app ? &app->l10n : NULL;
@@ -755,24 +716,37 @@ void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *me
 		json_object_object_add(data, "stationId", BarJsonStringOrEmpty(stationId));
 	}
 	
-	BarSocketIoEmit("error", data);
+	BarSocketIoEmit(app, dest, "error", data);
 	json_object_put(data);
 }
 
+/* Emit 'error' event (error notification) */
+void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message) {
+	BarSocketIoEmitErrorEx(app, operation, message, NULL);
+}
+
+void BarSocketIoEmitErrorTo (BarApp_t *app, BarWsConnId_t dest, const char *operation, const char *message) {
+	BarSocketIoEmitErrorDest (app, dest, operation, message, NULL);
+}
+
+void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId) {
+	BarSocketIoEmitErrorDest (app, BAR_WS_DEST_BROADCAST, operation, message, stationId);
+}
+
 /* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", "connection_lost", etc.) */
-void BarSocketIoEmitPandoraDisconnected(const char *reason) {
+void BarSocketIoEmitPandoraDisconnected (BarApp_t *app, const char *reason) {
 	json_object *data;
 	if (!reason) {
 		reason = "unknown";
 	}
 	data = json_object_new_object();
 	json_object_object_add(data, "reason", BarJsonStringOrEmpty(reason));
-	BarSocketIoEmit("pandora.disconnected", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "pandora.disconnected", data);
 	json_object_put(data);
 }
 
 /* If Piano request failed with auth/connection error, notify clients (reactive disconnect) */
-static void BarSocketIoOnPandoraRequestFailed(PianoReturn_t pRet) {
+static void BarSocketIoOnPandoraRequestFailed(BarApp_t *app, PianoReturn_t pRet) {
 	switch (pRet) {
 	case PIANO_RET_INVALID_LOGIN:
 	case PIANO_RET_P_INVALID_AUTH_TOKEN:
@@ -780,7 +754,7 @@ static void BarSocketIoOnPandoraRequestFailed(PianoReturn_t pRet) {
 	case PIANO_RET_P_USER_NOT_AUTHORIZED:
 	case PIANO_RET_P_DEVICE_NOT_FOUND:
 	case PIANO_RET_P_INSUFFICIENT_CONNECTIVITY:
-		BarSocketIoEmitPandoraDisconnected("connection_lost");
+		BarSocketIoEmitPandoraDisconnected(app, "connection_lost");
 		break;
 	default:
 		break;
@@ -798,7 +772,7 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 		return true;
 	}
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Failed: %s\n", actionName);
-	BarSocketIoOnPandoraRequestFailed(*pRet);
+	BarSocketIoOnPandoraRequestFailed(app, *pRet);
 	char buf[BAR_BUF_SMALL];
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
 	BarSocketIoEmitError(app, operation, buf);
@@ -817,12 +791,12 @@ void BarSocketIoEmitPlayState(BarApp_t *app) {
 	json_object_object_add(data, "paused", json_object_new_boolean(app->player.doPause));
 	pthread_mutex_unlock(&app->player.lock);
 	
-	BarSocketIoEmit("playState", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "playState", data);
 	json_object_put(data);
 }
 
-/* Emit 'query.upcoming.result' event (upcoming songs list) */
-void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs) {
+/* Emit 'query.upcoming.result' event (upcoming songs list) to `dest` */
+void BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, PianoSong_t *firstSong, int maxSongs) {
 	json_object *songs, *songObj;
 	PianoSong_t *song;
 	int count = 0;
@@ -846,7 +820,7 @@ void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs
 		count++;
 	}
 	
-	BarSocketIoEmit("query.upcoming.result", songs);
+	BarSocketIoEmit(app, dest, "query.upcoming.result", songs);
 	json_object_put(songs);
 }
 
@@ -893,7 +867,7 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 	
 	json_object_object_add(data, "categories", categories);
 	
-	BarSocketIoEmit("genres", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "genres", data);
 	json_object_put(data);
 }
 
@@ -1195,7 +1169,7 @@ void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_
 	
 	json_object_object_add(data, "modes", modesArray);
 	
-	BarSocketIoEmit("stationModes", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "stationModes", data);
 	json_object_put(data);
 }
 
@@ -1343,7 +1317,7 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	}
 	json_object_object_add(data, "feedback", feedbackArray);
 	
-	BarSocketIoEmit("stationInfo", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "stationInfo", data);
 	json_object_put(data);
 }
 
@@ -1558,7 +1532,7 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 	
 	json_object_object_add(data, "categories", categories);
 	
-	BarSocketIoEmit("searchResults", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "searchResults", data);
 	json_object_put(data);
 }
 
@@ -1603,7 +1577,8 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
 }
 
 /* Handle 'action' event from client */
-void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *data, void *wsi) {
+void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *data,
+                              BarWsConnId_t requester) {
 	BarKeyShortcutId_t actionId;
 	
 	if (!app || !action || !app->wsContext) {
@@ -1730,11 +1705,15 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		return;
 	}
 
-	/* For query actions (explain, upcoming), set unicast target so response
-	 * only goes to the requesting client, not all clients */
-	bool useUnicast = (actionId == BAR_KS_EXPLAIN || actionId == BAR_KS_UPCOMING);
-	if (useUnicast && wsi) {
-		BarSocketIoSetUnicastTarget(wsi);
+	/* Query actions (explain, upcoming) reply to the requesting client only.
+	 * The context check above is the one BarUiDispatchById would make. */
+	if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_EXPLAIN) {
+		BarUiActExplainTo (app, currentStation, currentSong, requester);
+		return;
+	}
+	if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_UPCOMING) {
+		BarUiActPrintUpcomingTo (app, currentStation, currentSong, requester);
+		return;
 	}
 	
 	/* Execute action directly by ID in WebSocket thread
@@ -1747,11 +1726,6 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	 * Lock ordering is safe: stateRwlock → player.lock (if both needed)
 	 * See src/THREAD_SAFETY.md for details */
 	BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
-	
-	/* Clear unicast target after query actions */
-	if (useUnicast) {
-		BarSocketIoSetUnicastTarget(NULL);
-	}
 	
 	/* Note: Play/pause/toggle broadcast completed snapshots in ui_act.c.
 	 * song.love / song.ban emit a full `process` (not `start`) via BarWsBroadcastProcess
@@ -1963,17 +1937,15 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	}
 }
 
-/* Handle 'query' event from client (unicast response to requesting client) */
-void BarSocketIoHandleQuery(BarApp_t *app, void *wsi) {
+/* Handle 'query' event: full state and stations to the requester only */
+void BarSocketIoHandleQuery (BarApp_t *app, BarWsConnId_t requester) {
 	if (!app) {
 		return;
 	}
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Query received\n");
 	
-	/* Send full state to requesting client only (unicast) */
-	BarSocketIoSetUnicastTarget(wsi);
-	BarSocketIoEmitProcess(app);
-	BarSocketIoEmitStations(app);
-	BarSocketIoSetUnicastTarget(NULL);
+	/* Send full state to the requesting client only */
+	BarSocketIoEmitProcessTo (app, requester);
+	BarSocketIoEmitStationsTo (app, requester);
 }

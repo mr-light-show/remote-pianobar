@@ -325,7 +325,7 @@ BarUiActCallback(BarUiActDeleteStation) {
 	}
 }
 
-/*	explain pandora's song choice
+/*	explain pandora's song choice (terminal)
  */
 BarUiActCallback(BarUiActExplain) {
 	PianoReturn_t pRet;
@@ -337,39 +337,39 @@ BarUiActCallback(BarUiActExplain) {
 	reqData.song = selSong;
 	reqData.retExplain = NULL; /* Initialize to NULL to avoid freeing garbage */
 
-	bool isWebSocketRequest = BarWsIsUnicastRequest();
-	bool callSuccess;
-
-	if (!isWebSocketRequest) {
-		BarUiMsg (&app->settings, MSG_INFO, "Receiving explanation... ");
-		callSuccess = BarUiActDefaultPianoCall(PIANO_REQUEST_EXPLAIN, &reqData);
-	} else {
-		/* WebSocket request - use logged API call */
-		callSuccess = BarUiPianoCallLogged(app, PIANO_REQUEST_EXPLAIN, &reqData,
-				"Receiving explanation", &pRet, &wRet);
-		if (!callSuccess) {
-			BarWsEmitError(app, "song.explain", "Failed to receive explanation");
+	BarUiMsg (&app->settings, MSG_INFO, "Receiving explanation... ");
+	if (BarUiActDefaultPianoCall(PIANO_REQUEST_EXPLAIN, &reqData)) {
+		if (reqData.retExplain == NULL) {
+			BarUiMsg (&app->settings, MSG_ERR, "No explanation provided.\n");
+		} else {
+			BarUiMsg (&app->settings, MSG_INFO, "%s\n", reqData.retExplain);
+			free (reqData.retExplain);
 		}
 	}
+	BarUiActDefaultEventcmd ("songexplain");
+}
 
-	if (callSuccess) {
-		if (reqData.retExplain == NULL) {
-			if (!isWebSocketRequest) {
-				BarUiMsg (&app->settings, MSG_ERR, "No explanation provided.\n");
-			}
-			
-			if (isWebSocketRequest) {
-				BarWsEmitError(app, "song.explain", "No explanation provided by Pandora");
-			}
-		} else {
-		if (!isWebSocketRequest) {
-			BarUiMsg (&app->settings, MSG_INFO, "%s\n", reqData.retExplain);
-		}
-		
-		BarWsBroadcastExplanation(app, reqData.retExplain);
-		
+/*	explain pandora's song choice to the requesting web client only
+ */
+void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
+		PianoSong_t *selSong, BarWsConnId_t requester) {
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataExplain_t reqData;
+
+	assert (selSong != NULL);
+
+	reqData.song = selSong;
+	reqData.retExplain = NULL; /* Initialize to NULL to avoid freeing garbage */
+
+	if (!BarUiPianoCallLogged(app, PIANO_REQUEST_EXPLAIN, &reqData,
+			"Receiving explanation", &pRet, &wRet)) {
+		BarWsEmitErrorTo(app, requester, "song.explain", "Failed to receive explanation");
+	} else if (reqData.retExplain == NULL) {
+		BarWsEmitErrorTo(app, requester, "song.explain", "No explanation provided by Pandora");
+	} else {
+		BarWsEmitExplanationTo(app, requester, reqData.retExplain);
 		free (reqData.retExplain);
-		}
 	}
 	BarUiActDefaultEventcmd ("songexplain");
 }
@@ -608,26 +608,29 @@ BarUiActCallback(BarUiActTempBanSong) {
 	BarUiActDefaultEventcmd ("songshelf");
 }
 
-/*	print upcoming songs
+/*	print upcoming songs (terminal)
  */
 BarUiActCallback(BarUiActPrintUpcoming) {
 	PianoSong_t * const nextSong = PianoListNextP (selSong);
-	
-	bool isWebSocketRequest = BarWsIsUnicastRequest();
 
 	if (nextSong != NULL) {
-		if (!isWebSocketRequest) {
-			BarUiListSongs (app, nextSong, NULL);
-		}
-		BarWsBroadcastUpcoming(app, nextSong, 5);
+		BarUiListSongs (app, nextSong, NULL);
 	} else {
-		if (!isWebSocketRequest) {
-			BarUiMsg (&app->settings, MSG_INFO, "No songs in queue.\n");
-		}
-		
-		if (isWebSocketRequest) {
-			BarWsEmitError(app, "query.upcoming", "No songs in queue");
-		}
+		BarUiMsg (&app->settings, MSG_INFO, "No songs in queue.\n");
+	}
+}
+
+/*	send upcoming songs to the requesting web client only
+ */
+void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
+		PianoSong_t *selSong, BarWsConnId_t requester) {
+	PianoSong_t * const nextSong = PianoListNextP (selSong);
+
+	(void) selStation;
+	if (nextSong != NULL) {
+		BarWsEmitUpcomingTo(app, requester, nextSong, 5);
+	} else {
+		BarWsEmitErrorTo(app, requester, "query.upcoming", "No songs in queue");
 	}
 }
 
