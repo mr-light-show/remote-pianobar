@@ -45,11 +45,14 @@ THE SOFTWARE.
 
 #include "websocket/protocol/socketio.h"
 
-/*	standard eventcmd call
+/*	standard eventcmd call. BarUiStartEventCmd releases the caller's
+ *	pianoHttpMutex hold while it waits for the script, so the selection is
+ *	resolved again afterwards (NULL when it went away meanwhile).
  */
-#define BarUiActDefaultEventcmd(name) BarUiStartEventCmd (&app->settings, \
-		name, selStation, selSong, &app->player, BarStateGetStationList(app), \
-		pRet, wRet)
+#define BarUiActDefaultEventcmd(name) BarUiActEventcmd (app, name, \
+		&selStation, &selSong, pRet, wRet)
+
+static PianoSong_t *BarUiActFindSongByToken (BarApp_t *app, const char *trackToken);
 
 /*	standard piano call
  */
@@ -172,6 +175,28 @@ static void BarUiActInputEnd (BarApp_t *app, BarUiActInputWait_t *wait,
 static void BarUiActSelectionGone (BarApp_t *app, bool station) {
 	BarUiMsg (&app->settings, MSG_ERR, "%s", BarL10nGet (&app->l10n,
 			station ? "cli.station_gone" : "cli.song_gone"));
+}
+
+/*	Run eventcmd for an action and resolve its selection again: the script is
+ *	waited for without the hold (BarUiStartEventCmd), so the station and song
+ *	may be gone when it returns.
+ */
+static void BarUiActEventcmd (BarApp_t *app, const char *type,
+		PianoStation_t **station, PianoSong_t **song, PianoReturn_t pRet,
+		CURLcode wRet) {
+	if (app->settings.eventCmd == NULL) {
+		return;
+	}
+	char *stationId = (*station != NULL && (*station)->id != NULL) ?
+			strdup ((*station)->id) : NULL;
+	char *trackToken = (*song != NULL && (*song)->trackToken != NULL) ?
+			strdup ((*song)->trackToken) : NULL;
+	BarUiStartEventCmd (&app->settings, type, *station, *song, &app->player,
+			BarStateGetStationList (app), pRet, wRet);
+	*station = stationId != NULL ? BarStateFindStationById (app, stationId) : NULL;
+	*song = BarUiActFindSongByToken (app, trackToken);
+	free (stationId);
+	free (trackToken);
 }
 
 /*	print current shortcut configuration
@@ -466,7 +491,8 @@ void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 		BarWsEmitExplanationTo(app, requester, reqData.retExplain);
 		free (reqData.retExplain);
 	}
-	BarUiActDefaultEventcmd ("songexplain");
+	BarUiStartEventCmd (&app->settings, "songexplain", selStation, selSong,
+			&app->player, BarStateGetStationList (app), pRet, wRet);
 }
 
 /*	choose genre station and add it as shared station
@@ -1294,6 +1320,11 @@ BarUiActCallback(BarUiActManageStation) {
 			&reqData);
 	BarUiActDefaultEventcmd ("stationfetchinfo");
 	if (!bret) {
+		return;
+	}
+	if (selStation == NULL) {
+		BarUiActSelectionGone (app, true);
+		PianoDestroyStationInfo (&reqData.info);
 		return;
 	}
 

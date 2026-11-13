@@ -342,13 +342,16 @@ void BarUiPianoHttpMutexDestroy (BarApp_t *app) {
 	pthread_mutex_destroy (&app->pianoHttpMutex);
 }
 
-/* pianoHttpMutex holds taken through BarUiPianoHold on this thread */
+/* pianoHttpMutex holds taken through BarUiPianoHold on this thread, and
+ * the app they belong to (for code that only has settings, e.g. eventcmd) */
 static _Thread_local unsigned int g_barUiPianoHolds = 0;
+static _Thread_local BarApp_t *g_barUiPianoHoldApp = NULL;
 
 void BarUiPianoHold (BarApp_t *app) {
 	assert (app != NULL);
 	pthread_mutex_lock (&app->pianoHttpMutex);
 	g_barUiPianoHolds++;
+	g_barUiPianoHoldApp = app;
 }
 
 void BarUiPianoRelease (BarApp_t *app) {
@@ -1044,7 +1047,21 @@ void BarUiStartEventCmd (const BarSettings_t *settings, const char *type,
 
 		close (pipeFd[0]);
 
-		pipeWriteFd = fdopen (pipeFd[1], "w");
+		/* Format everything first: borrowed station/song data is only read
+		 * here, while the caller's pianoHttpMutex hold keeps it alive. The
+		 * write to the script and the wait for it happen without the hold
+		 * (below), so a slow or non-reading script cannot stall other
+		 * threads' Pandora work. */
+		char *payload = NULL;
+		size_t payloadLen = 0;
+		pipeWriteFd = open_memstream (&payload, &payloadLen);
+		if (pipeWriteFd == NULL) {
+			BarUiMsg (settings, MSG_ERR, "Cannot buffer eventcmd input. (%s)\n",
+					strerror (errno));
+			close (pipeFd[1]);
+			waitpid (chld, &status, 0);
+			return;
+		}
 
 		if (curSong != NULL && stations != NULL && curStation != NULL &&
 				curStation->isQuickMix) {
@@ -1109,10 +1126,32 @@ void BarUiStartEventCmd (const BarSettings_t *settings, const char *type,
 			fwrite (msg, sizeof (*msg), strlen (msg), pipeWriteFd);
 		}
 	
-		/* closes pipeFd[1] as well */
 		fclose (pipeWriteFd);
+
+		/* No station/song data is used past this point. Release this
+		 * thread's holds (none if the caller holds none) for the write and
+		 * the wait, and restore them before returning. */
+		BarApp_t * const holdApp = g_barUiPianoHolds > 0 ?
+				g_barUiPianoHoldApp : NULL;
+		const unsigned int holds = holdApp != NULL ?
+				BarUiPianoSuspend (holdApp) : 0;
+		for (size_t off = 0; payload != NULL && off < payloadLen; ) {
+			const ssize_t n = write (pipeFd[1], payload + off, payloadLen - off);
+			if (n < 0 && errno == EINTR) {
+				continue;
+			}
+			if (n <= 0) {
+				break;
+			}
+			off += (size_t) n;
+		}
+		free (payload);
+		close (pipeFd[1]);
 		/* wait to get rid of the zombie */
 		waitpid (chld, &status, 0);
+		if (holdApp != NULL) {
+			BarUiPianoResume (holdApp, holds);
+		}
 	}
 }
 

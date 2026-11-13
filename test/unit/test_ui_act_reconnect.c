@@ -6,6 +6,7 @@
 #include <json-c/json.h>
 #include <pthread.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -49,6 +50,8 @@ void BarUiActExplain (BarApp_t *app, PianoStation_t *selStation,
 void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 		PianoSong_t *selSong, BarWsConnId_t requester);
 void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester);
+void BarUiActManageStation (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActPause (BarApp_t *app, PianoStation_t *selStation,
@@ -2621,6 +2624,118 @@ START_TEST (test_ui_act_delete_station_gone_after_prompt_skips_call)
 }
 END_TEST
 
+/* --- eventcmd waits without the hold; the selection is resolved again --- */
+
+typedef struct {
+	BarApp_t *app;
+	const char *fifo;
+	PianoStation_t *removeStation;
+	atomic_bool sawReleased;
+} BarTestEventcmdFeeder_t;
+
+static void *eventcmd_feeder_thread (void *arg) {
+	BarTestEventcmdFeeder_t *f = arg;
+	for (int i = 0; i < 2000; i++) {
+		if (pthread_mutex_trylock (&f->app->pianoHttpMutex) == 0) {
+			atomic_store (&f->sawReleased, true);
+			pthread_rwlock_wrlock (&f->app->stateRwlock);
+			f->app->ph.stations = PianoListDeleteP (f->app->ph.stations,
+					f->removeStation);
+			pthread_rwlock_unlock (&f->app->stateRwlock);
+			/* Freed like DELETE_STATION does (ASan flags any later use) */
+			free (f->removeStation->id);
+			free (f->removeStation->name);
+			free (f->removeStation);
+			pthread_mutex_unlock (&f->app->pianoHttpMutex);
+			break;
+		}
+		usleep (1000);
+	}
+	int fd = -1;
+	for (int i = 0; i < 5000 && fd == -1; i++) {
+		fd = open (f->fifo, O_WRONLY | O_NONBLOCK);
+		if (fd == -1) {
+			usleep (1000);
+		}
+	}
+	ck_assert_int_ne (fd, -1);
+	ck_assert (write (fd, "x\n", 2) == 2);
+	close (fd);
+	return NULL;
+}
+
+static unsigned g_manageModeFetches;
+
+static bool
+mock_manage_station_info_ok (BarApp_t *app, const PianoRequestType_t type,
+                             void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_GET_STATION_MODES) {
+		g_manageModeFetches++;
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+/* The station is deleted (and freed) while the fetchinfo eventcmd runs;
+ * the action stops instead of using it */
+START_TEST (test_ui_act_manage_station_gone_after_eventcmd_stops)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	char dir[512], script[600], fifo[600], marker[600];
+	int pipefd[2];
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "manage_eventcmd"));
+	snprintf (fifo, sizeof (fifo), "%s/release", dir);
+	snprintf (marker, sizeof (marker), "%s/released", dir);
+	ck_assert_int_eq (mkfifo (fifo, 0600), 0);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	/* Only the first event waits for the feeder */
+	fprintf (f, "#!/bin/sh\ncat > /dev/null\n[ -e '%s' ] || { read x < '%s'; touch '%s'; }\n",
+			marker, fifo, marker);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	app.settings.eventCmd = strdup (script);
+
+	/* "m" would fetch the station's modes if the action went on */
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_input_from_fd (&app.input, pipefd[0]);
+	rl_write_input (pipefd[1], "m\n");
+
+	PianoStation_t *heapDoomed = calloc (1, sizeof (*heapDoomed));
+	ck_assert_ptr_nonnull (heapDoomed);
+	heapDoomed->id = strdup ("S3");
+	heapDoomed->name = strdup ("Freed");
+	app.ph.stations = PianoListAppendP (app.ph.stations, heapDoomed);
+	BarTestEventcmdFeeder_t feeder = { .app = &app, .fifo = fifo,
+			.removeStation = heapDoomed };
+	atomic_init (&feeder.sawReleased, false);
+	g_manageModeFetches = 0;
+	pthread_t thread;
+	BarUiPianoCallSetTestHook (mock_manage_station_info_ok);
+	BarUiPianoHold (&app);
+	ck_assert_int_eq (pthread_create (&thread, NULL, eventcmd_feeder_thread, &feeder), 0);
+	BarUiActManageStation (&app, heapDoomed, NULL, 1);
+	BarUiPianoRelease (&app);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	BarUiPianoCallClearTestHook ();
+	close (pipefd[0]);
+
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_uint_eq (g_manageModeFetches, 0);
+
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
 static bool
 mock_bookmark_song_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
                        PianoReturn_t *pRet, CURLcode *wRet)
@@ -2812,6 +2927,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
 	tcase_add_test (tc, test_ui_act_delete_station_releases_hold_during_prompt);
 	tcase_add_test (tc, test_ui_act_delete_station_gone_after_prompt_skips_call);
+	tcase_add_test (tc, test_ui_act_manage_station_gone_after_eventcmd_stops);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
 	tcase_add_test (tc, test_ui_act_bookmark_artist);
 	tcase_add_test (tc, test_ui_act_settings_change_username);
