@@ -70,9 +70,7 @@ START_TEST (test_print_startup_info_cli_mode_omits_web_details)
 
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
-#ifdef WEBSOCKET_ENABLED
 	app.settings.uiMode = BAR_UI_MODE_CLI;
-#endif
 
 	out = tmpfile ();
 	ck_assert_ptr_nonnull (out);
@@ -88,7 +86,6 @@ START_TEST (test_print_startup_info_cli_mode_omits_web_details)
 }
 END_TEST
 
-#ifdef WEBSOCKET_ENABLED
 START_TEST (test_print_startup_info_web_mode_includes_url)
 {
 	BarApp_t app;
@@ -166,7 +163,6 @@ START_TEST (test_print_startup_info_daemon_includes_pid_and_pid_file)
 	BarSettingsDestroy (&app.settings);
 }
 END_TEST
-#endif
 
 START_TEST (test_sorted_stations_orders_by_name_az)
 {
@@ -263,9 +259,7 @@ START_TEST (test_ui_piano_call_http_hits_progress_cb)
 	memset (&app, 0, sizeof (app));
 	memset (&loginData, 0, sizeof (loginData));
 	BarSettingsInit (&app.settings);
-#ifdef WEBSOCKET_ENABLED
 	app.settings.uiMode = BAR_UI_MODE_BOTH;
-#endif
 	free (app.settings.rpcHost);
 	free (app.settings.rpcTlsPort);
 	app.settings.rpcHost = strdup ("127.0.0.1");
@@ -305,11 +299,9 @@ Suite *ui_suite (void)
 	TCase *tc = tcase_create ("core");
 
 	tcase_add_test (tc, test_print_startup_info_cli_mode_omits_web_details);
-#ifdef WEBSOCKET_ENABLED
 	tcase_add_test (tc, test_print_startup_info_web_mode_includes_url);
 	tcase_add_test (tc, test_print_startup_info_bind_all_shows_bind_address);
 	tcase_add_test (tc, test_print_startup_info_daemon_includes_pid_and_pid_file);
-#endif
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_az);
 	tcase_add_test (tc, test_sorted_stations_orders_by_name_za);
 	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);

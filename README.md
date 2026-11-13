@@ -131,12 +131,6 @@ Then type:
 gmake clean && gmake
 ```
 
-WebSocket/Remote API is included by default. To build without it:
-
-```bash
-make NOWEBSOCKET=1 clean && make NOWEBSOCKET=1
-```
-
 You can run the client directly from the source directory now:
 
 ```bash

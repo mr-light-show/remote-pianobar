@@ -43,9 +43,7 @@ THE SOFTWARE.
 #include "station_display.h"
 #include "playback_manager.h"
 
-#ifdef WEBSOCKET_ENABLED
 #include "websocket/protocol/socketio.h"
-#endif
 
 /*	standard eventcmd call
  */

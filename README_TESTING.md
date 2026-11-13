@@ -133,11 +133,10 @@ Codecov patch coverage reflects **only what CI uploads** — it does **not** mer
 | `make test-coverage` | Full WebSocket test binary + integration + headless audio | Yes (`c-tests` flag) | Matches GitHub Actions `test.yml`; always use this before judging patch % |
 | `make test` | Unit tests only (no integration) | No | Fast dev loop; lower coverage than CI |
 | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` | Same tests as CI except no `--coverage` | No | Pre-push CI parity when `Makefile` / `test/**` changed |
-| `make NOWEBSOCKET=1 test` | Base tests only; no WebSocket objects linked | No | Separate binary; `#ifdef WEBSOCKET_ENABLED` code is **not** exercised |
 | `make test-asan` | ASan rebuild + unit tests | No | Memory checking only |
 | `cd webui && npm test -- --run --coverage` | Vitest | Yes (`web-tests` flag) | Separate upload; combined with `c-tests` for default patch gate |
 
-**Implication:** production lines compiled only under `NOWEBSOCKET=1`, or only when integration env vars are unset, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
+**Implication:** production lines exercised only when integration env vars are set, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
 
 The `codecov/patch/c-tests` gate scopes to **`src/**/*.c` only** — changed headers (`*.h`) and docs (`*.md`) in `src/` are excluded from the patch denominator because they are not executable.
 

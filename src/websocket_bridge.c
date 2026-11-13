@@ -24,7 +24,6 @@ THE SOFTWARE.
 #include "websocket_bridge.h"
 #include "system_volume.h"
 
-#ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"
 #include "websocket/daemon/daemon.h"
@@ -342,57 +341,3 @@ void BarWsConfigureWebOnlyInput(BarApp_t *app) {
 	app->input.fds[1] = -1;
 	app->input.maxfd = 0;
 }
-
-#else
-/* No-op implementations when WebSocket support is disabled */
-bool BarIsWebOnlyMode(const BarApp_t *app) { (void)app; return false; }
-bool BarShouldSkipCliOutput(const BarApp_t *app) { (void)app; return false; }
-bool BarWsIsWebActive(const BarApp_t *app) { (void)app; return false; }
-
-void BarWsBroadcastVolume(BarApp_t *app) { (void)app; }
-void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation) { 
-	(void)app; (void)explanation; 
-}
-void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count) { 
-	(void)app; (void)songs; (void)count;
-}
-void BarWsBroadcastSongStart(BarApp_t *app) { (void)app; }
-void BarWsBroadcastProcess(BarApp_t *app) { (void)app; }
-void BarWsBroadcastSongStop(BarApp_t *app) { (void)app; }
-void BarWsBroadcastProgress(BarApp_t *app) { (void)app; }
-void BarWsBroadcastPlayState(BarApp_t *app) { (void)app; }
-void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
-                                      const BarPlayerPlayStateSnapshot *snapshot) {
-	(void)app; (void)snapshot;
-}
-void BarWsBroadcastStations(BarApp_t *app) { (void)app; }
-void BarWsDisconnectAllClients(BarApp_t *app) { (void)app; }
-
-bool BarWsInit(BarApp_t *app) { (void)app; return true; }
-void BarWsDestroy(BarApp_t *app) { (void)app; }
-bool BarWsDaemonize(BarApp_t *app) { (void)app; return true; }
-void BarWsRemovePidFile(BarApp_t *app) { (void)app; }
-
-bool BarWsStartPlaybackManager(BarApp_t *app) { (void)app; return true; }
-void BarWsStopPlaybackManager(BarApp_t *app) { (void)app; }
-bool BarWsAcquireSingletonLock(BarApp_t *app) { (void)app; return true; }
-void BarWsReleaseSingletonLock(BarApp_t *app) { (void)app; }
-bool BarWsIsUnicastRequest(void) { return false; }
-void BarWsEmitError(BarApp_t *app, const char *event, const char *msg) {
-	(void)app; (void)event; (void)msg;
-}
-void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
-                       const char *extra) {
-	(void)app; (void)event; (void)msg; (void)extra;
-}
-void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
-	(void)app; (void)reason;
-}
-void BarWsPrintWebInfo(const BarApp_t *app, FILE *stream) { (void)app; (void)stream; }
-void BarWsConfigureWebOnlyInput(BarApp_t *app) { (void)app; }
-bool BarWsSettingsIsWebActive(const BarSettings_t *s) { (void)s; return false; }
-void BarWsPrintPidFileInfo(const BarApp_t *app, bool is_daemon, FILE *stream) {
-	(void)app; (void)is_daemon; (void)stream;
-}
-void BarWsPrintStartupInfo(const BarApp_t *app) { (void)app; }
-#endif

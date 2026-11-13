@@ -263,8 +263,6 @@ The FIFO allows external programs to control pianobar. See `contrib/remote.sh` f
 
 ## Remote API/Web UI Options
 
-These options are only available when pianobar is compiled with `WEBSOCKET_ENABLED`.
-
 | Option | Default | Description |
 |--------|---------|-------------|
 | `ui_mode` | `both` | UI mode: `cli` (CLI only), `web` (Remote API - headless daemon), or `both` (CLI+Remote API) |

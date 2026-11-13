@@ -55,13 +55,11 @@ typedef struct {
 	 * layouts used by tests; initialized in main after curl_easy_init.
 	 * See THREAD_SAFETY.md. */
 	pthread_mutex_t pianoHttpMutex;
-	/* WebSocket support (conditional compilation) */
-	#ifdef WEBSOCKET_ENABLED
+	/* WebSocket support */
 	void *wsContext;  /* BarWsContext_t */
 	pthread_t playbackThread;  /* Playback manager thread */
 	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: web/both getters/setters (not cli); see BarStateUsesRwlock */
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
-	#endif
 	BarL10nContext_t l10n;
 	/* Auto-recovery of an unexpectedly dead Pandora session (see
 	 * BarSessionTryAutoRecover): one attempt per session death, cleared once a

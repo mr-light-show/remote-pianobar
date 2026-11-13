@@ -37,5 +37,5 @@ invalidPrintfArgType_sint:src/libpiano/request.c
 shadowVariable:src/libpiano/response.c
 constVariablePointer:src/libpiano/response.c
 memleak:src/libpiano/response.c
-# NOWEBSOCKET=1 stubs are public API (websocket_bridge.h); cppcheck lint set has no callers
+# Bridge functions in websocket_bridge.h are public API; BarWsIsWebActive is only called by tests outside its TU
 staticFunction:src/websocket_bridge.c

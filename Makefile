@@ -71,18 +71,16 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/websocket_bridge.c \
 		${PIANOBAR_DIR}/system_volume.c
 
-# WebSocket support (enabled by default, use NOWEBSOCKET=1 to disable)
+# WebSocket support
 WEBSOCKET_DIR:=src/websocket
-ifneq ($(NOWEBSOCKET),1)
-	PIANOBAR_SRC+=\
-		${WEBSOCKET_DIR}/core/websocket.c \
-		${WEBSOCKET_DIR}/core/websocket_lws_log.c \
-		${WEBSOCKET_DIR}/core/queue.c \
-		${WEBSOCKET_DIR}/http/http_server.c \
-		${WEBSOCKET_DIR}/protocol/socketio.c \
-		${WEBSOCKET_DIR}/protocol/error_messages.c \
-		${WEBSOCKET_DIR}/daemon/daemon.c
-endif
+PIANOBAR_SRC+=\
+	${WEBSOCKET_DIR}/core/websocket.c \
+	${WEBSOCKET_DIR}/core/websocket_lws_log.c \
+	${WEBSOCKET_DIR}/core/queue.c \
+	${WEBSOCKET_DIR}/http/http_server.c \
+	${WEBSOCKET_DIR}/protocol/socketio.c \
+	${WEBSOCKET_DIR}/protocol/error_messages.c \
+	${WEBSOCKET_DIR}/daemon/daemon.c
 
 PIANOBAR_OBJ:=${PIANOBAR_SRC:.c=.o}
 
@@ -132,13 +130,11 @@ else ifeq (${OS},Linux)
 	BLAS_LAPACK_LDFLAGS:=-lblas -llapack
 endif
 
-# WebSocket library flags (unless disabled)
-ifneq ($(NOWEBSOCKET),1)
-	LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
-	LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
-endif
+# WebSocket library flags
+LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
+LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
 
-# Check unit-test framework (always, so NOWEBSOCKET=1 tests can run)
+# Check unit-test framework
 CHECK_CFLAGS:=$(shell $(PKG_CONFIG) --cflags check 2>/dev/null)
 CHECK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs check 2>/dev/null)
 
@@ -168,11 +164,9 @@ ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 		${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
 		${SYSVOLUME_LDFLAGS} ${BLAS_LAPACK_LDFLAGS}
 
-# Add WebSocket flags (unless disabled)
-ifneq ($(NOWEBSOCKET),1)
-	ALL_CFLAGS+=-DWEBSOCKET_ENABLED ${LIBWEBSOCKETS_CFLAGS}
-	ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
-endif
+# Add WebSocket flags
+ALL_CFLAGS+=${LIBWEBSOCKETS_CFLAGS}
+ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
 
 # Be verbose if V=1 (gnu autotools’ --disable-silent-rules)
 SILENTCMD:=@
@@ -298,7 +292,7 @@ uninstall:
 TEST_DIR:=test
 TEST_BIN:=pianobar_test
 
-# Tests that build and run in both full and NOWEBSOCKET=1 configurations
+# Base tests (no WebSocket objects required)
 BASE_TEST_SRC:=\
 		${TEST_DIR}/test_main.c \
 		${TEST_DIR}/unit/test_l10n.c \
@@ -327,29 +321,18 @@ WS_TEST_SRC:=\
 		${TEST_DIR}/integration/fixture_http.c \
 		${TEST_DIR}/integration/test_playback_integration.c
 
-ifeq ($(NOWEBSOCKET),1)
-TEST_SRC:=${BASE_TEST_SRC}
-else
 TEST_SRC:=${BASE_TEST_SRC} ${WS_TEST_SRC}
-endif
 
 TEST_OBJ:=${TEST_SRC:.c=.o}
 -include $(TEST_OBJ:.o=.d)
 
-# Objects common to both test variants (no WebSocket objects)
+# Base objects (no WebSocket objects)
 BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/station_sort.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}
 
-ifeq ($(NOWEBSOCKET),1)
-# NOWEBSOCKET=1: link only base objects (no websocket/socketio/daemon/queue/http)
-${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ}
-	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
-else
-# Full WebSocket build: link all objects including WebSocket modules
+# Link all objects including WebSocket modules
 ${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
 	${SILENTECHO} "  LINK  $@"
 	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
-endif
 
 # Run tests
 test: ${TEST_BIN}

@@ -48,7 +48,6 @@ THE SOFTWARE.
 #include "fixture_http.h"
 #include "../audio_fixture_callback.h"
 
-#ifdef WEBSOCKET_ENABLED
 
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
                   PianoSong_t *selSong, int context);
@@ -1117,10 +1116,3 @@ Suite *playback_integration_suite (void) {
 	return s;
 }
 
-#else
-
-Suite *playback_integration_suite (void) {
-	return NULL;
-}
-
-#endif

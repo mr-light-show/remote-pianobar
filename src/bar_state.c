@@ -45,7 +45,6 @@ THE SOFTWARE.
  *	See src/THREAD_SAFETY.md for complete documentation
  */
 static bool state_needs_lock (const BarApp_t *app) {
-#ifdef WEBSOCKET_ENABLED
 	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
 		return true;
 	}
@@ -53,52 +52,35 @@ static bool state_needs_lock (const BarApp_t *app) {
 		return true;
 	}
 	return false;
-#else
-	(void) app;
-	return false;
-#endif
 }
 
 void BarStateSignalPlaybackManager(BarApp_t *app)
 {
-#ifdef WEBSOCKET_ENABLED
 	if (app == NULL || !state_needs_lock(app)) {
 		return;
 	}
 	pthread_mutex_lock(&app->player.lock);
 	pthread_cond_broadcast(&app->player.cond);
 	pthread_mutex_unlock(&app->player.lock);
-#else
-	(void)app;
-#endif
 }
 
 static void state_rwlock_rdlock_internal(const BarApp_t *app, const char *operation) {
-#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_rdlock((pthread_rwlock_t *)&app->stateRwlock);
 		log_write(DEBUG_UI, "State: Lock acquired (%s) (read)\n", operation);
-		return;
 	}
-#endif
-	(void) app; (void) operation;
 }
 
 static void state_rwlock_wrlock_internal(const BarApp_t *app, const char *operation) {
-#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_wrlock((pthread_rwlock_t *)&app->stateRwlock);
 		log_write(DEBUG_UI, "State: Lock acquired (%s) (write)\n", operation);
-		return;
 	}
-#endif
-	(void) app; (void) operation;
 }
 
 __attribute__((format(printf, 3, 4)))
 static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operation,
                                          const char *format, ...) {
-#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		if (format) {
 			va_list args;
@@ -110,10 +92,7 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 		}
 		log_write(DEBUG_UI, "State: Lock released\n");
 		pthread_rwlock_unlock((pthread_rwlock_t *)&app->stateRwlock);
-		return;
 	}
-#endif
-	(void) app; (void) operation; (void) format;
 }
 
 /*	Macro for executing code with state write lock (void operations with optional debug)
@@ -146,28 +125,20 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
  */
 void BarStateInit(BarApp_t *app) {
 	assert(app != NULL);
-#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_init(&app->stateRwlock, NULL);
 		log_write(DEBUG_UI, "State: Rwlock initialized\n");
 	}
-#else
-	(void) app;
-#endif
 }
 
 /*	Destroy state rwlock (any mode with concurrent WebSocket threads)
  */
 void BarStateDestroy(BarApp_t *app) {
 	assert(app != NULL);
-#ifdef WEBSOCKET_ENABLED
 	if (state_needs_lock (app)) {
 		pthread_rwlock_destroy(&app->stateRwlock);
 		log_write(DEBUG_UI, "State: Rwlock destroyed\n");
 	}
-#else
-	(void) app;
-#endif
 }
 
 /*	Get next station (thread-safe)

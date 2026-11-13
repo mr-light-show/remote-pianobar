@@ -529,7 +529,7 @@ jobs:
           fi
           
           make WEBSOCKET=1 clean
-          make WEBSOCKET=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -mmacosx-version-min=12.0 $DEBUG_FLAGS"
+          make WEBSOCKET=1 CFLAGS="-g -O0 -mmacosx-version-min=12.0 $DEBUG_FLAGS"
           
       - name: Build Web UI
         run: |

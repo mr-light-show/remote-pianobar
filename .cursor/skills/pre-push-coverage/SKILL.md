@@ -78,7 +78,6 @@ Focus on **lines you added or changed**, not whole-file project coverage.
 |---------|----------------|
 | Early return (`NULL`, CLI vs WEB) | Separate `START_TEST` per branch |
 | Playback manager thread branches | Start/stop manager with state that selects park vs timed wait |
-| `#ifdef WEBSOCKET_ENABLED` | Tests under same guard in `test/unit/` |
 | Pandora HTTP | `BarUiPianoCallSetTestHook` mock |
 
 ## Agent push workflow

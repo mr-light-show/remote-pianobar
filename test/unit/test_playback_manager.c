@@ -37,7 +37,6 @@ THE SOFTWARE.
 #include "../../src/playback_manager.h"
 #include "../../src/websocket/core/websocket.h"
 
-#ifdef WEBSOCKET_ENABLED
 
 void BarUiActSkipSong (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
 void BarUiActPandoraDisconnect (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
@@ -989,19 +988,3 @@ Suite *playback_manager_suite(void) {
 	return s;
 }
 
-#else
-
-START_TEST(test_playback_manager_stub_no_websocket) {
-	ck_assert(1);
-}
-END_TEST
-
-Suite *playback_manager_suite(void) {
-	Suite *s = suite_create("PlaybackManager");
-	TCase *tc = tcase_create("No-op");
-	tcase_add_test(tc, test_playback_manager_stub_no_websocket);
-	suite_add_tcase(s, tc);
-	return s;
-}
-
-#endif

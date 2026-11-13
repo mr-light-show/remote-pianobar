@@ -32,7 +32,6 @@ THE SOFTWARE.
 #include "../../src/station_display.h"
 #include "../../src/log.h"
 
-#ifdef WEBSOCKET_ENABLED
 
 /* Minimal station for FindStationById tests (list has one element). */
 static PianoStation_t station_a;
@@ -876,7 +875,6 @@ START_TEST(test_bar_state_lock_taken_in_web_mode) {
 }
 END_TEST
 
-#ifdef WEBSOCKET_ENABLED
 START_TEST(test_signal_playback_manager_no_deadlock) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
@@ -902,7 +900,6 @@ START_TEST(test_signal_playback_manager_noop_null_and_cli) {
 	BarStateDestroy(&app);
 }
 END_TEST
-#endif
 
 /* --- Snapshot tests --- */
 
@@ -1138,10 +1135,8 @@ Suite *bar_state_suite(void) {
 
 	TCase *tc_web = tcase_create("WEB mode locking");
 	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
-#ifdef WEBSOCKET_ENABLED
 	tcase_add_test(tc_web, test_signal_playback_manager_no_deadlock);
 	tcase_add_test(tc_web, test_signal_playback_manager_noop_null_and_cli);
-#endif
 	suite_add_tcase(s, tc_web);
 
 	TCase *tc_snap = tcase_create("Snapshot");
@@ -1157,20 +1152,3 @@ Suite *bar_state_suite(void) {
 	return s;
 }
 
-#else
-
-/* Stub when WEBSOCKET_ENABLED is not set: bar_state uses no lock in that case. */
-START_TEST(test_bar_state_stub_no_websocket) {
-	ck_assert(1);
-}
-END_TEST
-
-Suite *bar_state_suite(void) {
-	Suite *s = suite_create("BarState");
-	TCase *tc = tcase_create("No-op");
-	tcase_add_test(tc, test_bar_state_stub_no_websocket);
-	suite_add_tcase(s, tc);
-	return s;
-}
-
-#endif

@@ -85,16 +85,14 @@ typedef struct {
 
 #include "ui_types.h"
 
-#ifdef WEBSOCKET_ENABLED
 /* UI mode selection */
 typedef enum {
 	BAR_UI_MODE_BOTH = 0,  /* CLI + Web (default) */
 	BAR_UI_MODE_CLI = 1,   /* CLI only, no WebSocket */
 	BAR_UI_MODE_WEB = 2,   /* Web only (daemon), no CLI */
 } BarUiMode_t;
-#endif
 
-/* Volume control mode - defined outside WEBSOCKET_ENABLED since it's independent */
+/* Volume control mode */
 #include "system_volume.h"
 
 /* Audio backend selection */
@@ -166,15 +164,13 @@ typedef struct {
 	size_t accountCount;
 	size_t activeAccountIndex;
 
-	/* WebSocket support (conditional compilation) */
-	#ifdef WEBSOCKET_ENABLED
+	/* WebSocket support */
 	BarUiMode_t uiMode;
 	int websocketPort;
 	char *websocketHost;
 	char *webuiPath;
 	char *pidFile;
 	char *logFile;
-	#endif
 	
 	/* ALSA mixer control name (e.g., "Digital", "Master") */
 	char *alsaMixer;
