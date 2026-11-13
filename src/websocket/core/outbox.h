@@ -76,8 +76,8 @@ BarWsQResult_t BarWsClientQueueAppend (BarWsClientQueue_t *q, BarWsFrame_t *f,
 BarWsFrame_t *BarWsClientQueuePop (BarWsClientQueue_t *q, uint32_t currentGeneration);
 
 /* Producer-facing ingress. Producer threads Push; the service thread Takes
- * everything pushed so far. One mutex guards the queue and the song
- * generation counter. */
+ * everything pushed so far. One mutex guards the queue, the song
+ * generation counter, the play-state watermark and the overflow flag. */
 typedef struct BarWsOutbox BarWsOutbox_t;
 
 /* One taken message. The list and its frame references are owned by the
@@ -86,7 +86,8 @@ typedef struct BarWsOutbox BarWsOutbox_t;
 typedef struct BarWsPending {
 	BarWsConnId_t dest;
 	BarWsKey_t key;
-	uint32_t generation; /* song generation at push time (progress only) */
+	uint32_t generation; /* song generation at push time (for progress, the
+	                      * generation its producer observed) */
 	BarWsFrame_t *frame;
 	struct BarWsPending *next;
 } BarWsPending_t;
@@ -94,17 +95,42 @@ typedef struct BarWsPending {
 BarWsOutbox_t *BarWsOutboxNew (void);
 /* Frees anything still pending */
 void BarWsOutboxFree (BarWsOutbox_t *o);
-/* Takes ownership of text (heap, freed here on every path). Copies it into a
- * frame. False if the ingress limits are reached, len exceeds
- * WS_FRAME_MAX_BYTES, or memory is short. The full path allocates nothing. */
+
+/* Every push takes ownership of text (heap, freed here on every path) and
+ * copies it into a frame. A push returns false, and raises the overflow flag
+ * (see BarWsOutboxTakeOverflow), when the ingress limits are reached, len
+ * exceeds WS_FRAME_MAX_BYTES, or memory is short. NULL arguments return false
+ * without raising it. */
+
+/* Queue an event for dest (a connection ID or BAR_WS_DEST_BROADCAST). Keyed
+ * entries are tagged with the generation current at push time. The full path
+ * allocates nothing. */
 bool BarWsOutboxPush (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key,
 		char *text, size_t len);
+/* Admit a song start atomically with its broadcast frame: in one critical
+ * section increment the generation, discard unsent PROGRESS still in ingress
+ * and queue text as an ordered broadcast. Progress for the new song can then
+ * never be ordered ahead of its start. The generation advances even when the
+ * frame is rejected. */
+bool BarWsOutboxPushSongStart (BarWsOutbox_t *o, char *text, size_t len);
+/* Queue a progress broadcast sampled while the generation was observed
+ * (BarWsOutboxGeneration, read before sampling). It keeps that tag, so a
+ * sample of the previous song is dropped at dequeue even if it is pushed
+ * after the next start. */
+bool BarWsOutboxPushProgress (BarWsOutbox_t *o, uint32_t observedGeneration,
+		char *text, size_t len);
+/* Queue a completed play-state broadcast. Rejected (false, text freed, no
+ * overflow) when epoch is older than the newest accepted epoch; the
+ * watermark lives under the ingress lock and survives Take. */
+bool BarWsOutboxPushPlayState (BarWsOutbox_t *o, uint64_t epoch, char *text,
+		size_t len);
+
 /* Service thread: detach everything pushed so far, in push order. NULL if
  * empty. Release with BarWsPendingFree. */
 BarWsPending_t *BarWsOutboxTake (BarWsOutbox_t *o);
 /* Release a taken list: unref each frame and free the nodes */
 void BarWsPendingFree (BarWsPending_t *list);
-/* Admit a song start: increments the generation and discards unsent keyed
- * PROGRESS entries still in ingress. Returns the new generation. */
-uint32_t BarWsOutboxSongStarted (BarWsOutbox_t *o);
+/* Service thread: true if a push was rejected since the last call (an event
+ * was lost, so clients must resync). Clears the flag. */
+bool BarWsOutboxTakeOverflow (BarWsOutbox_t *o);
 uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o);
