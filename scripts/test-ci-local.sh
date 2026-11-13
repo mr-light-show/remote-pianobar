@@ -17,7 +17,7 @@ docker run --rm \
 		set -euo pipefail
 		export DEBIAN_FRONTEND=noninteractive
 		apt-get update -qq
-		apt-get install -y -qq make gcc pkg-config check lcov \
+		apt-get install -y -qq make gcc pkg-config check lcov python3 python3-yaml \
 			libao-dev libavcodec-dev libavformat-dev libavutil-dev \
 			libavfilter-dev libjson-c-dev libgcrypt20-dev \
 			libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
