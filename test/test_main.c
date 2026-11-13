@@ -42,7 +42,7 @@ void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
 	(void)playerThread;
 }
 
-/* Test suite declarations — base (run in all configurations) */
+/* Test suite declarations */
 Suite *settings_suite(void);
 Suite *player_suite(void);
 Suite *bar_state_suite(void);
@@ -57,7 +57,6 @@ Suite *station_sort_suite(void);
 Suite *interrupt_suite(void);
 Suite *libpiano_response_suite(void);
 
-/* Test suite declarations — WebSocket-only */
 Suite *websocket_suite(void);
 Suite *http_server_suite(void);
 Suite *daemon_suite(void);
@@ -73,7 +72,6 @@ int main(void) {
 
 	TestTmpRootInit ();
 
-	/* Start with WebSocket suite; add remaining WebSocket suites */
 	sr = srunner_create(websocket_suite());
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
@@ -83,7 +81,6 @@ int main(void) {
 	srunner_add_suite(sr, ui_act_station_suite());
 	srunner_add_suite(sr, playback_integration_suite());
 
-	/* Base suites always run */
 	srunner_add_suite(sr, settings_suite());
 	srunner_add_suite(sr, player_suite());
 	srunner_add_suite(sr, bar_state_suite());

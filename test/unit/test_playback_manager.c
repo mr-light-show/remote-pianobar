@@ -37,7 +37,6 @@ THE SOFTWARE.
 #include "../../src/playback_manager.h"
 #include "../../src/websocket/core/websocket.h"
 
-
 void BarUiActSkipSong (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
 void BarUiActPandoraDisconnect (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
 
