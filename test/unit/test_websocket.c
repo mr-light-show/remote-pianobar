@@ -40,6 +40,9 @@ THE SOFTWARE.
 #include <json-c/json.h>
 #include <libwebsockets.h>
 #include <pthread.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 /* Wire-compat capture buffer */
 static char g_compatBuf[8192];
@@ -875,6 +878,22 @@ static int test_thread_write_frame (void *wsi, unsigned char *buf, size_t len) {
 	return (int) len;
 }
 
+/* A loopback port that was free a moment ago (the kernel picks it) */
+static int test_free_loopback_port (void) {
+	int fd = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (fd, 0);
+	struct sockaddr_in addr;
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	socklen_t len = sizeof (addr);
+	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
+	close (fd);
+	return ntohs (addr.sin_port);
+}
+
 START_TEST (test_websocket_service_thread_drains_bucket_to_clients)
 {
 	BarApp_t app;
@@ -884,11 +903,8 @@ START_TEST (test_websocket_service_thread_drains_bucket_to_clients)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = 18084;
-	if (!BarWebsocketInit (&app)) {
-		BarSettingsDestroy (&app.settings);
-		return; /* port unavailable on this host */
-	}
+	app.settings.websocketPort = test_free_loopback_port ();
+	ck_assert (BarWebsocketInit (&app));
 	BarWsContext_t *ctx = app.wsContext;
 	g_threadWriteCount = 0;
 	ctx->writeFrame = test_thread_write_frame;
