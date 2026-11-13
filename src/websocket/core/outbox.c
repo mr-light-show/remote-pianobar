@@ -22,6 +22,7 @@ THE SOFTWARE.
 
 #include "outbox.h"
 #include "../../bar_constants.h"
+#include "../../log.h"
 
 #include <libwebsockets.h>
 #include <pthread.h>
@@ -228,6 +229,18 @@ static bool BarWsOutboxHasRoom (const BarWsOutbox_t *o, size_t len) {
 	return o->count < WS_INGRESS_MAX_MSGS && o->bytes + len <= WS_INGRESS_MAX_BYTES;
 }
 
+/* An oversize frame can never be delivered, and reconnecting clients would
+ * not change that, so it is rejected on its own: logged with its size and
+ * event prefix, without raising the overflow flag that closes clients. */
+static bool BarWsFrameTooLarge (const char *text, size_t len) {
+	if (len <= WS_FRAME_MAX_BYTES) {
+		return false;
+	}
+	log_write (LOG_ERROR, "Dropping %zu-byte WebSocket frame (limit %d bytes): %.40s\n",
+	           len, WS_FRAME_MAX_BYTES, text);
+	return true;
+}
+
 /* Copy text into a new pending node and free text. NULL if the frame is too
  * large or memory is short. */
 static BarWsPending_t *BarWsPendingNew (BarWsConnId_t dest, BarWsKey_t key,
@@ -310,7 +323,7 @@ static void BarWsOutboxMarkOverflow (BarWsOutbox_t *o) {
  * producer. */
 static bool BarWsOutboxPushTagged (BarWsOutbox_t *o, BarWsConnId_t dest,
 		BarWsKey_t key, char *text, size_t len, const uint32_t *observed) {
-	if (!o || !text) {
+	if (!o || !text || BarWsFrameTooLarge (text, len)) {
 		free (text);
 		return false;
 	}
@@ -360,8 +373,13 @@ bool BarWsOutboxPushSongStart (BarWsOutbox_t *o, char *text, size_t len) {
 		free (text);
 		return false;
 	}
-	BarWsPending_t *p = BarWsPendingNew (BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
-			text, len);
+	bool tooLarge = BarWsFrameTooLarge (text, len);
+	BarWsPending_t *p = NULL;
+	if (tooLarge) {
+		free (text);
+	} else {
+		p = BarWsPendingNew (BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, text, len);
+	}
 
 	pthread_mutex_lock (&o->lock);
 	uint32_t gen = ++o->generation;
@@ -370,7 +388,7 @@ bool BarWsOutboxPushSongStart (BarWsOutbox_t *o, char *text, size_t len) {
 	if (p) {
 		p->generation = gen;
 		queued = BarWsOutboxAppendLocked (o, p);
-	} else {
+	} else if (!tooLarge) {
 		o->overflowed = true;
 	}
 	pthread_mutex_unlock (&o->lock);
@@ -384,7 +402,7 @@ bool BarWsOutboxPushSongStart (BarWsOutbox_t *o, char *text, size_t len) {
 
 bool BarWsOutboxPushPlayState (BarWsOutbox_t *o, uint64_t epoch, char *text,
 		size_t len) {
-	if (!o || !text) {
+	if (!o || !text || BarWsFrameTooLarge (text, len)) {
 		free (text);
 		return false;
 	}
