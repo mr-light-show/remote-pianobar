@@ -365,11 +365,14 @@ test-ci-local:
 # Run static analysis (requires cppcheck)
 # Suppressions: .cppcheck-suppress (miniaudio.h and project-specific false positives)
 # PIANOBAR_LINT_C omits miniaudio_impl.c (vendored wrapper, noisy configs)
+# CPPCHECK_LENIENT=1: cppcheck < 2.18 (Ubuntu 24.04 apt) reports many existing suppressions as
+# unmatched; the default stays strict so stale suppressions are caught on current cppcheck.
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
 	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
 		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkersReport \
 		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
+		$(if $(CPPCHECK_LENIENT),--suppress=unmatchedSuppression) \
 		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_LINT_C} ${PIANOBAR_LINT_WS} ${LIBPIANO_DIR}/*.c
 
 # Run linter on test files

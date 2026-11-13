@@ -262,6 +262,10 @@ make test
 ./pianobar_test --verbose
 ```
 
+#### Static analysis
+
+`make lint` runs cppcheck and is strict: a suppression that matches nothing fails the run, so stale ones are caught on current cppcheck. cppcheck older than 2.18 (for example Ubuntu 24.04's apt package) reports many existing suppressions as unmatched; run `make lint CPPCHECK_LENIENT=1` there.
+
 ### TypeScript/JavaScript Unit Tests
 
 The web UI uses Vitest for unit testing.
