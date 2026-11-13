@@ -149,6 +149,21 @@ typedef struct {
 	bool         hasStation;
 } BarPlaybackSnapshot_t;
 
+typedef struct {
+	char        *title;
+	char        *artist;
+	char        *album;
+	char        *coverArt;
+	char        *stationName; /* display name of song->stationId; NULL if unknown */
+	unsigned int duration;
+	int          rating;
+} BarSongSnapshot_t;
+
+typedef struct {
+	BarSongSnapshot_t *items;
+	size_t             count;
+} BarSongSnapshotList_t;
+
 /* Copy all station fields under read lock; caller frees with BarStateFreeStationSnapshot. */
 bool BarStateSnapshotStations (const BarApp_t *app, BarStationSnapshotList_t *out);
 void BarStateFreeStationSnapshot (BarStationSnapshotList_t *snap);
@@ -156,6 +171,13 @@ void BarStateFreeStationSnapshot (BarStationSnapshotList_t *snap);
 /* Copy current playback fields (station + song) under lock; caller frees with BarStateFreePlaybackSnapshot. */
 void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out);
 void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap);
+
+/* Copy up to maxSongs queued songs after the playing one under read lock.
+ * Returns false only on bad arguments or allocation failure; an empty queue
+ * is a valid success. Caller frees with BarStateFreeSongSnapshot. */
+bool BarStateSnapshotUpcoming (const BarApp_t *app, size_t maxSongs,
+                               BarSongSnapshotList_t *out);
+void BarStateFreeSongSnapshot (BarSongSnapshotList_t *snap);
 
 /* Initialize/destroy state mutex */
 void BarStateInit(BarApp_t *app);

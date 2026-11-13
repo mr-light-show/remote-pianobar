@@ -45,8 +45,7 @@ void BarUiActExplain (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 		PianoSong_t *selSong, BarWsConnId_t requester);
-void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
-		PianoSong_t *selSong, BarWsConnId_t requester);
+void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester);
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActPause (BarApp_t *app, PianoStation_t *selStation,
@@ -1605,7 +1604,8 @@ START_TEST (test_ui_act_print_upcoming_lists_and_broadcasts)
 	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
-	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	app.playlist = &cur;
+	BarUiActPrintUpcomingTo (&app, test_ws_cap.ids[0]);
 
 	ck_assert_ptr_nonnull (last_broadcast ());
 	ck_assert (strstr (last_broadcast (), "query.upcoming.result") != NULL);
@@ -2057,7 +2057,8 @@ START_TEST (test_ui_act_print_upcoming_websocket_empty_emits_error)
 
 	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
-	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	app.playlist = &cur;
+	BarUiActPrintUpcomingTo (&app, test_ws_cap.ids[0]);
 	TestWsCaptureFlush ();
 	TestWsCaptureDetach (&app);
 
@@ -2128,8 +2129,9 @@ START_TEST (test_query_upcoming_reaches_only_requester)
 	next.title = "Next Song";
 	next.stationId = station.id;
 	TestWsCaptureAttach (&app, 2, NULL);
+	app.playlist = &cur;
 
-	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	BarUiActPrintUpcomingTo (&app, test_ws_cap.ids[0]);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming.result"), 1);
@@ -2138,7 +2140,7 @@ START_TEST (test_query_upcoming_reaches_only_requester)
 	/* Empty queue: the error goes to the requester only */
 	TestWsCaptureClear ();
 	cur.head.next = NULL;
-	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[1]);
+	BarUiActPrintUpcomingTo (&app, test_ws_cap.ids[1]);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "query.upcoming"), 1);

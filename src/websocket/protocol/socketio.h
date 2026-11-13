@@ -99,8 +99,9 @@ void BarSocketIoEmitPandoraDisconnected (BarApp_t *app, const char *reason);
 /* Emit 'playState' event (paused/resumed state) */
 void BarSocketIoEmitPlayState(BarApp_t *app);
 
-/* Emit 'query.upcoming.result' event (upcoming songs list) to `dest` */
-void BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, struct PianoSong *first, int max);
+/* Emit 'query.upcoming.result' event (up to `max` queued songs, copied under
+ * the state lock) to `dest`; false when nothing is queued */
+bool BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, int max);
 
 /* Handle 'action' event from client `requester` */
 void BarSocketIoHandleAction (BarApp_t *app, const char *action, struct json_object *data,

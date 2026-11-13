@@ -1079,6 +1079,97 @@ START_TEST (test_bar_state_snapshot_playback_uses_station_name_when_no_display_n
 }
 END_TEST
 
+START_TEST (test_bar_state_snapshot_upcoming_copies_songs_after_head)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t cur, next, last;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&cur, 0, sizeof (cur));
+	memset (&next, 0, sizeof (next));
+	memset (&last, 0, sizeof (last));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit (&app);
+
+	station.id = "sid";
+	station.name = "Plain";
+	station.displayName = "Shown";
+	app.ph.stations = &station;
+	cur.title = "Playing";
+	cur.head.next = &next.head;
+	next.title = "Next";
+	next.artist = "Artist";
+	next.album = "Album";
+	next.coverArt = "http://art";
+	next.stationId = "sid";
+	next.length = 200;
+	next.rating = PIANO_RATE_LOVE;
+	next.head.next = &last.head;
+	last.title = "Last";
+	last.stationId = "gone";
+	app.playlist = &cur;
+
+	BarSongSnapshotList_t snap;
+	ck_assert (BarStateSnapshotUpcoming (&app, 5, &snap));
+	ck_assert_uint_eq (snap.count, 2);
+	ck_assert_str_eq (snap.items[0].title, "Next");
+	ck_assert_str_eq (snap.items[0].artist, "Artist");
+	ck_assert_str_eq (snap.items[0].album, "Album");
+	ck_assert_str_eq (snap.items[0].coverArt, "http://art");
+	ck_assert_str_eq (snap.items[0].stationName, "Shown");
+	ck_assert_uint_eq (snap.items[0].duration, 200);
+	ck_assert_int_eq (snap.items[0].rating, PIANO_RATE_LOVE);
+	ck_assert_str_eq (snap.items[1].title, "Last");
+	ck_assert_ptr_null (snap.items[1].artist);
+	ck_assert_ptr_null (snap.items[1].stationName);
+	BarStateFreeSongSnapshot (&snap);
+	ck_assert_ptr_null (snap.items);
+	ck_assert_uint_eq (snap.count, 0);
+
+	/* The limit is honoured */
+	ck_assert (BarStateSnapshotUpcoming (&app, 1, &snap));
+	ck_assert_uint_eq (snap.count, 1);
+	ck_assert_str_eq (snap.items[0].title, "Next");
+	BarStateFreeSongSnapshot (&snap);
+
+	/* Station name falls back to the raw name */
+	station.displayName = NULL;
+	ck_assert (BarStateSnapshotUpcoming (&app, 1, &snap));
+	ck_assert_str_eq (snap.items[0].stationName, "Plain");
+	BarStateFreeSongSnapshot (&snap);
+
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_snapshot_upcoming_empty_queue)
+{
+	BarApp_t app;
+	PianoSong_t cur;
+	memset (&app, 0, sizeof (app));
+	memset (&cur, 0, sizeof (cur));
+	BarStateInit (&app);
+
+	BarSongSnapshotList_t snap;
+	ck_assert (BarStateSnapshotUpcoming (&app, 5, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert_ptr_null (snap.items);
+
+	cur.title = "Only";
+	app.playlist = &cur;
+	ck_assert (BarStateSnapshotUpcoming (&app, 5, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert (BarStateSnapshotUpcoming (&app, 0, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert (!BarStateSnapshotUpcoming (NULL, 5, &snap));
+	ck_assert (!BarStateSnapshotUpcoming (&app, 5, NULL));
+	BarStateFreeSongSnapshot (NULL);
+
+	BarStateDestroy (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -1146,6 +1237,8 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_unknown_song_station_id);
 	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_uses_display_name);
 	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_uses_station_name_when_no_display_name);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_upcoming_copies_songs_after_head);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_upcoming_empty_queue);
 	suite_add_tcase(s, tc_snap);
 
 	return s;

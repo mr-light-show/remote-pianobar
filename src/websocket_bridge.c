@@ -71,9 +71,8 @@ void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
 	BarSocketIoEmitExplanationTo(app, requester, explanation);
 }
 
-void BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester,
-                         PianoSong_t *songs, int count) {
-	BarSocketIoEmitUpcomingTo(app, requester, songs, count);
+bool BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester, int count) {
+	return BarSocketIoEmitUpcomingTo(app, requester, count);
 }
 
 void BarWsBroadcastSongStart(BarApp_t *app) {

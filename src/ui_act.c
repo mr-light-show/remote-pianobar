@@ -620,15 +620,11 @@ BarUiActCallback(BarUiActPrintUpcoming) {
 	}
 }
 
-/*	send upcoming songs to the requesting web client only
+/*	send upcoming songs to the requesting web client only; the queue is read
+ *	from state under its lock rather than through a borrowed song pointer
  */
-void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
-		PianoSong_t *selSong, BarWsConnId_t requester) {
-	PianoSong_t * const nextSong = PianoListNextP (selSong);
-
-	if (nextSong != NULL) {
-		BarWsEmitUpcomingTo(app, requester, nextSong, 5);
-	} else {
+void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester) {
+	if (!BarWsEmitUpcomingTo(app, requester, 5)) {
 		BarWsEmitErrorTo(app, requester, "query.upcoming", "No songs in queue");
 	}
 }

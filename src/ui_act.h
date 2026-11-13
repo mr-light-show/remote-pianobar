@@ -69,13 +69,13 @@ BarUiActCallback(BarUiActPandoraReconnect);
 
 /* Web-request variants of query actions: the reply goes to the client
  * `requester` only. The terminal callbacks above (BarUiActExplain,
- * BarUiActPrintUpcoming) print instead and never send a web reply. Station
- * and song mirror the callback arguments and are used the same way (the
- * station only feeds the explain eventcmd). */
+ * BarUiActPrintUpcoming) print instead and never send a web reply. For
+ * explain, station and song mirror the callback arguments and are used the
+ * same way (the station only feeds the explain eventcmd). Upcoming reads the
+ * queue from state under its lock. */
 void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 		PianoSong_t *selSong, BarWsConnId_t requester);
-void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
-		PianoSong_t *selSong, BarWsConnId_t requester);
+void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester);
 
 /* Switch to a station programmatically (for WebSocket use) */
 void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station);

@@ -1159,9 +1159,13 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 	test_setup_web_app (&app, &ctx);
 	memset (&song, 0, sizeof (song));
 	song.title = "Up Next";
+	PianoSong_t playing;
+	memset (&playing, 0, sizeof (playing));
+	playing.head.next = &song.head;
+	app.playlist = &playing;
 
 	BarWsConnId_t requester = compatAttach (&app);
-	BarWsEmitUpcomingTo (&app, requester, &song, 1);
+	ck_assert (BarWsEmitUpcomingTo (&app, requester, 1));
 	TestWsCaptureFlush ();
 	ck_assert (strstr (g_compatBuf, "Up Next") != NULL);
 
@@ -1821,9 +1825,13 @@ START_TEST(test_websocket_bridge_upcoming_skips_unknown_requester) {
 	test_setup_web_app (&app, &ctx);
 	memset (&song, 0, sizeof (song));
 	song.title = "Hidden Upcoming";
+	PianoSong_t playing;
+	memset (&playing, 0, sizeof (playing));
+	playing.head.next = &song.head;
+	app.playlist = &playing;
 
 	BarWsConnId_t requester = compatAttach (&app);
-	BarWsEmitUpcomingTo (&app, requester + 1, &song, 1);
+	ck_assert (BarWsEmitUpcomingTo (&app, requester + 1, 1));
 	TestWsCaptureFlush ();
 	ck_assert_str_eq (g_compatBuf, "");
 

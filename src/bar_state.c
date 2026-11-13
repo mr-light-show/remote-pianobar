@@ -609,6 +609,80 @@ void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out) 
 	state_rwlock_unlock_internal (app, "SnapshotPlayback", NULL);
 }
 
+/*	Display name of the station with this id; caller holds stateRwlock.
+ */
+static const char *state_station_display_name_locked (const BarApp_t *app,
+                                                      const char *stationId) {
+	if (stationId == NULL) { return NULL; }
+	const PianoStation_t *station = app->ph.stations;
+	PianoListForeachP (station) {
+		if (station->id != NULL && strcmp (station->id, stationId) == 0) {
+			return station->displayName ? station->displayName : station->name;
+		}
+	}
+	return NULL;
+}
+
+/*	Snapshot the queue after the playing song under read lock, so a concurrent
+ *	tail truncation or drain cannot free a song while it is being copied.
+ */
+bool BarStateSnapshotUpcoming (const BarApp_t *app, size_t maxSongs,
+                               BarSongSnapshotList_t *out) {
+	if (app == NULL || out == NULL) { return false; }
+	out->items = NULL;
+	out->count = 0;
+
+	state_rwlock_rdlock_internal (app, "SnapshotUpcoming");
+
+	size_t count = 0;
+	const PianoSong_t *song = NULL;
+	if (app->playlist != NULL) {
+		song = PianoListNextP (app->playlist);
+	}
+	for (const PianoSong_t *s = song; s != NULL && count < maxSongs;
+			s = PianoListNextP (s)) {
+		count++;
+	}
+
+	if (count > 0) {
+		out->items = calloc (count, sizeof (*out->items));
+		if (out->items == NULL) {
+			state_rwlock_unlock_internal (app, "SnapshotUpcoming", NULL);
+			return false;
+		}
+	}
+	out->count = count;
+
+	for (size_t i = 0; i < count; i++, song = PianoListNextP (song)) {
+		BarSongSnapshot_t *item = &out->items[i];
+		item->title    = song->title    ? strdup (song->title)    : NULL;
+		item->artist   = song->artist   ? strdup (song->artist)   : NULL;
+		item->album    = song->album    ? strdup (song->album)    : NULL;
+		item->coverArt = song->coverArt ? strdup (song->coverArt) : NULL;
+		const char *name = state_station_display_name_locked (app, song->stationId);
+		item->stationName = name ? strdup (name) : NULL;
+		item->duration = song->length;
+		item->rating   = song->rating;
+	}
+
+	state_rwlock_unlock_internal (app, "SnapshotUpcoming", NULL);
+	return true;
+}
+
+void BarStateFreeSongSnapshot (BarSongSnapshotList_t *snap) {
+	if (snap == NULL) { return; }
+	for (size_t i = 0; i < snap->count; i++) {
+		free (snap->items[i].title);
+		free (snap->items[i].artist);
+		free (snap->items[i].album);
+		free (snap->items[i].coverArt);
+		free (snap->items[i].stationName);
+	}
+	free (snap->items);
+	snap->items = NULL;
+	snap->count = 0;
+}
+
 void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap) {
 	if (snap == NULL) { return; }
 	free (snap->stationId);
