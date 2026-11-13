@@ -268,6 +268,108 @@ START_TEST (test_websocket_bridge_progress_skips_duplicate_elapsed)
 }
 END_TEST
 
+/* Connection-table fixture: tracks fake clients without real sockets. */
+#define TEST_MAX_CLIENTS 4
+
+static void test_setup_clients (BarApp_t *app, BarWsContext_t *ctx) {
+	test_setup_web_app (app, ctx);
+	ctx->maxConnections = TEST_MAX_CLIENTS;
+	ctx->connections = calloc (TEST_MAX_CLIENTS, sizeof (BarWsConnection_t));
+	ck_assert_ptr_nonnull (ctx->connections);
+	pthread_mutex_init (&ctx->connMutex, NULL);
+}
+
+static void test_teardown_clients (BarApp_t *app, BarWsContext_t *ctx) {
+	pthread_mutex_destroy (&ctx->connMutex);
+	free (ctx->connections);
+	test_teardown_web_app (app, ctx);
+}
+
+static char test_fake_sockets[TEST_MAX_CLIENTS];
+
+START_TEST (test_send_broadcast_reaches_all_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio"), 0);
+
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_VOLUME,
+			strdup ("2[\"volume\",40]")));
+	ck_assert_str_eq (test_bucket_payload (&ctx, BUCKET_VOLUME), "2[\"volume\",40]");
+	ck_assert_uint_eq (ctx.buckets[BUCKET_VOLUME].message->dest, BAR_WS_DEST_BROADCAST);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_to_id_reaches_only_that_client)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	BarWsConnId_t b = BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+	ck_assert_uint_ne (a, 0);
+	ck_assert_uint_ne (b, 0);
+	ck_assert_uint_ne (a, b);
+
+	ck_assert (BarWebsocketSend (&app, b, BUCKET_STATIONS, strdup ("2[\"stations\"]")));
+	ck_assert_str_eq (test_bucket_payload (&ctx, BUCKET_STATIONS), "2[\"stations\"]");
+	/* The queued message is addressed to B alone, never to A or everyone. */
+	ck_assert_uint_eq (ctx.buckets[BUCKET_STATIONS].message->dest, b);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_to_reused_slot_does_not_reach_new_client)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	ck_assert_uint_eq (a, 1);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[0]);
+	/* Client B reuses slot 0 */
+	BarWsConnId_t b = BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+	ck_assert_uint_eq (b, 2);
+	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[1]);
+
+	ck_assert (!BarWebsocketSend (&app, a, BUCKET_STATE, strdup ("2[\"reply\"]")));
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		ck_assert_ptr_null (ctx.buckets[i].message);
+	}
+	/* B itself is still addressable */
+	ck_assert (BarWebsocketSend (&app, b, BUCKET_STATE, strdup ("2[\"reply\"]")));
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_unknown_id_frees_message_and_returns_false)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+
+	/* Run under ASan/valgrind to catch a leak; NULL args must not crash. */
+	ck_assert (!BarWebsocketSend (&app, 999, BUCKET_STATE, strdup ("x")));
+	ck_assert (!BarWebsocketSend (NULL, BAR_WS_DEST_BROADCAST, BUCKET_STATE, strdup ("x")));
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATE, NULL));
+	app.wsContext = NULL;
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATE, strdup ("x")));
+	app.wsContext = &ctx;
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		ck_assert_ptr_null (ctx.buckets[i].message);
+	}
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
 START_TEST (test_websocket_bridge_disconnect_all_clients_with_context)
 {
 	BarApp_t app;
@@ -921,6 +1023,10 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
 	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
 	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
+	tcase_add_test (tc_core, test_send_broadcast_reaches_all_clients);
+	tcase_add_test (tc_core, test_send_to_id_reaches_only_that_client);
+	tcase_add_test (tc_core, test_send_to_reused_slot_does_not_reach_new_client);
+	tcase_add_test (tc_core, test_send_unknown_id_frees_message_and_returns_false);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
