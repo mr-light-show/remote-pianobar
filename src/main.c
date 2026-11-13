@@ -76,11 +76,9 @@ THE SOFTWARE.
 #include "playback_manager.h"
 #include "system_volume.h"
 
-#ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"
 #include "websocket/daemon/daemon.h"
-#endif
 #include "websocket_bridge.h"
 #include "ui_readline.h"
 
@@ -499,49 +497,13 @@ static void BarMainLoop (BarApp_t *app) {
 			promptedForStation = true;
 		}
 
-		#ifndef WEBSOCKET_ENABLED
-		/* Original playback state machine for non-WebSocket builds */
-		/* song finished playing, clean up things/scrobble song */
-		if (BarPlayerGetMode (player) == PLAYER_FINISHED) {
-			if (atomic_load_explicit (&player->interrupted, memory_order_relaxed) != 0) {
-				atomic_store_explicit (&app->doQuit, 1, memory_order_relaxed);
-			}
-			BarMainPlayerCleanup (app, &playerThread);
-		}
-
-		/* check whether player finished playing and start playing new
-		 * song */
-		if (BarPlayerGetMode (player) == PLAYER_DEAD) {
-			/* what's next? */
-			PianoSong_t *finished = BarStateAdvancePlaylist(app);
-			if (finished != NULL) {
-				BarUiHistoryPrepend (app, finished);
-			}
-			PianoSong_t *playlist = BarStateGetPlaylist(app);
-			PianoStation_t *nextStation = BarStateGetNextStation(app);
-			if (playlist == NULL && nextStation != NULL &&
-					!atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
-				PianoStation_t *curStation = BarStateGetCurrentStation(app);
-				if (nextStation != curStation) {
-					BarUiPrintStation (&app->settings, nextStation);
-				}
-				BarPlaybackFetchPlaylist (app);
-			}
-			/* song ready to play */
-			playlist = BarStateGetPlaylist(app);
-			if (playlist != NULL) {
-				BarPlaybackStartSong (app, &playerThread);
-			}
-		}
-		#else
-		/* WebSocket enabled: playback manager handles state machine */
+		/* Playback manager handles the state machine */
 		/* Web-only mode: just sleep, no CLI needed */
 		if (app->settings.uiMode == BAR_UI_MODE_WEB) {
 			sleep(BAR_WEBONLY_IDLE_LOOP_S);
 			continue;
 		}
 		/* In BOTH mode: CLI just handles input, playback manager runs independently */
-		#endif
 
 		if (!BarShouldSkipCliOutput(app)) {
 			BarMainHandleUserInput (app);
@@ -559,13 +521,6 @@ static void BarMainLoop (BarApp_t *app) {
 }
 
 	BarWsStopPlaybackManager(app);
-
-	#ifndef WEBSOCKET_ENABLED
-	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
-		BarPlayerRequestStop (player);
-		BarMainPlayerCleanup (app, &playerThread);
-	}
-	#endif
 }
 
 /* A returning test fatal hook cannot authorize shared-state destruction.
@@ -830,7 +785,6 @@ int main (int argc, char **argv) {
 	/* Daemonize if running in web-only mode - BEFORE player init
 	 * On macOS with --launched-as-daemon flag, we've already been relaunched via exec,
 	 * so we just need to perform daemonization steps without forking again. */
-#ifdef WEBSOCKET_ENABLED
 	if (BarIsWebOnlyMode (&app)) {
 #ifdef __APPLE__
 		if (launched_as_daemon) {
@@ -863,7 +817,6 @@ int main (int argc, char **argv) {
 		}
 #endif
 	}
-#endif
 
 
 	/* Initialize player AFTER daemonization */

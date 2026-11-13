@@ -40,7 +40,7 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/settings.h"
 #include "../audio_fixture_callback.h"
-/* Exercise the real CLI cleanup in both WebSocket and NOWEBSOCKET builds. */
+/* Exercise the real CLI cleanup. */
 #define main BarTestMainProgram
 #include "../../src/main.c"
 #undef main
@@ -364,10 +364,8 @@ static int gate_audio_wait_boundary (pthread_cond_t *cond, pthread_mutex_t *mute
 	 * Check both other application locks separately, never nested. */
 	ck_assert_int_eq (pthread_mutex_trylock (&boundary->player->decoderLock), 0);
 	ck_assert_int_eq (pthread_mutex_unlock (&boundary->player->decoderLock), 0);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (pthread_rwlock_trywrlock (&boundary->app->stateRwlock), 0);
 	ck_assert_int_eq (pthread_rwlock_unlock (&boundary->app->stateRwlock), 0);
-#endif
 	ck_assert_int_eq (pthread_mutex_lock (mutex), 0);
 	return result;
 }
@@ -448,9 +446,7 @@ START_TEST (test_player_owner_release_at_command_deadline_never_steals_audio)
 	player_t *player = &app.player;
 	ma_audio_buffer buffer;
 	player_thread_test_setup (player, &app.settings);
-#ifdef WEBSOCKET_ENABLED
 	app.settings.uiMode = BAR_UI_MODE_BOTH;
-#endif
 	BarStateInit (&app);
 	player_stopped_sound_fixture (player, &buffer);
 	ck_assert (BarPlayerSetVolume (player, 50));
@@ -1087,9 +1083,7 @@ static void player_thread_test_setup (player_t *player, BarSettings_t *settings)
 	memset (player, 0, sizeof (*player));
 	memset (settings, 0, sizeof (*settings));
 	BarSettingsInit (settings);
-#ifdef WEBSOCKET_ENABLED
 	settings->uiMode = BAR_UI_MODE_CLI;
-#endif
 	settings->timeout = 2;
 	BarPlayerInit (player, settings);
 }

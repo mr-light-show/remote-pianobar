@@ -29,12 +29,7 @@ THE SOFTWARE.
 
 /* True when playlist/station pointers are shared across threads (web and both; not cli). */
 static inline bool BarStateUsesRwlock(const BarApp_t *app) {
-#ifdef WEBSOCKET_ENABLED
 	return app != NULL && app->settings.uiMode != BAR_UI_MODE_CLI;
-#else
-	(void)app;
-	return false;
-#endif
 }
 
 /* Debug assertions for lock state (enabled with -DDEBUG) */
@@ -44,7 +39,6 @@ static inline bool BarStateUsesRwlock(const BarApp_t *app) {
 
 /* Assert that stateRwlock is held by some thread (cannot distinguish calling thread with rwlock).
  * Only when BarStateUsesRwlock. Uses trywrlock: EBUSY => someone holds it; 0 => was free, unlock and fail. */
-#ifdef WEBSOCKET_ENABLED
 #define ASSERT_STATE_LOCK_HELD(app) \
 	do { \
 		if (BarStateUsesRwlock(app)) { \
@@ -69,10 +63,6 @@ static inline bool BarStateUsesRwlock(const BarApp_t *app) {
 			} \
 		} \
 	} while (0)
-#else
-#define ASSERT_STATE_LOCK_HELD(app) ((void)0)
-#define ASSERT_STATE_LOCK_NOT_HELD(app) ((void)0)
-#endif
 
 /* Assert that player.lock is currently held */
 #define ASSERT_PLAYER_LOCK_HELD(player) \
