@@ -68,7 +68,7 @@ ws.onerror = (error) => {
 - A single frame over 256 KiB is refused and logged, not delivered; no connection is closed.
 - A client that falls behind (64 frames or 1 MiB unsent) is closed with code **1008** "Client event queue full". If the server's shared event queue overflows, every client is closed with code **1011** "Server event queue full". Clients should reconnect; the server sends `process` on connect, and a `query` brings back `stations`.
 
-**Client to server.** Commands from all clients run **one at a time, in the order the server received them**. Connections, keepalive pings and server events keep flowing while a command runs, but a slow command (a Pandora request can take up to the configured `timeout`) delays every later command, including cheap ones such as volume or pause. This is by design.
+**Client to server.** Commands from all clients run **one at a time, in the order the server received them**. Connections, keepalive pings and server events keep flowing while a command runs, but a slow command delays every later command, including cheap ones such as volume or pause. This is by design. One Pandora request can take up to `timeout` × `max_retry` (the player retries temporary network errors; 30 s × 5 = 150 s by default on a dead network), and a command may make several.
 
 - A command is one message of at most 4096 bytes; it may arrive in any number of fragments or TCP segments. A longer message is dropped whole and logged; the connection stays open.
 - Up to 32 commands (64 KiB) can wait. When that is full the command is refused and only its sender receives
