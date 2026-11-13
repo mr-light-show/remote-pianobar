@@ -289,6 +289,7 @@ static size_t test_written_count;
 static size_t test_writable_requests[TEST_MAX_CLIENTS];
 static bool test_in_writable;     /* set only around BarWsHandleWritable */
 static int test_write_result;     /* 0: report the whole frame written */
+static size_t test_last_written_len;
 
 static int test_write_frame (void *wsi, unsigned char *buf, size_t len) {
 	ck_assert_msg (test_in_writable, "socket write outside the writable callback");
@@ -296,6 +297,7 @@ static int test_write_frame (void *wsi, unsigned char *buf, size_t len) {
 	test_written_wsi[test_written_count] = wsi;
 	snprintf (test_written_msg[test_written_count], 64, "%.*s", (int) len, buf);
 	test_written_count++;
+	test_last_written_len = len;
 	return test_write_result != 0 ? test_write_result : (int) len;
 }
 
@@ -379,6 +381,20 @@ static bool test_send (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
 	char *copy = strdup (text);
 	ck_assert_ptr_nonnull (copy);
 	return BarWebsocketSend (app, dest, key, copy);
+}
+
+/* Heap text of exactly `len` bytes: 2["big","xxx...x"] */
+static char *test_frame_text (size_t len) {
+	static const char head[] = "2[\"big\",\"";
+	static const char tail[] = "\"]";
+	ck_assert_uint_gt (len, sizeof (head) + sizeof (tail));
+	char *t = malloc (len + 1);
+	ck_assert_ptr_nonnull (t);
+	memset (t, 'x', len);
+	memcpy (t, head, sizeof (head) - 1);
+	memcpy (t + len - (sizeof (tail) - 1), tail, sizeof (tail) - 1);
+	t[len] = '\0';
+	return t;
 }
 
 START_TEST (test_send_broadcast_reaches_all_clients)
@@ -832,6 +848,68 @@ START_TEST (test_ingress_full_closes_all_clients)
 	ck_assert (test_send (&app, b, BAR_WS_KEY_NONE, "2[\"x\"]"));
 	BarWsServiceOutbox (&ctx);
 	ck_assert_uint_eq (test_conn (&ctx, 1)->pending.count, 0); /* closing */
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* An oversize frame can never be delivered, so reconnecting would not help:
+ * it is rejected on its own and nobody is closed. */
+START_TEST (test_oversize_frame_is_rejected_without_closing_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	test_add_client (&ctx, 1);
+
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"before\"]"));
+	BarWsServiceOutbox (&ctx);
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			test_frame_text (WS_FRAME_MAX_BYTES + 1)));
+	ck_assert (!BarWebsocketSend (&app, a, BAR_WS_KEY_NONE,
+			test_frame_text (WS_FRAME_MAX_BYTES + 1)));
+	uint32_t generation = BarWebsocketSongGeneration (&app);
+	ck_assert (!BarWebsocketBroadcastSongStart (&app, test_frame_text (WS_FRAME_MAX_BYTES + 1)));
+	ck_assert_uint_eq (BarWebsocketSongGeneration (&app), generation + 1);
+	BarWsServiceOutbox (&ctx);
+	for (int c = 0; c < 2; c++) {
+		ck_assert (!test_conn (&ctx, c)->pendingClose);
+		ck_assert_uint_eq (test_pending_count (&ctx, c), 1); /* queue intact */
+	}
+
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"next\"]"));
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 4);
+	ck_assert_str_eq (test_written_msg[0], "2[\"before\"]");
+	ck_assert_str_eq (test_written_msg[1], "2[\"next\"]");
+	ck_assert_str_eq (test_written_msg[2], "2[\"before\"]");
+	ck_assert_str_eq (test_written_msg[3], "2[\"next\"]");
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* A large requester-only stations reply (~100 KiB, a big library) reaches
+ * only the requester, intact, and closes nobody. */
+START_TEST (test_large_stations_reply_does_not_close_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	test_add_client (&ctx, 1);
+
+	char *reply = test_frame_text (100 * 1024);
+	ck_assert (BarWebsocketSend (&app, a, BAR_WS_KEY_NONE, reply));
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[0]);
+	ck_assert_uint_eq (test_last_written_len, 100 * 1024);
+	ck_assert (strncmp (test_written_msg[0], "2[\"big\",\"xxx", 12) == 0);
+	for (int c = 0; c < 2; c++) {
+		ck_assert (!test_conn (&ctx, c)->pendingClose);
+	}
 
 	test_teardown_clients (&app, &ctx);
 }
@@ -1343,7 +1421,7 @@ static int test_free_loopback_port (void) {
 typedef struct {
 	struct lws *wsi;
 	bool established, failed, sendQuery;
-	char partial[1024];
+	char *partial;                /* frame being reassembled from fragments */
 	size_t partialLen;
 	char *msgs[TEST_E2E_MAX_MSGS];
 	size_t count;
@@ -1364,7 +1442,8 @@ static int test_e2e_client_cb (struct lws *wsi, enum lws_callback_reasons reason
 			c->failed = true;
 			break;
 		case LWS_CALLBACK_CLIENT_RECEIVE:
-			ck_assert_uint_lt (c->partialLen + len, sizeof (c->partial));
+			c->partial = realloc (c->partial, c->partialLen + len + 1);
+			ck_assert_ptr_nonnull (c->partial);
 			memcpy (c->partial + c->partialLen, in, len);
 			c->partialLen += len;
 			if (lws_is_final_fragment (wsi)) {
@@ -1436,6 +1515,7 @@ static void test_e2e_free (TestE2eClient_t *c) {
 	for (size_t i = 0; i < c->count; i++) {
 		free (c->msgs[i]);
 	}
+	free (c->partial);
 }
 
 static void test_e2e_expect (const TestE2eClient_t *c, size_t i, const char *needle) {
@@ -1516,6 +1596,60 @@ START_TEST (test_end_to_end_delivery_order_over_lws)
 	lws_context_destroy (cctx);
 	test_e2e_free (&a);
 	test_e2e_free (&b);
+	BarWebsocketDestroy (&app);
+	pthread_cond_destroy (&app.player.audioCond);
+	pthread_cond_destroy (&app.player.cond);
+	pthread_mutex_destroy (&app.player.lock);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+/* A frame of exactly WS_FRAME_MAX_BYTES fits an empty client queue and goes
+ * out intact through the real writable path and lws_write (which truncates
+ * and buffers a frame this large internally). */
+START_TEST (test_frame_at_limit_is_delivered_to_empty_client)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = test_free_loopback_port ();
+	BarStateInit (&app);
+	pthread_mutex_init (&app.player.lock, NULL);
+	pthread_cond_init (&app.player.cond, NULL);
+	pthread_cond_init (&app.player.audioCond, NULL);
+	app.player.settings = &app.settings;
+	ck_assert (BarWebsocketInit (&app));
+
+	struct lws_context_creation_info info;
+	memset (&info, 0, sizeof (info));
+	info.port = CONTEXT_PORT_NO_LISTEN;
+	info.protocols = test_e2e_protocols;
+	struct lws_context *cctx = lws_create_context (&info);
+	ck_assert_ptr_nonnull (cctx);
+	TestE2eClient_t a, none;
+	memset (&a, 0, sizeof (a));
+	memset (&none, 0, sizeof (none));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &none, 0);
+
+	char *big = test_frame_text (WS_FRAME_MAX_BYTES);
+	char *expected = strdup (big);
+	ck_assert_ptr_nonnull (expected);
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, big));
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"after\"]")));
+	test_e2e_pump_until (cctx, &a, 3, &none, 0);
+	ck_assert_uint_eq (strlen (a.msgs[1]), WS_FRAME_MAX_BYTES);
+	ck_assert_int_eq (memcmp (a.msgs[1], expected, WS_FRAME_MAX_BYTES), 0);
+	test_e2e_expect (&a, 2, "\"after\"");
+	free (expected);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
 	BarWebsocketDestroy (&app);
 	pthread_cond_destroy (&app.player.audioCond);
 	pthread_cond_destroy (&app.player.cond);
@@ -1886,6 +2020,9 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_core, test_blocked_client_does_not_delay_writable_client);
 	tcase_add_test (tc_core, test_overflow_closes_only_that_client);
 	tcase_add_test (tc_core, test_ingress_full_closes_all_clients);
+	tcase_add_test (tc_core, test_oversize_frame_is_rejected_without_closing_clients);
+	tcase_add_test (tc_core, test_large_stations_reply_does_not_close_clients);
+	tcase_add_test (tc_core, test_frame_at_limit_is_delivered_to_empty_client);
 	tcase_add_test (tc_core, test_disconnect_all_clients_closes_and_frees_pending);
 	tcase_add_test (tc_core, test_start_then_playstate_both_delivered);
 	tcase_add_test (tc_core, test_stop_then_start_both_delivered);

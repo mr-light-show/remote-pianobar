@@ -519,8 +519,9 @@ START_TEST (test_song_start_advances_generation_even_when_full) {
 }
 END_TEST
 
-/* R3: every rejected push (room, size, memory) is recorded once for the
- * service thread; reading the flag clears it. */
+/* R3: every push rejected for room (or memory) is recorded once for the
+ * service thread; reading the flag clears it. An oversize frame is only a
+ * rejection of that message: reconnecting could never deliver it. */
 START_TEST (test_overflow_flag_set_by_rejected_push_and_cleared_on_take) {
 	BarWsOutbox_t *o = BarWsOutboxNew ();
 	ck_assert_ptr_nonnull (o);
@@ -538,7 +539,17 @@ START_TEST (test_overflow_flag_set_by_rejected_push_and_cleared_on_take) {
 	ck_assert_ptr_nonnull (t);
 	memset (t, 'x', WS_FRAME_MAX_BYTES + 1);
 	ck_assert (!BarWsOutboxPush (o, 1, BAR_WS_KEY_NONE, t, WS_FRAME_MAX_BYTES + 1));
-	ck_assert (BarWsOutboxTakeOverflow (o));
+	t = malloc (WS_FRAME_MAX_BYTES + 1);
+	ck_assert_ptr_nonnull (t);
+	memset (t, 'x', WS_FRAME_MAX_BYTES + 1);
+	ck_assert (!BarWsOutboxPushSongStart (o, t, WS_FRAME_MAX_BYTES + 1));
+	ck_assert_uint_eq (BarWsOutboxGeneration (o), 1); /* the song still started */
+	t = malloc (WS_FRAME_MAX_BYTES + 1);
+	ck_assert_ptr_nonnull (t);
+	memset (t, 'x', WS_FRAME_MAX_BYTES + 1);
+	ck_assert (!BarWsOutboxPushPlayState (o, 1, t, WS_FRAME_MAX_BYTES + 1));
+	ck_assert (!BarWsOutboxTakeOverflow (o));
+	ck_assert_ptr_null (BarWsOutboxTake (o));
 	BarWsOutboxFree (o);
 }
 END_TEST

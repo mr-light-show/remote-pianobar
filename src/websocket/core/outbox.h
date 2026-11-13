@@ -98,9 +98,10 @@ void BarWsOutboxFree (BarWsOutbox_t *o);
 
 /* Every push takes ownership of text (heap, freed here on every path) and
  * copies it into a frame. A push returns false, and raises the overflow flag
- * (see BarWsOutboxTakeOverflow), when the ingress limits are reached, len
- * exceeds WS_FRAME_MAX_BYTES, or memory is short. NULL arguments return false
- * without raising it. */
+ * (see BarWsOutboxTakeOverflow), when the ingress limits are reached or
+ * memory is short. A frame longer than WS_FRAME_MAX_BYTES is rejected on its
+ * own (logged at LOG_ERROR, flag not raised: no reconnect could deliver it);
+ * so are NULL arguments. */
 
 /* Queue an event for dest (a connection ID or BAR_WS_DEST_BROADCAST). Keyed
  * entries are tagged with the generation current at push time. The full path

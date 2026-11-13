@@ -107,9 +107,10 @@ void BarWebsocketDestroy(BarApp_t *app);
  * yet; BAR_WS_KEY_NONE events are delivered in order. `dest` is resolved on
  * the service thread: an ID that is unknown or closed by then (including a
  * reused slot, whose new client has a new ID) receives nothing.
- * Returns false for a NULL app/context/message or when the ingress rejects
- * the event; a rejection makes the service thread close every client so it
- * resyncs (see BarWsServiceOutbox).
+ * Returns false for a NULL app/context/message, for a frame longer than
+ * WS_FRAME_MAX_BYTES (logged, nobody is closed), or when the ingress is full;
+ * a full ingress makes the service thread close every client so it resyncs
+ * (see BarWsServiceOutbox).
  */
 bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
                        char *message);

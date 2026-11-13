@@ -179,7 +179,10 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
 }
 
 /* Overflow policies. Events are never silently dropped:
- *  - Ingress full (any rejected push): an event is lost and its recipients
+ *  - A frame longer than WS_FRAME_MAX_BYTES is refused at push time and
+ *    logged at LOG_ERROR; no client is closed, since no reconnect could ever
+ *    deliver it.
+ *  - Ingress full (a push refused for room or memory): an event is lost and its recipients
  *    are not known cheaply, so every client is closed with a bounded reason;
  *    each reconnects and resyncs from one full-state frame.
  *  - A client's pending queue full (BAR_WS_Q_OVERFLOW): that client is not
