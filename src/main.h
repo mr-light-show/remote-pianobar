@@ -65,7 +65,7 @@ typedef struct {
 	/* Auto-recovery of an unexpectedly dead Pandora session (see
 	 * BarSessionTryAutoRecover): one attempt per session death, cleared once a
 	 * song starts, so an outage cannot become a reconnect loop.  Written by the
-	 * playback manager and the WebSocket thread. */
+	 * playback manager and the WebSocket command worker. */
 	_Atomic bool autoRecoverInFlight;
 	_Atomic bool autoRecoverFailed;
 } BarApp_t;

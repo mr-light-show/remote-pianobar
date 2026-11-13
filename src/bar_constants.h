@@ -60,9 +60,9 @@
 
 /* --- WebSocket command queue (receive callbacks -> command worker) ---
  * Commands are small JSON frames, typically < 1 KiB. The transport delivers
- * at most LWS_RX_BUFFER_SIZE (4 KiB) per receive callback, and each callback
- * is handled as one request, so 4 KiB is the largest request the queue ever
- * sees (WS_CMD_MAX_REQUEST_BYTES). The byte cap is 16x that, so an empty
+ * at most LWS_RX_BUFFER_SIZE (4 KiB) per receive callback, and a request
+ * must arrive whole in one callback (anything longer is dropped), so 4 KiB is
+ * the largest request the queue ever sees (WS_CMD_MAX_REQUEST_BYTES). The byte cap is 16x that, so an empty
  * queue always accepts one maximal request. 32 items bounds how far a stalled
  * Pandora call can back up (a client sends a handful of controls per second;
  * more means the client is misbehaving) and keeps worst-case memory at

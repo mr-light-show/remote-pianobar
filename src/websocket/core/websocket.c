@@ -27,6 +27,7 @@ THE SOFTWARE.
 
 #include "../../main.h"
 #include "../../log.h"
+#include "../../interrupt.h"
 #include "../../system_volume.h"
 #include "websocket.h"
 #include "websocket_lws_log.h"
@@ -104,6 +105,7 @@ BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
 			conn->wsi = wsi;
 			conn->pendingClose = false;
 			conn->closeReason = NULL;
+			conn->rxDropping = false;
 			BarWsClientQueueInit (&conn->pending);
 			snprintf (conn->protocol, sizeof (conn->protocol), "%s", protocol);
 			ctx->numConnections++;
@@ -140,25 +142,53 @@ static void BarWsConnectionClose (const BarWsContext_t *ctx, BarWsConnection_t *
 	BarWsRequestWritable (ctx, conn->wsi);
 }
 
-/* Dispatch a frame received from `wsi` (service thread). A received message
- * always has a nonzero requester. */
-void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len) {
-	if (!app || !app->wsContext || !in || len == 0) {
+/* Queue a frame received from `wsi` for the command worker (service
+ * thread). Nothing runs here, so a slow command never stalls connection
+ * servicing. A received message always has a nonzero requester. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
+                         bool final) {
+	if (!app || !app->wsContext) {
 		return;
 	}
-	const BarWsConnection_t *conn = BarWsConnectionFind (app->wsContext, wsi);
+	BarWsContext_t *ctx = app->wsContext;
+	BarWsConnection_t *conn = BarWsConnectionFind (ctx, wsi);
 	if (conn == NULL) {
 		/* Untracked (table was full): its replies would have no recipient */
 		log_write (DEBUG_WEBSOCKET, "Dropping message from untracked client (wsi=%p)\n",
 		           wsi);
 		return;
 	}
-	char *message = malloc (len + 1);
-	if (message) {
-		memcpy (message, in, len);
-		message[len] = '\0';
-		BarWebsocketHandleMessage (app, message, len, "socketio", conn->id);
-		free (message);
+	/* libwebsockets hands over at most LWS_RX_BUFFER_SIZE bytes per callback,
+	 * so a request must arrive whole in one callback. Drop every part of a
+	 * longer (or fragmented) message; the connection stays open. */
+	if (conn->rxDropping || !final || len > WS_CMD_MAX_REQUEST_BYTES) {
+		if (!conn->rxDropping) {
+			log_write (LOG_ERROR, "Dropping request from client %llu: not one frame of at most %d bytes\n",
+			           (unsigned long long) conn->id, WS_CMD_MAX_REQUEST_BYTES);
+		}
+		conn->rxDropping = !final;
+		return;
+	}
+	if (!in || len == 0) {
+		return;
+	}
+	switch (BarWsCommandQueuePush (ctx->commands, conn->id, in, len)) {
+		case BAR_WS_CMD_OK:
+			break;
+		case BAR_WS_CMD_FULL:
+			log_write (DEBUG_WEBSOCKET, "Command queue full; refusing a request from client %llu\n",
+			           (unsigned long long) conn->id);
+			BarSocketIoEmitErrorTo (app, conn->id, "command",
+					BarL10nGet (&app->l10n, "web.socket.busy"));
+			break;
+		case BAR_WS_CMD_CLOSED:
+			/* Shutting down (or no worker): not an overload, no reply */
+			log_write (DEBUG_WEBSOCKET, "Command queue closed; dropping a request\n");
+			break;
+		case BAR_WS_CMD_NOMEM:
+			log_write (LOG_ERROR, "Out of memory queueing a request from client %llu\n",
+			           (unsigned long long) conn->id);
+			break;
 	}
 }
 
@@ -338,8 +368,8 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 	}
 			
 		case LWS_CALLBACK_RECEIVE:
-			/* Received message from client */
-			BarWsHandleReceive (app, wsi, in, len);
+			/* Received message from client: queue it for the worker */
+			BarWsHandleReceive (app, wsi, in, len, lws_is_final_fragment (wsi) != 0);
 			break;
 			
 		case LWS_CALLBACK_SERVER_WRITEABLE:
@@ -529,6 +559,116 @@ static void* BarWebsocketThread(void *arg) {
 	return NULL;
 }
 
+static BarWsThreadCreate_fn g_threadCreateHook = NULL;
+
+void BarWebsocketSetTestThreadCreateHook (BarWsThreadCreate_fn hook) {
+	g_threadCreateHook = hook;
+}
+
+static int BarWsThreadCreate (pthread_t *thread, void *(*fn) (void *), void *arg) {
+	if (g_threadCreateHook != NULL) {
+		return g_threadCreateHook (thread, fn, arg);
+	}
+	return pthread_create (thread, NULL, fn, arg);
+}
+
+/*	Command worker
+ *
+ * The one thread that runs application commands, in the order they were
+ * received. Handlers keep their own locking (pianoHttpMutex for Pandora and
+ * borrowed stations/songs, stateRwlock, player.lock; see THREAD_SAFETY.md)
+ * and reply through BarWebsocketSend, which never blocks on a client. Only
+ * the request bytes and the requester ID cross from the service thread.
+ */
+static void *BarWsWorkerThread (void *arg) {
+	BarApp_t *app = arg;
+	BarWsCommandQueue_t *commands = ((BarWsContext_t *) app->wsContext)->commands;
+	BarWsConnId_t requester;
+	char *text;
+
+	log_write (DEBUG_WEBSOCKET, "Command worker started\n");
+	while (BarWsCommandQueuePop (commands, &requester, &text, NULL)) {
+		BarSocketIoHandleMessage (app, text, requester);
+		free (text);
+	}
+	log_write (DEBUG_WEBSOCKET, "Command worker stopped\n");
+	return NULL;
+}
+
+bool BarWebsocketWorkerStart (BarApp_t *app) {
+	if (!app || !app->wsContext) {
+		return false;
+	}
+	BarWsContext_t *ctx = app->wsContext;
+	if (ctx->workerStarted) {
+		return false;
+	}
+	/* Closed by an earlier Stop; no service thread pushes to it now */
+	BarWsCommandQueueFree (ctx->commands);
+	ctx->commands = BarWsCommandQueueNew ();
+	if (!ctx->commands) {
+		log_write (LOG_ERROR, "Failed to allocate the command queue\n");
+		return false;
+	}
+	if (BarWsThreadCreate (&ctx->worker, BarWsWorkerThread, app) != 0) {
+		log_write (LOG_ERROR, "Failed to create the command worker\n");
+		BarWsCommandQueueFree (ctx->commands);
+		ctx->commands = NULL;
+		return false;
+	}
+	ctx->workerStarted = true;
+	return true;
+}
+
+void BarWebsocketWorkerStop (BarApp_t *app) {
+	if (!app || !app->wsContext) {
+		return;
+	}
+	BarWsContext_t *ctx = app->wsContext;
+	if (!ctx->workerStarted) {
+		return;
+	}
+	if (pthread_equal (pthread_self (), ctx->worker)) {
+		/* e.g. a command asking to quit: the lifecycle owner joins later */
+		log_write (LOG_ERROR, "Command worker cannot stop itself\n");
+		return;
+	}
+	/* Refuse new commands and drop the queued ones, so the worker exits
+	 * after the command in flight. Interrupt that command's Pandora call
+	 * the way SIGINT does: during a request the interrupt target is the
+	 * request's own flag, which curl's progress callback polls. */
+	BarWsCommandQueueClose (ctx->commands);
+	BarInterruptIncrement ();
+	log_write (DEBUG_WEBSOCKET, "Waiting for the command worker...\n");
+	pthread_join (ctx->worker, NULL);
+	ctx->workerStarted = false;
+}
+
+/* Free the transport; neither the worker nor the service thread may run */
+static void BarWsContextFree (BarApp_t *app) {
+	BarWsContext_t *ctx = app->wsContext;
+
+	/* Destroying the lws context closes every connection (CLOSED frees its
+	 * pending frames); no callback runs after this point. */
+	if (ctx->context) {
+		lws_context_destroy (ctx->context);
+		ctx->context = NULL;
+	}
+	if (ctx->connections) {
+		for (size_t i = 0; i < ctx->maxConnections; i++) {
+			BarWsClientQueueClear (&ctx->connections[i].pending);
+		}
+		free (ctx->connections);
+		ctx->connections = NULL;
+	}
+	pthread_mutex_destroy (&ctx->volumeBroadcastMutex);
+	/* Replies not delivered by now are abandoned with the queues */
+	BarWsCommandQueueFree (ctx->commands);
+	BarWsOutboxFree (ctx->outbox);
+	free (ctx);
+	app->wsContext = NULL;
+}
+
 /* Initialize WebSocket server */
 bool BarWebsocketInit(BarApp_t *app) {
 	struct lws_context_creation_info info;
@@ -545,11 +685,13 @@ bool BarWebsocketInit(BarApp_t *app) {
 	}
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+	pthread_mutex_init(&ctx->volumeBroadcastMutex, NULL);
+	ctx->maxConnections = 32;
+	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	ctx->outbox = BarWsOutboxNew ();
-	if (!ctx->outbox) {
-		log_write(LOG_ERROR, "Failed to allocate outbound queue\n");
-		free(ctx);
-		app->wsContext = NULL;
+	if (!ctx->connections || !ctx->outbox) {
+		log_write(LOG_ERROR, "Failed to allocate connection table or outbound queue\n");
+		BarWsContextFree (app);
 		return false;
 	}
 	
@@ -571,19 +713,14 @@ bool BarWebsocketInit(BarApp_t *app) {
 	if (!ctx->context) {
 		log_write(LOG_ERROR, "Failed to create context on port %d\n",
 		        app->settings.websocketPort);
-		BarWsOutboxFree (ctx->outbox);
-		free(ctx);
-		app->wsContext = NULL;
+		BarWsContextFree (app);
 		return false;
 	}
 	
 	ctx->initialized = true;
-	ctx->maxConnections = 32;
-	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	
 	/* Initialize delayed volume broadcast */
 	ctx->delayedVolumeBroadcast.pending = false;
-	pthread_mutex_init(&ctx->volumeBroadcastMutex, NULL);
 	
 	/* Initialize system volume polling state */
 	ctx->lastPolledVolume = -1;  /* Unknown until first poll */
@@ -592,18 +729,18 @@ bool BarWebsocketInit(BarApp_t *app) {
 	log_write(DEBUG_WEBSOCKET, "Server started on port %d\n",
 	        app->settings.websocketPort);
 	
+	/* The worker and its queue exist before the first receive callback */
+	if (!BarWebsocketWorkerStart (app)) {
+		BarWsContextFree (app);
+		return false;
+	}
+	
 	/* Start WebSocket thread */
 	ctx->threadRunning = true;
-	if (pthread_create(&ctx->thread, NULL, BarWebsocketThread, app) != 0) {
+	if (BarWsThreadCreate (&ctx->thread, BarWebsocketThread, app) != 0) {
 		log_write(LOG_ERROR, "Failed to create thread\n");
-		
-		/* Cleanup on failure */
-		lws_context_destroy(ctx->context);
-		free(ctx->connections);
-		pthread_mutex_destroy(&ctx->volumeBroadcastMutex);
-		BarWsOutboxFree (ctx->outbox);
-		free(ctx);
-		app->wsContext = NULL;
+		BarWebsocketWorkerStop (app);
+		BarWsContextFree (app);
 		return false;
 	}
 	
@@ -622,6 +759,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
+	/* No command runs after this; frames received meanwhile are dropped */
+	BarWebsocketWorkerStop (app);
+	
 	/* Signal thread to stop */
 	ctx->threadRunning = false;
 	
@@ -635,28 +775,8 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	pthread_join(ctx->thread, NULL);
 	log_write(DEBUG_WEBSOCKET, "Thread stopped\n");
 	
-	/* Now safe to cleanup (thread is dead). Destroying the lws context
-	 * closes every connection (CLOSED frees its pending frames); no writable
-	 * callback runs after this point. */
-	if (ctx->context) {
-		lws_context_destroy(ctx->context);
-		ctx->context = NULL;
-	}
-	
-	pthread_mutex_destroy(&ctx->volumeBroadcastMutex);
-	
-	if (ctx->connections) {
-		for (size_t i = 0; i < ctx->maxConnections; i++) {
-			BarWsClientQueueClear (&ctx->connections[i].pending);
-		}
-		free(ctx->connections);
-		ctx->connections = NULL;
-	}
-	BarWsOutboxFree (ctx->outbox);
-	ctx->outbox = NULL;
-	
-	free(ctx);
-	app->wsContext = NULL;
+	/* Both threads are gone: free the transport */
+	BarWsContextFree (app);
 	
 	log_write(DEBUG_WEBSOCKET, "Server stopped\n");
 }
@@ -740,24 +860,6 @@ void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
 		 * thread acts on, so wake it either way. */
 		BarWsOutboxPushPlayState (ctx->outbox, epoch, message, strlen (message));
 		BarWsWake (ctx);
-	}
-}
-
-/* Handle incoming WebSocket message */
-void BarWebsocketHandleMessage (BarApp_t *app, const char *message,
-                                size_t len, const char *protocol,
-                                BarWsConnId_t requester) {
-	if (!app || !message || len == 0) {
-		return;
-	}
-	
-	/* Route to appropriate protocol handler */
-	if (strcmp(protocol, "homeassistant") == 0) {
-		/* TODO: Call BarHaBridgeHandleMessage(app, message); */
-		log_write(DEBUG_WEBSOCKET, "HA message received (not yet implemented)\n");
-	} else {
-		/* Default to Socket.IO */
-		BarSocketIoHandleMessage (app, message, requester);
 	}
 }
 

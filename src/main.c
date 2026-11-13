@@ -927,7 +927,10 @@ int main (int argc, char **argv) {
 		close (app.input.fds[1]);
 	}
 
-	/* Stop the WebSocket service thread before shared app state is torn down. */
+	/* Stop the WebSocket command worker, then the service thread, before
+	 * shared app state is torn down. The other producers are gone by now:
+	 * BarMainLoop stopped the playback manager (and its player thread), and
+	 * the CLI runs on this thread. */
 	BarWsDestroy(&app);
 
 	/* write statefile */

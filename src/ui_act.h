@@ -116,6 +116,6 @@ int BarUiActBuildManageStationQuestion (char *buf, size_t bufLen,
 		bool hasArtistSeeds, bool hasSongSeeds, bool hasStationSeeds,
 		bool hasFeedback, bool isQuickMix);
 
-/* Logged version of BarTransformIfShared for WebSocket thread — false on error, true on success */
+/* Logged version of BarTransformIfShared for WebSocket commands — false on error, true on success */
 bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station);
 

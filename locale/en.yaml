@@ -97,6 +97,7 @@ web:
     not_implemented_bookmark: "Song bookmarking is no longer supported by Pandora."
     not_implemented_history: "Song history is not available through the remote API yet."
     not_implemented_settings: "Runtime settings changes are not available through the remote API yet."
+    busy: "The player is busy. Try again in a moment."
 
   # Web UI only (Lit); flat keys web.ui.* in generated JSON / locale files
   ui:
