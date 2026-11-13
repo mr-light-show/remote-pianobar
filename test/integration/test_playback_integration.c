@@ -173,6 +173,9 @@ static void stop_player_thread (player_t *player, pthread_t *playerThread) {
 	pthread_mutex_unlock (&player->lock);
 	ck_assert (BarPlayerJoinThreadWithTimeout (player, *playerThread, NULL, 10));
 	*playerThread = 0;
+	/* mirror force_join_player_thread: the player owns a copy of the URL */
+	free (player->url);
+	player->url = NULL;
 }
 
 static bool wait_dead_after_playing (BarApp_t *barApp, unsigned timeout_ms) {
