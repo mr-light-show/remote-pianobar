@@ -562,6 +562,8 @@ BarUiActCallback(BarUiActStationFromGenre) {
 
 /*	print verbose song information
  */
+/* selSong const-ness is reported by older cppcheck only; keep the callback signature */
+// cppcheck-suppress [constParameterCallback, unmatchedSuppression]
 BarUiActCallback(BarUiActSongInfo) {
 	assert (selStation != NULL);
 	assert (selSong != NULL);
