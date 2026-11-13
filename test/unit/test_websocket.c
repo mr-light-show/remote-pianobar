@@ -478,6 +478,13 @@ START_TEST (test_receive_from_untracked_client_is_dropped)
 	BarWsHandleReceive (&app, &test_fake_sockets[2], "0", 1);
 	BarWsHandleReceive (&app, &test_fake_sockets[2], "2[\"query\"]", 11);
 	ck_assert_uint_eq (test_written_count, 0);
+	/* Empty or missing frames are ignored, even from a tracked client */
+	BarWsHandleReceive (&app, &test_fake_sockets[1], "", 0);
+	BarWsHandleReceive (&app, &test_fake_sockets[1], NULL, 5);
+	ck_assert_uint_eq (test_written_count, 0);
+	/* Removing a socket that was never tracked leaves the table alone */
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]);
+	ck_assert_uint_eq (ctx.numConnections, 2);
 
 	/* A tracked client still gets its reply, and only it */
 	BarWsHandleReceive (&app, &test_fake_sockets[1], "2[\"query\"]", 11);
@@ -833,6 +840,86 @@ START_TEST (test_websocket_init_destroy_stops_when_app_quits)
 }
 END_TEST
 
+/* Init must fail cleanly (no context left behind) when it cannot listen */
+START_TEST (test_websocket_init_fails_cleanly_when_bind_fails)
+{
+	BarApp_t app;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	/* TEST-NET-3: never a local address, so bind() fails */
+	app.settings.websocketHost = strdup ("203.0.113.1");
+	app.settings.websocketPort = 18083;
+
+	ck_assert (!BarWebsocketInit (&app));
+	ck_assert_ptr_null (app.wsContext);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+/* Service-thread side of a real server: a queued broadcast is drained from
+ * its bucket and written to every client by the running service thread. */
+static pthread_mutex_t g_threadWriteLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_threadWriteCond = PTHREAD_COND_INITIALIZER;
+static char g_threadWritten[64];
+static size_t g_threadWriteCount;
+
+static int test_thread_write_frame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	pthread_mutex_lock (&g_threadWriteLock);
+	snprintf (g_threadWritten, sizeof (g_threadWritten), "%.*s", (int) len, buf);
+	g_threadWriteCount++;
+	pthread_cond_signal (&g_threadWriteCond);
+	pthread_mutex_unlock (&g_threadWriteLock);
+	return (int) len;
+}
+
+START_TEST (test_websocket_service_thread_drains_bucket_to_clients)
+{
+	BarApp_t app;
+	char fakeSocket;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = 18084;
+	if (!BarWebsocketInit (&app)) {
+		BarSettingsDestroy (&app.settings);
+		return; /* port unavailable on this host */
+	}
+	BarWsContext_t *ctx = app.wsContext;
+	g_threadWriteCount = 0;
+	ctx->writeFrame = test_thread_write_frame;
+	ck_assert_uint_ne (BarWsConnectionAdd (ctx, &fakeSocket, "socketio"), 0);
+
+	/* The bucket mutex orders the hook and table setup before the drain */
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_VOLUME,
+			strdup ("2[\"volume\",40]")));
+
+	struct timespec deadline;
+	clock_gettime (CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += 5;
+	pthread_mutex_lock (&g_threadWriteLock);
+	while (g_threadWriteCount == 0) {
+		if (pthread_cond_timedwait (&g_threadWriteCond, &g_threadWriteLock,
+				&deadline) != 0) {
+			break;
+		}
+	}
+	size_t written = g_threadWriteCount;
+	pthread_mutex_unlock (&g_threadWriteLock);
+	ck_assert_uint_eq (written, 1);
+	ck_assert_str_eq (g_threadWritten, "2[\"volume\",40]");
+
+	/* Stop the service thread before the fake client is dropped */
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarWebsocketDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_websocket_bridge_print_bind_all_and_startup_info)
 {
 	BarApp_t app;
@@ -1161,6 +1248,8 @@ Suite *websocket_suite(void) {
 	
 	tcase_add_test(tc_core, test_websocket_init_null);
 	tcase_add_test(tc_core, test_websocket_init_destroy_stops_when_app_quits);
+	tcase_add_test(tc_core, test_websocket_init_fails_cleanly_when_bind_fails);
+	tcase_add_test(tc_core, test_websocket_service_thread_drains_bucket_to_clients);
 	tcase_add_test(tc_core, test_websocket_destroy_null);
 	tcase_add_test(tc_core, test_websocket_elapsed_null);
 	tcase_add_test(tc_core, test_websocket_broadcast_null);
