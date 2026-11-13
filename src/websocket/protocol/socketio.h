@@ -26,6 +26,8 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "../core/queue.h"
+
 /* Note: main.h must be included before this header to get BarApp_t definition */
 
 /* Forward declarations */
@@ -42,18 +44,9 @@ typedef enum {
 	SOCKETIO_BINARY_ACK = 6,
 } BarSocketIoType_t;
 
-/* Set broadcast callback (called by WebSocket core) */
-void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t));
-
-/* Unicast support - for sending to specific client only */
-void BarSocketIoSetUnicastTarget(void *wsi);
-void *BarSocketIoGetUnicastTarget(void);
-
-/* Emit 'process' event to specific client only (unicast) */
-void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi);
-
-/* Handle incoming Socket.IO message */
-void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi);
+/* Handle incoming Socket.IO message from the client `requester`
+ * (BAR_WS_DEST_BROADCAST: no requester, replies go to every client) */
+void BarSocketIoHandleMessage (BarApp_t *app, const char *message, BarWsConnId_t requester);
 
 /* Returns a heap-allocated Socket.IO text frame for event + data.
    Caller owns the result and must free() it.
@@ -61,8 +54,9 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi);
    Passing data=NULL produces a no-payload frame: 2["eventName"] */
 char *BarSocketIoFormatEventMessage (const char *event, struct json_object *data);
 
-/* Emit event to all connected clients */
-void BarSocketIoEmit(const char *event, struct json_object *data);
+/* Emit event now to `dest` (a client, or BAR_WS_DEST_BROADCAST); unbucketed */
+void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
+                      struct json_object *data);
 
 /* Payload builders — each returns a new json_object reference; caller must json_object_put(). */
 struct json_object *BarSocketIoBuildStartPayload    (BarApp_t *app);
@@ -85,27 +79,31 @@ void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
 /* Emit 'stations' event (station list) */
 void BarSocketIoEmitStations(BarApp_t *app);
 
-/* Emit 'process' event (full state) */
+/* Emit 'process' event (full state) to all clients, or to `dest` only */
 void BarSocketIoEmitProcess(BarApp_t *app);
+void BarSocketIoEmitProcessTo (BarApp_t *app, BarWsConnId_t dest);
 
-/* Emit 'song.explanation' event (explanation text) */
-void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation);
+/* Emit 'song.explanation' event (explanation text) to `dest` */
+void BarSocketIoEmitExplanationTo (BarApp_t *app, BarWsConnId_t dest, const char *explanation);
 
 /* Emit 'error' event (error notification). stationId optional (e.g. for station.change "not found"). */
 void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message);
 void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId);
+/* Same as BarSocketIoEmitError, to `dest` only */
+void BarSocketIoEmitErrorTo (BarApp_t *app, BarWsConnId_t dest, const char *operation, const char *message);
 
 /* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", or "connection_lost") */
-void BarSocketIoEmitPandoraDisconnected(const char *reason);
+void BarSocketIoEmitPandoraDisconnected (BarApp_t *app, const char *reason);
 
 /* Emit 'playState' event (paused/resumed state) */
 void BarSocketIoEmitPlayState(BarApp_t *app);
 
-/* Emit 'query.upcoming.result' event (upcoming songs list) */
-void BarSocketIoEmitUpcoming(BarApp_t *app, struct PianoSong *firstSong, int maxSongs);
+/* Emit 'query.upcoming.result' event (upcoming songs list) to `dest` */
+void BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, struct PianoSong *first, int max);
 
-/* Handle 'action' event from client */
-void BarSocketIoHandleAction(BarApp_t *app, const char *action, struct json_object *data, void *wsi);
+/* Handle 'action' event from client `requester` */
+void BarSocketIoHandleAction (BarApp_t *app, const char *action, struct json_object *data,
+                              BarWsConnId_t requester);
 
 /* Handle 'changeStation' event from client */
 void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId);
@@ -119,8 +117,8 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, struct json_object *data);
 /* Handle 'station.createFrom' event from client */
 void BarSocketIoHandleCreateStationFrom(BarApp_t *app, struct json_object *data);
 
-/* Handle 'query' event from client (unicast response to requesting client) */
-void BarSocketIoHandleQuery(BarApp_t *app, void *wsi);
+/* Handle 'query' event: full state and stations to `requester` only */
+void BarSocketIoHandleQuery (BarApp_t *app, BarWsConnId_t requester);
 
 /* Fetch genres and emit to client */
 void BarSocketIoHandleGetGenres(BarApp_t *app);

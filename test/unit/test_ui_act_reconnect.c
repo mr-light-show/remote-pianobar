@@ -26,6 +26,7 @@
 #include "../../src/websocket/protocol/socketio.h"
 #include "../../src/websocket_bridge.h"
 #include "../../src/playback_manager.h"
+#include "test_ws_capture.h"
 
 /* Declaration only — avoid ui_dispatch.h (pulls full shortcut table + ui_act.h). */
 void BarUiActPandoraReconnect (BarApp_t *app, PianoStation_t *selStation,
@@ -42,6 +43,10 @@ void BarUiActPandoraDisconnect (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActExplain (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
+void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
+		PianoSong_t *selSong, BarWsConnId_t requester);
+void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
+		PianoSong_t *selSong, BarWsConnId_t requester);
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActPause (BarApp_t *app, PianoStation_t *selStation,
@@ -258,7 +263,7 @@ START_TEST (test_ui_act_pandora_reconnect_no_credentials)
 
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiActPandoraReconnect (&app, NULL, NULL, 1);
@@ -269,6 +274,7 @@ START_TEST (test_ui_act_pandora_reconnect_no_credentials)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -696,7 +702,7 @@ static void *ui_concurrent_volume (void *data) {
 		if (update->websocket) {
 			json_object *payload = json_object_new_object ();
 			json_object_object_add (payload, "volume", json_object_new_int (72));
-			BarSocketIoHandleAction (update->app, "volume.set", payload, NULL);
+			BarSocketIoHandleAction (update->app, "volume.set", payload, BAR_WS_DEST_BROADCAST);
 			json_object_put (payload);
 		} else {
 			BarUiActVolDown (update->app, NULL, NULL, 1);
@@ -882,7 +888,7 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "user", NULL);
@@ -902,6 +908,7 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -922,7 +929,7 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "idle_timeout", "override-station");
@@ -940,6 +947,7 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -972,7 +980,7 @@ START_TEST (test_ui_do_pandora_disconnect_clears_playback_state_before_destroy)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "user", NULL);
@@ -990,6 +998,7 @@ START_TEST (test_ui_do_pandora_disconnect_clears_playback_state_before_destroy)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1047,7 +1056,7 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	g_mock_reconnect_stations = &station;
 
@@ -1067,6 +1076,7 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1143,7 +1153,7 @@ START_TEST (test_session_auto_recover_resumes_without_disconnect_event)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	g_mock_reconnect_stations = &station;
 	BarUiPianoCallSetTestHook (mock_reconnect_login_stations);
@@ -1168,6 +1178,7 @@ START_TEST (test_session_auto_recover_resumes_without_disconnect_event)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1205,7 +1216,7 @@ START_TEST (test_session_auto_recover_failure_is_sticky)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	BarUiPianoCallSetTestHook (mock_piano_call_fails);
 
@@ -1223,6 +1234,7 @@ START_TEST (test_session_auto_recover_failure_is_sticky)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1262,7 +1274,7 @@ START_TEST (test_ui_do_pandora_disconnect_logs_when_manager_not_parked)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	log_set_debug_mask (DEBUG_UI);
 	BarPlaybackManagerWaitParkedIdleSetTestHook (mock_wait_parked_idle_fail);
@@ -1283,6 +1295,7 @@ START_TEST (test_ui_do_pandora_disconnect_logs_when_manager_not_parked)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1318,7 +1331,7 @@ START_TEST (test_ui_act_pandora_reconnect_logs_when_manager_not_parked)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	log_set_debug_mask (DEBUG_UI);
 	g_mock_reconnect_stations = &station;
@@ -1342,6 +1355,7 @@ START_TEST (test_ui_act_pandora_reconnect_logs_when_manager_not_parked)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1362,7 +1376,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_running_manager)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	BarPlaybackManagerWaitParkedIdleClearTestHook ();
 	ck_assert (BarPlaybackManagerStart (&app));
@@ -1379,6 +1393,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_running_manager)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1403,7 +1418,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_parked_manager)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	log_set_debug_mask (DEBUG_UI);
 
@@ -1419,6 +1434,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_parked_manager)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1585,16 +1601,15 @@ START_TEST (test_ui_act_print_upcoming_lists_and_broadcasts)
 	BarStateInit (&app);
 	BarStateSetCurrentStation (&app, &station);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
-	BarSocketIoSetUnicastTarget ((void *) 0x1);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
-	BarUiActPrintUpcoming (&app, &station, &cur, 1);
+	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 	ck_assert (strstr (last_broadcast_msg, "query.upcoming.result") != NULL);
 
-	BarSocketIoSetUnicastTarget (NULL);
+	TestWsCaptureDetach (&app);
 	clear_mock ();
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -1652,7 +1667,7 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiActPandoraDisconnect (&app, NULL, NULL, 1);
@@ -1669,6 +1684,7 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1770,7 +1786,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	args.player = &app.player;
@@ -1788,6 +1804,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1799,7 +1816,7 @@ START_TEST (test_ui_act_volume_system_mode)
 	player_primitives_init (&app);
 	app.settings.volumeMode = BAR_VOLUME_MODE_SYSTEM;
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiActVolDown (&app, NULL, NULL, 1);
@@ -1809,6 +1826,7 @@ START_TEST (test_ui_act_volume_system_mode)
 	clear_mock ();
 	player_primitives_destroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1960,13 +1978,12 @@ START_TEST (test_ui_act_explain_websocket_failure_emits_error)
 	PianoSong_t song;
 	setup_web_app_with_station (&app, &ctx, &station, &song);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
-	BarSocketIoSetUnicastTarget ((void *) 0x1);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	BarUiPianoCallSetTestHook (mock_explain_fail);
-	BarUiActExplain (&app, &station, &song, 1);
+	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[0]);
 	BarUiPianoCallClearTestHook ();
-	BarSocketIoSetUnicastTarget (NULL);
+	TestWsCaptureDetach (&app);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 	ck_assert (strstr (last_broadcast_msg, "error") != NULL);
@@ -2003,13 +2020,12 @@ START_TEST (test_ui_act_explain_websocket_success_broadcasts)
 	PianoSong_t song;
 	setup_web_app_with_station (&app, &ctx, &station, &song);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
-	BarSocketIoSetUnicastTarget ((void *) 0x1);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 	BarUiPianoCallSetTestHook (mock_explain_with_text);
-	BarUiActExplain (&app, &station, &song, 1);
+	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[0]);
 	BarUiPianoCallClearTestHook ();
-	BarSocketIoSetUnicastTarget (NULL);
+	TestWsCaptureDetach (&app);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 	ck_assert (strstr (last_broadcast_msg, "Because you enjoy jazz.") != NULL);
@@ -2036,11 +2052,10 @@ START_TEST (test_ui_act_print_upcoming_websocket_empty_emits_error)
 	app.wsContext = &ctx;
 	cur.title = "Only";
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
-	BarSocketIoSetUnicastTarget ((void *) 0x1);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
-	BarUiActPrintUpcoming (&app, &station, &cur, 1);
-	BarSocketIoSetUnicastTarget (NULL);
+	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	TestWsCaptureDetach (&app);
 
 	ck_assert_ptr_nonnull (last_broadcast_msg);
 	ck_assert (strstr (last_broadcast_msg, "error") != NULL);
@@ -2049,6 +2064,109 @@ START_TEST (test_ui_act_print_upcoming_websocket_empty_emits_error)
 	clear_mock ();
 	ws_context_destroy (&ctx);
 	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+START_TEST (test_query_explain_reaches_only_requester)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t song;
+	setup_web_app_with_station (&app, &ctx, &station, &song);
+	TestWsCaptureAttach (&app, 2, NULL);
+
+	BarUiPianoCallSetTestHook (mock_explain_with_text);
+	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[1]);
+	BarUiPianoCallClearTestHook ();
+
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "song.explanation"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "Because you enjoy jazz."), 1);
+
+	/* Failure is reported to the requester only, too */
+	TestWsCaptureClear ();
+	BarUiPianoCallSetTestHook (mock_explain_fail);
+	BarUiActExplainTo (&app, &station, &song, test_ws_cap.ids[0]);
+	BarUiPianoCallClearTestHook ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "song.explain"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, ""), 0);
+
+	TestWsCaptureDetach (&app);
+	teardown_web_app_with_station (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_query_upcoming_reaches_only_requester)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t cur, next;
+	setup_web_app_with_station (&app, &ctx, &station, &cur);
+	memset (&next, 0, sizeof (next));
+	cur.head.next = &next.head;
+	next.title = "Next Song";
+	next.stationId = station.id;
+	TestWsCaptureAttach (&app, 2, NULL);
+
+	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[0]);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming.result"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "Next Song"), 1);
+
+	/* Empty queue: the error goes to the requester only */
+	TestWsCaptureClear ();
+	cur.head.next = NULL;
+	BarUiActPrintUpcomingTo (&app, &station, &cur, test_ws_cap.ids[1]);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "query.upcoming"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "error"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, ""), 0);
+
+	TestWsCaptureDetach (&app);
+	teardown_web_app_with_station (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_cli_explain_prints_terminal_output_and_no_web_reply)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t station;
+	PianoSong_t song;
+	int pipefd[2];
+	char out[1024];
+	setup_web_app_with_station (&app, &ctx, &station, &song);
+	app.settings.uiMode = BAR_UI_MODE_BOTH; /* terminal and web clients */
+	TestWsCaptureAttach (&app, 2, NULL);
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	fflush (stdout);
+	int saved_stdout = dup (STDOUT_FILENO);
+	ck_assert_int_ge (saved_stdout, 0);
+	ck_assert_int_ge (dup2 (pipefd[1], STDOUT_FILENO), 0);
+	close (pipefd[1]);
+
+	BarUiPianoCallSetTestHook (mock_explain_with_text);
+	BarUiActExplain (&app, &station, &song, 1);
+	BarUiPianoCallClearTestHook ();
+
+	fflush (stdout);
+	ck_assert_int_ge (dup2 (saved_stdout, STDOUT_FILENO), 0);
+	close (saved_stdout);
+	ssize_t n = read (pipefd[0], out, sizeof (out) - 1);
+	close (pipefd[0]);
+	ck_assert_int_gt (n, 0);
+	out[n] = '\0';
+
+	ck_assert_ptr_nonnull (strstr (out, "Because you enjoy jazz."));
+	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+
+	TestWsCaptureDetach (&app);
+	teardown_web_app_with_station (&app, &ctx);
 }
 END_TEST
 
@@ -2069,7 +2187,7 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	                            app.settings.inkey, app.settings.outkey),
 	                  PIANO_RET_OK);
 
-	BarSocketIoSetBroadcastCallback (mock_broadcast);
+	TestWsCaptureAttach (&app, 1, mock_broadcast);
 	clear_mock ();
 
 	BarUiDoPandoraDisconnect (&app, "playlist_session_error", NULL);
@@ -2085,6 +2203,7 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clear_mock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -2443,6 +2562,9 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_explain_websocket_failure_emits_error);
 	tcase_add_test (tc, test_ui_act_explain_websocket_success_broadcasts);
 	tcase_add_test (tc, test_ui_act_print_upcoming_websocket_empty_emits_error);
+	tcase_add_test (tc, test_query_explain_reaches_only_requester);
+	tcase_add_test (tc, test_query_upcoming_reaches_only_requester);
+	tcase_add_test (tc, test_cli_explain_prints_terminal_output_and_no_web_reply);
 	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
 	tcase_add_test (tc, test_ui_act_bookmark_artist);

@@ -40,7 +40,11 @@ typedef enum {
 	BUCKET_VOLUME,     /* Volume changes */
 	BUCKET_PROGRESS,   /* Progress updates */
 	BUCKET_STATIONS,   /* Station list - lowest priority */
-	BUCKET_COUNT       /* Total number of buckets */
+	BUCKET_COUNT,      /* Total number of buckets */
+	/* Interim lane, not a bucket: deliver now, unqueued and never coalesced,
+	 * as the formerly direct emitters always have. Becomes the ordered,
+	 * unkeyed outbound entry when the outbound queue lands (PR2). */
+	BUCKET_NONE
 } BarWsBucketType_t;
 
 /* Message bucket - holds one message of a specific category */
@@ -71,6 +75,9 @@ typedef struct {
 	/* Threading */
 	pthread_t thread;             /* WebSocket service thread */
 	_Atomic bool threadRunning;   /* Thread lifecycle flag */
+	/* Recorded by the service thread itself; checks targeted sends */
+	pthread_t serviceThread;
+	bool serviceThreadKnown;
 	/* stateRwlock is in BarApp_t (web/both via BarStateUsesRwlock); player->lock for transport here */
 	
 	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
@@ -126,18 +133,19 @@ void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
  * (freed on failure). Returns false for a NULL app/context/message, or when
  * `dest` names no currently connected client (unknown, closed, or a reused
  * slot).
- *  - BAR_WS_DEST_BROADCAST: queued in `bucket` (latest-wins), thread-safe.
+ *  - BAR_WS_DEST_BROADCAST: queued in `bucket` (latest-wins), thread-safe;
+ *    with BUCKET_NONE, written to every client now on the caller's thread.
  *  - A connection ID: delivered immediately to that client only, bypassing
- *    the buckets and their STATE/PROGRESS side effects, like the unicast
- *    path. Must be called on the service thread until the outbound queue
- *    (Task 2) replaces this.
+ *    the buckets and their STATE/PROGRESS side effects (`bucket` is ignored).
+ *    Must be called on the service thread until the outbound queue (Task 2)
+ *    replaces this.
  */
 bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest,
                        BarWsBucketType_t bucket, char *message);
 
 /* Write `message` to every client (BAR_WS_DEST_BROADCAST) or only the client
- * whose connection ID is `dest`; honors the thread-local unicast target.
- * Service thread only. This is the single delivery routine. */
+ * whose connection ID is `dest`. Service thread only. This is the single
+ * delivery routine. */
 void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
                    BarWsConnId_t dest);
 
@@ -157,9 +165,10 @@ void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
 /* Get current elapsed time */
 unsigned int BarWebsocketGetElapsed(BarApp_t *app);
 
-/* Handle incoming WebSocket message */
-void BarWebsocketHandleMessage(BarApp_t *app, const char *message, 
-                               size_t len, const char *protocol, void *wsi);
+/* Handle incoming WebSocket message from the client `requester` */
+void BarWebsocketHandleMessage (BarApp_t *app, const char *message,
+                                size_t len, const char *protocol,
+                                BarWsConnId_t requester);
 
 /* Schedule delayed volume broadcast (for debouncing) */
 void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs);

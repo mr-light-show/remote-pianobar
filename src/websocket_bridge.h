@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include <stdio.h>
 
 #include "main.h"
+#include "websocket/core/queue.h"
 
 /* WebSocket bridge functions
  * Bridge between core modules and the WebSocket subsystem
@@ -38,8 +39,11 @@ bool BarWsIsWebActive(const BarApp_t *app);
 
 /* Event broadcasts */
 void BarWsBroadcastVolume(BarApp_t *app);
-void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation);
-void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count);
+/* Query replies to one web client (`requester` is its connection ID) */
+void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
+                            const char *explanation);
+void BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester,
+                         PianoSong_t *songs, int count);
 void BarWsBroadcastSongStart(BarApp_t *app);
 /** Full state sync for in-place changes (e.g. song.rating). Emits `process`, not `start`. */
 void BarWsBroadcastProcess(BarApp_t *app);
@@ -72,10 +76,11 @@ void BarWsPrintStartupInfo(const BarApp_t *app);
 void BarWsConfigureWebOnlyInput(BarApp_t *app);
 
 /* Event/error broadcasting */
-bool BarWsIsUnicastRequest(void);
 void BarWsEmitError(BarApp_t *app, const char *event, const char *msg);
 void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
                        const char *extra);
+void BarWsEmitErrorTo(BarApp_t *app, BarWsConnId_t requester,
+                      const char *event, const char *msg);
 void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason);
 
 /* UI info printing */

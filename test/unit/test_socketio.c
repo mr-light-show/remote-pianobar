@@ -37,6 +37,8 @@ THE SOFTWARE.
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/core/queue.h"
 #include "../../src/websocket/protocol/socketio.h"
+#include "test_ws_capture.h"
+#include <math.h>
 
 /* Mock broadcast callback for testing emissions */
 static char *lastBroadcastMessage = NULL;
@@ -58,9 +60,11 @@ static void clearBroadcastMock() {
 
 /* Test: Socket.IO emit with event name only */
 START_TEST(test_socketio_emit_event_only) {
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
-	BarSocketIoEmit("test_event", NULL);
+	BarSocketIoEmit(&app, BAR_WS_DEST_BROADCAST, "test_event", NULL);
 	
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
 	/* json-c adds spaces: "2[ "test_event" ]" */
@@ -68,17 +72,20 @@ START_TEST(test_socketio_emit_event_only) {
 	ck_assert(strstr(lastBroadcastMessage, "test_event") != NULL);
 	
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
 /* Test: Socket.IO emit with event and data */
 START_TEST(test_socketio_emit_with_data) {
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	BarApp_t app;
+	memset(&app, 0, sizeof(app));
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
 	json_object *data = json_object_new_object();
 	json_object_object_add(data, "key", json_object_new_string("value"));
 	
-	BarSocketIoEmit("test_event", data);
+	BarSocketIoEmit(&app, BAR_WS_DEST_BROADCAST, "test_event", data);
 	json_object_put(data);
 	
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
@@ -88,6 +95,7 @@ START_TEST(test_socketio_emit_with_data) {
 	ck_assert(strstr(lastBroadcastMessage, "value") != NULL);
 	
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -96,7 +104,7 @@ START_TEST(test_socketio_emit_stop) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
 	BarSocketIoEmitStop(&app);
 	
@@ -105,6 +113,7 @@ START_TEST(test_socketio_emit_stop) {
 	ck_assert(strstr(lastBroadcastMessage, "stop") != NULL);
 	
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -113,7 +122,7 @@ START_TEST(test_socketio_emit_progress) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
 	BarSocketIoEmitProgress(&app, 60, 180);
 	
@@ -128,6 +137,7 @@ START_TEST(test_socketio_emit_progress) {
 	ck_assert(strstr(lastBroadcastMessage, "33.") != NULL);
 	
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -136,7 +146,7 @@ START_TEST(test_socketio_emit_volume) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
 	BarSocketIoEmitVolume(&app, 75);
 	
@@ -146,6 +156,7 @@ START_TEST(test_socketio_emit_volume) {
 	ck_assert(strstr(lastBroadcastMessage, "75") != NULL);
 	
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -165,10 +176,10 @@ START_TEST(test_socketio_translate_playback_commands) {
 	
 	/* Test playback.next - commands now execute directly via BarUiDispatchById */
 	/* Just verify it doesn't crash */
-	BarSocketIoHandleAction(&app, "playback.next", NULL, NULL);
+	BarSocketIoHandleAction(&app, "playback.next", NULL, BAR_WS_DEST_BROADCAST);
 	
 	/* Test playback.toggle */
-	BarSocketIoHandleAction(&app, "playback.toggle", NULL, NULL);
+	BarSocketIoHandleAction(&app, "playback.toggle", NULL, BAR_WS_DEST_BROADCAST);
 	
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarUiPianoHttpMutexDestroy(&app);
@@ -192,13 +203,13 @@ START_TEST(test_socketio_translate_song_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test song.love - commands now execute directly via BarUiDispatchById */
-	BarSocketIoHandleAction(&app, "song.love", NULL, NULL);
+	BarSocketIoHandleAction(&app, "song.love", NULL, BAR_WS_DEST_BROADCAST);
 	
 	/* Test song.ban */
-	BarSocketIoHandleAction(&app, "song.ban", NULL, NULL);
+	BarSocketIoHandleAction(&app, "song.ban", NULL, BAR_WS_DEST_BROADCAST);
 	
 	/* Test song.tired */
-	BarSocketIoHandleAction(&app, "song.tired", NULL, NULL);
+	BarSocketIoHandleAction(&app, "song.tired", NULL, BAR_WS_DEST_BROADCAST);
 	
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarUiPianoHttpMutexDestroy(&app);
@@ -228,10 +239,10 @@ START_TEST(test_socketio_translate_volume_commands) {
 	app.wsContext = &ctx;
 	
 	/* Test volume.up - commands now execute directly via BarUiDispatchById */
-	BarSocketIoHandleAction(&app, "volume.up", NULL, NULL);
+	BarSocketIoHandleAction(&app, "volume.up", NULL, BAR_WS_DEST_BROADCAST);
 	
 	/* Test volume.down */
-	BarSocketIoHandleAction(&app, "volume.down", NULL, NULL);
+	BarSocketIoHandleAction(&app, "volume.down", NULL, BAR_WS_DEST_BROADCAST);
 	
 	pthread_cond_destroy (&app.player.audioCond);
 	pthread_mutex_destroy(&app.player.lock);
@@ -255,7 +266,7 @@ START_TEST(test_socketio_reject_invalid_command) {
 	app.wsContext = &ctx;
 	
 	/* Test invalid command - should be silently ignored (not crash) */
-	BarSocketIoHandleAction(&app, "invalid.command", NULL, NULL);
+	BarSocketIoHandleAction(&app, "invalid.command", NULL, BAR_WS_DEST_BROADCAST);
 	
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarSettingsDestroy(&app.settings);
@@ -277,7 +288,7 @@ START_TEST(test_socketio_reject_single_letter) {
 	app.wsContext = &ctx;
 	
 	/* Test single-letter command - should be silently ignored (not crash) */
-	BarSocketIoHandleAction(&app, "n", NULL, NULL);
+	BarSocketIoHandleAction(&app, "n", NULL, BAR_WS_DEST_BROADCAST);
 	
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarSettingsDestroy(&app.settings);
@@ -306,11 +317,11 @@ START_TEST(test_socketio_handle_query) {
 	app.settings.uiMode = BAR_UI_MODE_CLI;  /* Skip mutex in tests */
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 	
 	/* Query should emit 'process' and 'stations' events */
-	BarSocketIoHandleQuery(&app, NULL);
+	BarSocketIoHandleQuery(&app, BAR_WS_DEST_BROADCAST);
 	
 	/* At least one message should be broadcast */
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
@@ -321,6 +332,7 @@ START_TEST(test_socketio_handle_query) {
 	BarSettingsDestroy(&app.settings);
 	
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -332,11 +344,11 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	pthread_rwlock_init(&app.stateRwlock, NULL);
 
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 
 	/* Socket.IO EVENT packet: 2["ping"] - client keepalive; server must not respond */
-	BarSocketIoHandleMessage(&app, "2[\"ping\"]", NULL);
+	BarSocketIoHandleMessage(&app, "2[\"ping\"]", BAR_WS_DEST_BROADCAST);
 
 	/* Ping is explicitly a no-op: no broadcast should be sent */
 	ck_assert_ptr_null(lastBroadcastMessage);
@@ -344,6 +356,7 @@ START_TEST(test_socketio_ping_keepalive_noop) {
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -359,10 +372,10 @@ START_TEST(test_socketio_handle_query_stations_event_emits_station_list) {
 	station.name = "Station One";
 	app.ph.stations = &station;
 
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 
-	BarSocketIoHandleMessage(&app, "2[\"query.stations\"]", NULL);
+	BarSocketIoHandleMessage(&app, "2[\"query.stations\"]", BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
 	ck_assert(strstr(lastBroadcastMessage, "\"stations\"") != NULL);
@@ -370,6 +383,7 @@ START_TEST(test_socketio_handle_query_stations_event_emits_station_list) {
 
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -382,10 +396,10 @@ START_TEST(test_socketio_handle_action_object_command_emits_not_implemented_erro
 	ck_assert(BarL10nInit(&app.l10n, &app.settings));
 	app.wsContext = &ctx;
 
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 
-	BarSocketIoHandleMessage(&app, "2[\"action\",{\"command\":\"app.settings\"}]", NULL);
+	BarSocketIoHandleMessage(&app, "2[\"action\",{\"command\":\"app.settings\"}]", BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
 	ck_assert(strstr(lastBroadcastMessage, "\"error\"") != NULL);
@@ -394,6 +408,7 @@ START_TEST(test_socketio_handle_action_object_command_emits_not_implemented_erro
 	BarL10nDestroy(&app.l10n);
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -403,10 +418,10 @@ START_TEST(test_socketio_handle_station_change_missing_station_reports_error) {
 	BarSettingsInit(&app.settings);
 	ck_assert(BarL10nInit(&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 
-	BarSocketIoHandleMessage(&app, "2[\"station.change\",{\"id\":\"missing-station\"}]", NULL);
+	BarSocketIoHandleMessage(&app, "2[\"station.change\",{\"id\":\"missing-station\"}]", BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
 	ck_assert(strstr(lastBroadcastMessage, "\"error\"") != NULL);
@@ -415,6 +430,7 @@ START_TEST(test_socketio_handle_station_change_missing_station_reports_error) {
 	BarL10nDestroy(&app.l10n);
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -424,21 +440,22 @@ START_TEST(test_socketio_dispatches_legacy_query_and_station_change_string) {
 	BarSettingsInit(&app.settings);
 	ck_assert(BarL10nInit(&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 
-	BarSocketIoHandleMessage(&app, "2[\"query.state\",{}]", NULL);
+	BarSocketIoHandleMessage(&app, "2[\"query.state\",{}]", BAR_WS_DEST_BROADCAST);
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
 	ck_assert(strstr(lastBroadcastMessage, "[") != NULL);
 
 	clearBroadcastMock();
-	BarSocketIoHandleMessage(&app, "2[\"changeStation\",\"missing-station\"]", NULL);
+	BarSocketIoHandleMessage(&app, "2[\"changeStation\",\"missing-station\"]", BAR_WS_DEST_BROADCAST);
 	ck_assert_ptr_nonnull(lastBroadcastMessage);
 	ck_assert(strstr(lastBroadcastMessage, "missing-station") != NULL);
 
 	BarL10nDestroy(&app.l10n);
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -464,7 +481,7 @@ START_TEST(test_socketio_table_dispatch_rejects_missing_payload_for_mutating_eve
 	for (size_t i = 0; i < sizeof(events) / sizeof(events[0]); i++) {
 		char frame[128];
 		snprintf(frame, sizeof(frame), "2[\"%s\"]", events[i]);
-		BarSocketIoHandleMessage(&app, frame, NULL);
+		BarSocketIoHandleMessage(&app, frame, BAR_WS_DEST_BROADCAST);
 	}
 
 	BarSettingsDestroy(&app.settings);
@@ -505,7 +522,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
 	pthread_rwlock_init(&app.stateRwlock, NULL);  /* Initialize mutex for safety */
 	
-	BarSocketIoSetBroadcastCallback(mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock();
 	
 	BarSocketIoEmitProcess(&app);
@@ -522,6 +539,7 @@ START_TEST(test_socketio_rating_emits_state) {
 	pthread_rwlock_destroy(&app.stateRwlock);
 	BarSettingsDestroy(&app.settings);
 	clearBroadcastMock();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -615,7 +633,7 @@ START_TEST (test_socketio_emit_stations_empty_when_list_missing) {
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	app.ph.stations = NULL;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitStations (&app);
@@ -626,6 +644,7 @@ START_TEST (test_socketio_emit_stations_empty_when_list_missing) {
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -636,7 +655,7 @@ START_TEST (test_socketio_emit_play_state_reports_paused_flag) {
 	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
 	app.player.doPause = true;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitPlayState (&app);
@@ -648,19 +667,23 @@ START_TEST (test_socketio_emit_play_state_reports_paused_flag) {
 	pthread_mutex_destroy (&app.player.lock);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
 START_TEST (test_socketio_emit_pandora_disconnected_includes_reason) {
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitPandoraDisconnected ("idle_timeout");
+	BarSocketIoEmitPandoraDisconnected (&app, "idle_timeout");
 
 	ck_assert_ptr_nonnull (lastBroadcastMessage);
 	ck_assert (strstr (lastBroadcastMessage, "idle_timeout") != NULL);
 
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -763,7 +786,7 @@ START_TEST (test_socketio_handle_set_quickmix_applies_before_save) {
 	second.useQuickMix = false;
 	app.ph.stations = &first;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_set_quickmix_ok);
 	data = json_object_new_array ();
@@ -782,6 +805,7 @@ START_TEST (test_socketio_handle_set_quickmix_applies_before_save) {
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -804,7 +828,7 @@ START_TEST (test_socketio_handle_set_quickmix_empty_clears_all) {
 	second.useQuickMix = true;
 	app.ph.stations = &first;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_set_quickmix_empty_ok);
 	data = json_object_new_array ();
@@ -823,6 +847,7 @@ START_TEST (test_socketio_handle_set_quickmix_empty_clears_all) {
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -845,7 +870,7 @@ START_TEST (test_socketio_handle_set_quickmix_rejects_too_many_ids) {
 	second.useQuickMix = false;
 	app.ph.stations = &first;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_set_quickmix_unexpected);
 	data = json_object_new_array ();
@@ -868,6 +893,7 @@ START_TEST (test_socketio_handle_set_quickmix_rejects_too_many_ids) {
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -890,7 +916,7 @@ START_TEST (test_socketio_handle_set_quickmix_skips_non_string_ids) {
 	second.useQuickMix = false;
 	app.ph.stations = &first;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_set_quickmix_ok);
 	data = json_object_new_array ();
@@ -908,6 +934,7 @@ START_TEST (test_socketio_handle_set_quickmix_skips_non_string_ids) {
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -930,7 +957,7 @@ START_TEST (test_socketio_volume_set_action_updates_player_volume) {
 	data = json_object_new_object ();
 	json_object_object_add (data, "volume", json_object_new_int (33));
 
-	BarSocketIoHandleAction (&app, "volume.set", data, NULL);
+	BarSocketIoHandleAction (&app, "volume.set", data, BAR_WS_DEST_BROADCAST);
 
 	ck_assert_int_eq (app.settings.volume, 33);
 	pthread_mutex_lock (&ctx.volumeBroadcastMutex);
@@ -960,7 +987,7 @@ START_TEST (test_socketio_volume_set_clamps_out_of_range) {
 
 	data = json_object_new_object ();
 	json_object_object_add (data, "volume", json_object_new_int (150));
-	BarSocketIoHandleAction (&app, "volume.set", data, NULL);
+	BarSocketIoHandleAction (&app, "volume.set", data, BAR_WS_DEST_BROADCAST);
 	ck_assert_int_eq (app.settings.volume, 100);
 
 	json_object_put (data);
@@ -1035,14 +1062,15 @@ START_TEST (test_socketio_unknown_action_emits_nothing) {
 	BarSettingsInit (&app.settings);
 	app.wsContext = &ctx;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoHandleAction (&app, "not.a.real.action", NULL, NULL);
+	BarSocketIoHandleAction (&app, "not.a.real.action", NULL, BAR_WS_DEST_BROADCAST);
 	ck_assert_ptr_null (lastBroadcastMessage);
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1083,7 +1111,7 @@ START_TEST (test_socketio_emit_process_includes_accounts) {
 	app.settings.accounts[1].label = strdup ("Beta");
 	app.settings.activeAccountIndex = 1;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitProcess (&app);
@@ -1100,6 +1128,7 @@ START_TEST (test_socketio_emit_process_includes_accounts) {
 	BarSettingsDestroy (&app.settings);
 	pthread_mutex_destroy (&app.player.lock);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1125,12 +1154,12 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 
 	BarUiPianoHttpMutexInit (&app);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	json_object *data = json_object_new_object ();
 	json_object_object_add (data, "account_id", json_object_new_string ("ghost"));
-	BarSocketIoHandleAction (&app, "app.pandora-reconnect", data, NULL);
+	BarSocketIoHandleAction (&app, "app.pandora-reconnect", data, BAR_WS_DEST_BROADCAST);
 	json_object_put (data);
 
 	ck_assert_uint_eq (app.settings.activeAccountIndex, 0);
@@ -1142,6 +1171,7 @@ START_TEST (test_socketio_pandora_reconnect_unknown_account) {
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1152,7 +1182,7 @@ START_TEST (test_socketio_emit_error_ex_with_station_id) {
 	BarSettingsInit (&app.settings);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitErrorEx (&app, "station.rename", "Network error", "station-42");
@@ -1165,6 +1195,7 @@ START_TEST (test_socketio_emit_error_ex_with_station_id) {
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1175,7 +1206,7 @@ START_TEST (test_socketio_emit_error_ex_null_message) {
 	BarSettingsInit (&app.settings);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitErrorEx (&app, "op", NULL, "sid");
@@ -1185,21 +1216,17 @@ START_TEST (test_socketio_emit_error_ex_null_message) {
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
-/* app NULL: l10n NULL, still emits friendly error JSON */
+/* app NULL: no server to send through; must not crash or leak */
 START_TEST (test_socketio_emit_error_ex_null_app) {
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitErrorEx (NULL, "music.search", "Network error", NULL);
 
-	ck_assert_ptr_nonnull (lastBroadcastMessage);
-	ck_assert (strstr (lastBroadcastMessage, "error") != NULL);
-	ck_assert (strstr (lastBroadcastMessage, "operation") != NULL);
-
-	clearBroadcastMock ();
+	ck_assert_ptr_null (lastBroadcastMessage);
 }
 END_TEST
 
@@ -1210,7 +1237,7 @@ START_TEST (test_socketio_emit_error_ex_empty_station_id) {
 	BarSettingsInit (&app.settings);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitErrorEx (&app, "station.change", "Station not found", "");
@@ -1222,6 +1249,7 @@ START_TEST (test_socketio_emit_error_ex_empty_station_id) {
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1232,7 +1260,7 @@ START_TEST (test_socketio_emit_error_wrapper) {
 	BarSettingsInit (&app.settings);
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitError (&app, "playback.play", "Not connected to Pandora");
@@ -1244,6 +1272,7 @@ START_TEST (test_socketio_emit_error_wrapper) {
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1262,11 +1291,11 @@ START_TEST (test_socketio_unimplemented_actions_emit_error)
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
 	app.wsContext = &ctx;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 
 	for (size_t i = 0; unimplemented[i] != NULL; i++) {
 		clearBroadcastMock ();
-		BarSocketIoHandleAction (&app, unimplemented[i], NULL, NULL);
+		BarSocketIoHandleAction (&app, unimplemented[i], NULL, BAR_WS_DEST_BROADCAST);
 		ck_assert_msg (lastBroadcastMessage != NULL,
 		               "Expected error broadcast for action '%s'", unimplemented[i]);
 		ck_assert_msg (strstr (lastBroadcastMessage, "\"error\"") != NULL,
@@ -1278,6 +1307,7 @@ START_TEST (test_socketio_unimplemented_actions_emit_error)
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1304,10 +1334,10 @@ START_TEST (test_socketio_emit_explanation_includes_text)
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitExplanation (&app, "Because you liked jazz.");
+	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], "Because you liked jazz.");
 
 	ck_assert_ptr_nonnull (lastBroadcastMessage);
 	ck_assert (strstr (lastBroadcastMessage, "song.explanation") != NULL);
@@ -1315,19 +1345,23 @@ START_TEST (test_socketio_emit_explanation_includes_text)
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
 START_TEST (test_socketio_emit_explanation_null_args_noop)
 {
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitExplanation (NULL, "ignored");
-	BarSocketIoEmitExplanation ((BarApp_t *) 1, NULL);
+	BarSocketIoEmitExplanationTo (NULL, test_ws_cap.ids[0], "ignored");
+	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], NULL);
 
 	ck_assert_ptr_null (lastBroadcastMessage);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1353,10 +1387,10 @@ START_TEST (test_socketio_emit_upcoming_lists_songs)
 	station.name = "Station One";
 	app.ph.stations = &station;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitUpcoming (&app, &first, 5);
+	BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], &first, 5);
 
 	ck_assert_ptr_nonnull (lastBroadcastMessage);
 	ck_assert (strstr (lastBroadcastMessage, "query.upcoming.result") != NULL);
@@ -1365,6 +1399,7 @@ START_TEST (test_socketio_emit_upcoming_lists_songs)
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1383,7 +1418,7 @@ START_TEST (test_socketio_emit_genres_from_cached_categories)
 	category.genres = &genre;
 	app.ph.genreStations = &category;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoEmitGenres (&app);
@@ -1394,6 +1429,7 @@ START_TEST (test_socketio_emit_genres_from_cached_categories)
 
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1414,7 +1450,7 @@ START_TEST (test_socketio_handle_get_genres_emits_cached_payload)
 	category.genres = &genre;
 	app.ph.genreStations = &category;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoHandleGetGenres (&app);
@@ -1426,6 +1462,7 @@ START_TEST (test_socketio_handle_get_genres_emits_cached_payload)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1452,7 +1489,7 @@ START_TEST (test_socketio_handle_get_genres_auth_failure_notifies_disconnect)
 	app.ph.genreStations = NULL;
 
 	BarUiPianoCallSetTestHook (mock_genre_fetch_auth_fail);
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoHandleGetGenres (&app);
@@ -1464,6 +1501,7 @@ START_TEST (test_socketio_handle_get_genres_auth_failure_notifies_disconnect)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1483,10 +1521,10 @@ START_TEST (test_socketio_handle_message_station_get_genres_event)
 	category.genres = &genre;
 	app.ph.genreStations = &category;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoHandleMessage (&app, "2[\"station.getGenres\"]", NULL);
+	BarSocketIoHandleMessage (&app, "2[\"station.getGenres\"]", BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull (lastBroadcastMessage);
 	ck_assert (strstr (lastBroadcastMessage, "genres") != NULL);
@@ -1494,15 +1532,15 @@ START_TEST (test_socketio_handle_message_station_get_genres_event)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
-START_TEST (test_socketio_emit_process_unicast_targets_client)
+START_TEST (test_socketio_emit_process_to_targets_client)
 {
 	BarApp_t app;
 	PianoSong_t song;
 	PianoStation_t station;
-	void *fake_wsi = (void *) 0xdeadbeef;
 	memset (&app, 0, sizeof (app));
 	memset (&song, 0, sizeof (song));
 	memset (&station, 0, sizeof (station));
@@ -1518,17 +1556,20 @@ START_TEST (test_socketio_emit_process_unicast_targets_client)
 	app.ph.stations = &station;
 	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 2, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitProcessUnicast (&app, fake_wsi);
+	BarSocketIoEmitProcessTo (&app, test_ws_cap.ids[1]);
 	ck_assert_ptr_nonnull (lastBroadcastMessage);
 	ck_assert (strstr (lastBroadcastMessage, "process") != NULL);
-	ck_assert_ptr_null (BarSocketIoGetUnicastTarget ());
+	ck_assert (strstr (lastBroadcastMessage, "Unicast Song") != NULL);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 1);
 
 	pthread_mutex_destroy (&app.player.lock);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1539,7 +1580,7 @@ START_TEST (test_socketio_handle_add_genre_missing_music_id)
 	BarSettingsInit (&app.settings);
 	BarUiPianoHttpMutexInit (&app);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
 	BarSocketIoHandleAddGenre (&app, json_object_new_object ());
@@ -1549,6 +1590,7 @@ START_TEST (test_socketio_handle_add_genre_missing_music_id)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	clearBroadcastMock ();
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1568,7 +1610,7 @@ START_TEST (test_socketio_volume_set_system_mode)
 
 	data = json_object_new_object ();
 	json_object_object_add (data, "volume", json_object_new_int (42));
-	BarSocketIoHandleAction (&app, "volume.set", data, NULL);
+	BarSocketIoHandleAction (&app, "volume.set", data, BAR_WS_DEST_BROADCAST);
 
 	pthread_mutex_lock (&ctx.volumeBroadcastMutex);
 	ck_assert (ctx.delayedVolumeBroadcast.pending);
@@ -1616,7 +1658,7 @@ START_TEST (test_socketio_handle_rename_station_success)
 	app.ph.stations = &station;
 	app.wsContext = &ctx;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_rename_station);
 	data = json_object_new_object ();
@@ -1633,6 +1675,7 @@ START_TEST (test_socketio_handle_rename_station_success)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1713,7 +1756,7 @@ START_TEST (test_socketio_handle_delete_station_success)
 	app.ph.stations = &station;
 	BarStateSetCurrentStation (&app, &station);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_delete_station);
 	data = json_object_new_object ();
@@ -1728,6 +1771,7 @@ START_TEST (test_socketio_handle_delete_station_success)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1736,12 +1780,13 @@ START_TEST (test_socketio_handle_add_music_missing_fields_noop)
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarSocketIoHandleAddMusic (&app, json_object_new_object ());
 	ck_assert_ptr_null (lastBroadcastMessage);
 	clearBroadcastMock ();
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1775,7 +1820,7 @@ START_TEST (test_socketio_handle_add_shared_station_success)
 	BarStateInit (&app);
 	BarUiPianoHttpMutexInit (&app);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_create_station_ok);
 	data = json_object_new_object ();
@@ -1793,6 +1838,7 @@ START_TEST (test_socketio_handle_add_shared_station_success)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1802,7 +1848,7 @@ START_TEST (test_socketio_handle_add_shared_rejects_non_digit_station_id)
 	json_object *data;
 	memset (&app, 0, sizeof (app));
 	BarSettingsInit (&app.settings);
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	data = json_object_new_object ();
 	json_object_object_add (data, "stationId", json_object_new_string ("abc"));
@@ -1811,6 +1857,7 @@ START_TEST (test_socketio_handle_add_shared_rejects_non_digit_station_id)
 	ck_assert_ptr_null (lastBroadcastMessage);
 	clearBroadcastMock ();
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1830,7 +1877,7 @@ START_TEST (test_socketio_handle_create_station_from_song)
 	BarStateInit (&app);
 	BarUiPianoHttpMutexInit (&app);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_create_station_ok);
 	data = json_object_new_object ();
@@ -1848,6 +1895,7 @@ START_TEST (test_socketio_handle_create_station_from_song)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1887,7 +1935,7 @@ START_TEST (test_socketio_handle_get_station_modes_success)
 	station.name = "Station";
 	app.ph.stations = &station;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_get_station_modes_ok);
 	data = json_object_new_object ();
@@ -1902,6 +1950,7 @@ START_TEST (test_socketio_handle_get_station_modes_success)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -1918,7 +1967,7 @@ START_TEST (test_socketio_handle_get_station_modes_skips_quickmix)
 	station.isQuickMix = true;
 	app.ph.stations = &station;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	data = json_object_new_object ();
 	json_object_object_add (data, "stationId", json_object_new_string ("QM"));
@@ -1928,6 +1977,7 @@ START_TEST (test_socketio_handle_get_station_modes_skips_quickmix)
 	clearBroadcastMock ();
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -2004,7 +2054,7 @@ START_TEST (test_socketio_handle_get_station_info_success)
 	station.id = "S1";
 	app.ph.stations = &station;
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_get_station_info_ok);
 	data = json_object_new_object ();
@@ -2019,6 +2069,7 @@ START_TEST (test_socketio_handle_get_station_info_success)
 	BarUiPianoHttpMutexDestroy (&app);
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
 }
 END_TEST
 
@@ -2049,7 +2100,7 @@ START_TEST (test_socketio_handle_search_music_success)
 	BarSettingsInit (&app.settings);
 	BarUiPianoHttpMutexInit (&app);
 
-	BarSocketIoSetBroadcastCallback (mockBroadcastCallback);
+	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 	BarUiPianoCallSetTestHook (mock_search_music_ok);
 	data = json_object_new_object ();
@@ -2063,6 +2114,314 @@ START_TEST (test_socketio_handle_search_music_success)
 	clearBroadcastMock ();
 	BarUiPianoHttpMutexDestroy (&app);
 	BarSettingsDestroy (&app.settings);
+	TestWsCaptureDetach (&app);
+}
+END_TEST
+
+/* --- Destination capture: two fake clients, every delivered frame recorded --- */
+
+/* Captured frame `i` went to `client` and carries `event`. */
+static void assert_frame (size_t i, int client, const char *event) {
+	ck_assert_uint_lt (i, test_ws_cap.frameCount);
+	ck_assert_int_eq (test_ws_cap.frameClient[i], client);
+	ck_assert_int_eq (test_ws_cap.frames[i][0], '2');
+	json_object *arr = json_tokener_parse (test_ws_cap.frames[i] + 1);
+	ck_assert_ptr_nonnull (arr);
+	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (arr, 0)), event);
+	json_object_put (arr);
+}
+
+/* Payload (second array element) of captured frame `i`; caller puts it. */
+static json_object *frame_payload (size_t i) {
+	json_object *arr = json_tokener_parse (test_ws_cap.frames[i] + 1);
+	ck_assert_ptr_nonnull (arr);
+	json_object *payload = json_object_get (json_object_array_get_idx (arr, 1));
+	json_object_put (arr);
+	return payload;
+}
+
+/* Broadcast frame `event` reached exactly clients 0 and 1, once each. */
+static void assert_broadcast_frame (const char *event) {
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	assert_frame (0, 0, event);
+	assert_frame (1, 1, event);
+	ck_assert_str_eq (test_ws_cap.frames[0], test_ws_cap.frames[1]);
+}
+
+static void capture_app_init (BarApp_t *app, PianoStation_t *station, PianoSong_t *song) {
+	memset (app, 0, sizeof (*app));
+	memset (station, 0, sizeof (*station));
+	memset (song, 0, sizeof (*song));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_WEB;
+	app->settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	BarStateInit (app);
+	ck_assert_int_eq (pthread_mutex_init (&app->player.lock, NULL), 0);
+	station->id = "S1";
+	station->name = "Station One";
+	song->title = "Song One";
+	song->artist = "Artist One";
+	song->stationId = station->id;
+	app->ph.stations = station;
+	BarStateSetCurrentStation (app, station);
+	TestWsCaptureAttach (app, 2, NULL);
+}
+
+static void capture_app_destroy (BarApp_t *app) {
+	TestWsCaptureDetach (app);
+	pthread_mutex_destroy (&app->player.lock);
+	BarStateDestroy (app);
+	BarSettingsDestroy (&app->settings);
+}
+
+START_TEST (test_query_process_reaches_only_requester) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarStateSetPlaylist (&app, &song);
+
+	BarSocketIoHandleQuery (&app, test_ws_cap.ids[1]);
+
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	assert_frame (0, 1, "process");
+	assert_frame (1, 1, "stations");
+	ck_assert_uint_eq (TestWsCaptureCount (0, ""), 0);
+	json_object *process = frame_payload (0);
+	json_object *songObj, *title;
+	ck_assert (json_object_object_get_ex (process, "song", &songObj));
+	ck_assert (json_object_object_get_ex (songObj, "title", &title));
+	ck_assert_str_eq (json_object_get_string (title), "Song One");
+	json_object_put (process);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_query_message_routes_reply_to_sender) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	/* Socket.IO CONNECT and the query event both reply to the sender only */
+	BarSocketIoHandleMessage (&app, "0", test_ws_cap.ids[0]);
+	BarSocketIoHandleMessage (&app, "2[\"query\"]", test_ws_cap.ids[0]);
+
+	ck_assert_uint_eq (test_ws_cap.frameCount, 4);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "process"), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "stations"), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (1, ""), 0);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_state_broadcast_reaches_both_clients) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitProcess (&app);
+	assert_broadcast_frame ("process");
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_playback_start_stop_broadcast) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarStateSetPlaylist (&app, &song);
+
+	BarSocketIoEmitStart (&app);
+	assert_broadcast_frame ("start");
+	json_object *start = frame_payload (0);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (start, "title", &field));
+	ck_assert_str_eq (json_object_get_string (field), "Song One");
+	ck_assert (json_object_object_get_ex (start, "stationId", &field));
+	ck_assert_str_eq (json_object_get_string (field), "S1");
+	json_object_put (start);
+
+	TestWsCaptureClear ();
+	BarSocketIoEmitStop (&app);
+	assert_broadcast_frame ("stop");
+	ck_assert_ptr_null (frame_payload (0));
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_progress_broadcast) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitProgress (&app, 30, 120);
+	assert_broadcast_frame ("progress");
+	json_object *p = frame_payload (0);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (p, "elapsed", &field));
+	ck_assert_int_eq (json_object_get_int (field), 30);
+	ck_assert (json_object_object_get_ex (p, "duration", &field));
+	ck_assert_int_eq (json_object_get_int (field), 120);
+	ck_assert (json_object_object_get_ex (p, "percentage", &field));
+	ck_assert (fabs (json_object_get_double (field) - 25.0) < 0.001);
+	json_object_put (p);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_volume_broadcast) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitVolume (&app, 64);
+	assert_broadcast_frame ("volume");
+	json_object *v = frame_payload (0);
+	ck_assert (json_object_is_type (v, json_type_int));
+	ck_assert_int_eq (json_object_get_int (v), 64);
+	json_object_put (v);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_stations_broadcast) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitStations (&app);
+	assert_broadcast_frame ("stations");
+	json_object *list = frame_payload (0);
+	ck_assert_int_eq (json_object_array_length (list), 1);
+	json_object *id;
+	ck_assert (json_object_object_get_ex (json_object_array_get_idx (list, 0), "id", &id));
+	ck_assert_str_eq (json_object_get_string (id), "S1");
+	json_object_put (list);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_error_broadcast_and_to_requester) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitErrorEx (&app, "station.change", "Station not found", "S9");
+	assert_broadcast_frame ("error");
+	json_object *e = frame_payload (0);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (e, "operation", &field));
+	ck_assert_str_eq (json_object_get_string (field), "station.change");
+	ck_assert (json_object_object_get_ex (e, "stationId", &field));
+	ck_assert_str_eq (json_object_get_string (field), "S9");
+	json_object_put (e);
+
+	TestWsCaptureClear ();
+	BarSocketIoEmitErrorTo (&app, test_ws_cap.ids[1], "query.upcoming", "No songs in queue");
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	assert_frame (0, 1, "error");
+	e = frame_payload (0);
+	ck_assert (json_object_object_get_ex (e, "operation", &field));
+	ck_assert_str_eq (json_object_get_string (field), "query.upcoming");
+	json_object_put (e);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_pandora_disconnected_broadcast) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitPandoraDisconnected (&app, "connection_lost");
+	assert_broadcast_frame ("pandora.disconnected");
+	json_object *d = frame_payload (0);
+	json_object *reason;
+	ck_assert (json_object_object_get_ex (d, "reason", &reason));
+	ck_assert_str_eq (json_object_get_string (reason), "connection_lost");
+	json_object_put (d);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_capture_explanation_and_upcoming_to_requester) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], "Because jazz.");
+	BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], &song, 5);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	assert_frame (0, 0, "song.explanation");
+	assert_frame (1, 0, "query.upcoming.result");
+	ck_assert (strstr (test_ws_cap.frames[0], "Because jazz.") != NULL);
+	ck_assert (strstr (test_ws_cap.frames[1], "Song One") != NULL);
+
+	/* A requester that has gone away gets nothing, and nobody else does */
+	TestWsCaptureClear ();
+	BarSocketIoEmitProcessTo (&app, test_ws_cap.ids[1] + 100);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+static bool mockExplainText (BarApp_t *app, const PianoRequestType_t type, void *data,
+		PianoReturn_t *pRet, CURLcode *wRet) {
+	(void) app;
+	if (type == PIANO_REQUEST_EXPLAIN) {
+		((PianoRequestDataExplain_t *) data)->retExplain = strdup ("Because routing.");
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_OK;
+		return true;
+	}
+	return false;
+}
+
+START_TEST (test_action_query_replies_reach_only_requester) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	BarStateSetPlaylist (&app, &song);
+	app.ph.user.listenerId = "listener";
+
+	BarUiPianoCallSetTestHook (mockExplainText);
+	BarSocketIoHandleAction (&app, "song.explain", NULL, test_ws_cap.ids[1]);
+	BarUiPianoCallClearTestHook ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	assert_frame (0, 1, "song.explanation");
+	ck_assert (strstr (test_ws_cap.frames[0], "Because routing.") != NULL);
+
+	/* Only one song queued: the "no songs" error goes to the requester only */
+	TestWsCaptureClear ();
+	BarSocketIoHandleAction (&app, "query.upcoming", NULL, test_ws_cap.ids[0]);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	assert_frame (0, 0, "error");
+	ck_assert (strstr (test_ws_cap.frames[0], "query.upcoming") != NULL);
+
+	app.ph.user.listenerId = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
 }
 END_TEST
 
@@ -2154,9 +2513,23 @@ Suite *socketio_suite(void) {
 	tcase_add_test (tc_extra, test_socketio_handle_get_genres_emits_cached_payload);
 	tcase_add_test (tc_extra, test_socketio_handle_get_genres_auth_failure_notifies_disconnect);
 	tcase_add_test (tc_extra, test_socketio_handle_message_station_get_genres_event);
-	tcase_add_test (tc_extra, test_socketio_emit_process_unicast_targets_client);
+	tcase_add_test (tc_extra, test_socketio_emit_process_to_targets_client);
 	tcase_add_test (tc_extra, test_socketio_handle_add_genre_missing_music_id);
 	suite_add_tcase (s, tc_extra);
+
+	TCase *tc_dest = tcase_create ("Destinations");
+	tcase_add_test (tc_dest, test_query_process_reaches_only_requester);
+	tcase_add_test (tc_dest, test_query_message_routes_reply_to_sender);
+	tcase_add_test (tc_dest, test_state_broadcast_reaches_both_clients);
+	tcase_add_test (tc_dest, test_capture_playback_start_stop_broadcast);
+	tcase_add_test (tc_dest, test_capture_progress_broadcast);
+	tcase_add_test (tc_dest, test_capture_volume_broadcast);
+	tcase_add_test (tc_dest, test_capture_stations_broadcast);
+	tcase_add_test (tc_dest, test_capture_error_broadcast_and_to_requester);
+	tcase_add_test (tc_dest, test_capture_pandora_disconnected_broadcast);
+	tcase_add_test (tc_dest, test_capture_explanation_and_upcoming_to_requester);
+	tcase_add_test (tc_dest, test_action_query_replies_reach_only_requester);
+	suite_add_tcase (s, tc_dest);
 	
 	return s;
 }

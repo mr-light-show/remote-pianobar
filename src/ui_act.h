@@ -29,6 +29,7 @@ THE SOFTWARE.
 
 #include "main.h"
 #include "ui_dispatch.h"
+#include "websocket/core/queue.h"
 
 #define BarUiActCallback(name) void name (BarApp_t *app, \
 		PianoStation_t *selStation, PianoSong_t *selSong, \
@@ -65,6 +66,14 @@ BarUiActCallback(BarUiActManageStation);
 BarUiActCallback(BarUiActVolReset);
 BarUiActCallback(BarUiActSettings);
 BarUiActCallback(BarUiActPandoraReconnect);
+
+/* Web-request variants of query actions: the reply goes to the client
+ * `requester` only. The terminal callbacks above (BarUiActExplain,
+ * BarUiActPrintUpcoming) print instead and never send a web reply. */
+void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
+		PianoSong_t *selSong, BarWsConnId_t requester);
+void BarUiActPrintUpcomingTo (BarApp_t *app, const PianoStation_t *selStation,
+		PianoSong_t *selSong, BarWsConnId_t requester);
 
 /* Switch to a station programmatically (for WebSocket use) */
 void BarUiSwitchStation (BarApp_t * const app, PianoStation_t * const station);
