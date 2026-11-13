@@ -52,6 +52,8 @@ void BarUiActExplainTo (BarApp_t *app, const PianoStation_t *selStation,
 void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester);
 void BarUiActManageStation (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
+void BarUiActCreateStationFromSong (BarApp_t *app, PianoStation_t *selStation,
+		PianoSong_t *selSong, int context);
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
 		PianoSong_t *selSong, int context);
 void BarUiActPause (BarApp_t *app, PianoStation_t *selStation,
@@ -2736,6 +2738,124 @@ START_TEST (test_ui_act_manage_station_gone_after_eventcmd_stops)
 }
 END_TEST
 
+/* History picks parse the number like before (strtoul base 0: "010" is 8).
+ * Only song 8's station exists, so the follow-up prompt reads the rest of
+ * the input only when song 8 was picked. */
+START_TEST (test_ui_act_history_pick_parses_number_like_before)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t songs[11];
+	char tokens[11][8];
+	int pipefd[2];
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (songs, 0, sizeof (songs));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	BarStateInit (&app);
+	station.id = "real";
+	station.name = "Real";
+	app.ph.stations = &station;
+	for (size_t i = 0; i < 11; i++) {
+		snprintf (tokens[i], sizeof (tokens[i]), "t%zu", i);
+		songs[i].trackToken = tokens[i];
+		songs[i].title = "Song";
+		songs[i].artist = "Artist";
+		songs[i].stationId = i == 8 ? "real" : "gone";
+		if (i > 0) {
+			songs[i - 1].head.next = &songs[i].head;
+		}
+	}
+	app.songHistory = &songs[0];
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_input_from_fd (&app.input, pipefd[0]);
+	rl_write_input (pipefd[1], "010\nZ");
+	BarUiActHistory (&app, NULL, NULL, 1);
+
+	/* The one-key action prompt consumed "Z": nothing is left */
+	char rest[8];
+	ck_assert_int_eq (read (pipefd[0], rest, sizeof (rest)), 0);
+	close (pipefd[0]);
+
+	app.songHistory = NULL;
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static unsigned g_createFromSongCalls;
+
+static bool
+mock_create_from_song_records (BarApp_t *app, const PianoRequestType_t type,
+                               void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	if (type == PIANO_REQUEST_CREATE_STATION) {
+		g_createFromSongCalls++;
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+/* Runs create-from-song with `input` for a song that is no longer queued;
+ * returns whether the "no longer available" message was printed */
+static bool run_create_from_gone_song (const char *input) {
+	BarApp_t app;
+	PianoSong_t song;
+	int pipefd[2];
+	char out[4096];
+	memset (&app, 0, sizeof (app));
+	memset (&song, 0, sizeof (song));
+	read_default_settings (&app.settings);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	BarStateInit (&app);
+	song.trackToken = "gone-token";
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_input_from_fd (&app.input, pipefd[0]);
+	rl_write_input (pipefd[1], input);
+
+	FILE *capture = tmpfile ();
+	ck_assert_ptr_nonnull (capture);
+	fflush (stdout);
+	const int savedStdout = dup (STDOUT_FILENO);
+	ck_assert_int_ne (savedStdout, -1);
+	ck_assert_int_ne (dup2 (fileno (capture), STDOUT_FILENO), -1);
+	BarUiPianoCallSetTestHook (mock_create_from_song_records);
+	BarUiActCreateStationFromSong (&app, NULL, &song, 1);
+	BarUiPianoCallClearTestHook ();
+	fflush (stdout);
+	ck_assert_int_ne (dup2 (savedStdout, STDOUT_FILENO), -1);
+	close (savedStdout);
+	rewind (capture);
+	const size_t n = fread (out, 1, sizeof (out) - 1, capture);
+	out[n] = '\0';
+	fclose (capture);
+	close (pipefd[0]);
+
+	const bool printed = strstr (out, BarL10nGet (&app.l10n, "cli.song_gone")) != NULL;
+	BarStateDestroy (&app);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+	return printed;
+}
+
+/* Aborting (neither s nor a) is not reported as a vanished song; choosing a
+ * type for a vanished song is, and no station is created */
+START_TEST (test_ui_act_create_from_song_gone_only_reported_on_choice)
+{
+	g_createFromSongCalls = 0;
+	ck_assert (!run_create_from_gone_song ("\n"));
+	ck_assert (run_create_from_gone_song ("s\n"));
+	ck_assert_uint_eq (g_createFromSongCalls, 0);
+}
+END_TEST
+
 static bool
 mock_bookmark_song_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
                        PianoReturn_t *pRet, CURLcode *wRet)
@@ -2928,6 +3048,8 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_delete_station_releases_hold_during_prompt);
 	tcase_add_test (tc, test_ui_act_delete_station_gone_after_prompt_skips_call);
 	tcase_add_test (tc, test_ui_act_manage_station_gone_after_eventcmd_stops);
+	tcase_add_test (tc, test_ui_act_history_pick_parses_number_like_before);
+	tcase_add_test (tc, test_ui_act_create_from_song_gone_only_reported_on_choice);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
 	tcase_add_test (tc, test_ui_act_bookmark_artist);
 	tcase_add_test (tc, test_ui_act_settings_change_username);

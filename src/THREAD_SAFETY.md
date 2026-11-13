@@ -712,7 +712,9 @@ The mutex is never held across waits for the playback manager: teardown (disconn
 ### Known limits
 
 - **Interactive actions over WebSocket (C1).** The `action` commands above that map to interactive CLI callbacks prompt on the terminal and wait for input. In Both mode the executing thread (today the service thread, after PR3 the worker) blocks until the user answers. With stdin closed (daemon) it can block indefinitely. It holds no lock while waiting, but it stalls every queued command. The web UI uses the dedicated events instead. The protocol is unchanged here by decision.
-- eventcmd and the Pandora call in song actions run under `pianoHttpMutex`, so a slow eventcmd script delays other Pandora traffic.
+- eventcmd's input is formatted under the caller's hold. The write to the script and the wait for it run with the thread's holds released (`BarUiStartEventCmd` suspends and restores them), so a slow script delays only its own thread. Callers resolve stations/songs again afterwards (`BarUiActEventcmd`).
+- The playback manager now contends with in-flight Pandora HTTP at song boundaries: advancing, history trims, drains and the song-start/finish sections take `pianoHttpMutex`, so they wait for a WebSocket or CLI Pandora call that is already running.
+- `BarStateAdvancePlaylist` writes `finished->head.next = NULL` under `stateRwlock` only. The song stays alive (it moves to the history), so there is no lifetime issue (no song is freed without the mutex), but eventcmd's next-song walk, which runs under `pianoHttpMutex` alone, races benignly on that link, and TSan would flag it.
 - The player thread borrows `player.url` (the playlist head's `audioUrl`) until `avformat_open_input`. Teardown drains the playlist before stopping the player, so a drain in that window frees the URL. This is outside the handlers and not covered by the mutex.
 - `station_sort.c` passes the sort order to `qsort` through a global, so concurrent sorts on two threads can use each other's order. That is a data race on display order, not on pointer lifetime.
 
