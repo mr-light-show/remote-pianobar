@@ -585,8 +585,7 @@ BarUiActCallback(BarUiActSelectStation) {
 			"Select station: ", NULL, app->settings.autoselect);
 	if (newStation != NULL) {
 		/* Clear saved station - user made explicit choice */
-		free(app->lastStationId);
-		app->lastStationId = NULL;
+		free(BarStateTakeLastStationId(app));
 		BarStateSetNextStation(app, newStation);
 		drainPlaylist (app);
 	}
@@ -717,13 +716,15 @@ BarUiActCallback(BarUiActQuit) {
 static bool BarSessionTeardown(BarApp_t *app,
 		const char *resume_station_id_override, const char *context,
 		bool freeSongHistory) {
-	/* Save station ID for auto-resume on reconnect */
-	PianoStation_t *curStation = BarStateGetCurrentStation(app);
-	free(app->lastStationId);
+	/* Save station ID for auto-resume on reconnect. The current station is
+	 * read inside pianoHttpMutex, which keeps stations alive. */
 	if (resume_station_id_override != NULL && resume_station_id_override[0] != '\0') {
-		app->lastStationId = strdup(resume_station_id_override);
+		BarStateSetLastStationId(app, resume_station_id_override);
 	} else {
-		app->lastStationId = curStation ? strdup(curStation->id) : NULL;
+		pthread_mutex_lock(&app->pianoHttpMutex);
+		const PianoStation_t *curStation = BarStateGetCurrentStation(app);
+		BarStateSetLastStationId(app, curStation ? curStation->id : NULL);
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 	}
 	
 	/* Clear next station first so the playback manager cannot fetch a playlist
@@ -1269,6 +1270,11 @@ bool BarUiDoPandoraReconnect (BarApp_t *app,
 	/* Auto-resume: prefer per-account autostart, then last station */
 	const char *autostation = (acct && acct->autostartStation) ?
 			acct->autostartStation : NULL;
+	/* Stations are resolved and stored inside pianoHttpMutex, so a concurrent
+	 * delete cannot free one between lookup and BarStateSetNextStation. */
+	char *lastStationId = NULL;
+	bool resumed = false;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	if (autostation && BarStateGetNextStation(app) == NULL) {
 		PianoStation_t *station = BarStateFindStationById(app, autostation);
 		if (station) {
@@ -1276,18 +1282,21 @@ bool BarUiDoPandoraReconnect (BarApp_t *app,
 					station->name);
 			BarStateSetNextStation(app, station);
 		}
-	} else if (app->lastStationId && BarStateGetNextStation(app) == NULL) {
-		PianoStation_t *station = BarStateFindStationById(app, app->lastStationId);
+	} else if (BarStateGetNextStation(app) == NULL &&
+			(lastStationId = BarStateTakeLastStationId(app)) != NULL) {
+		PianoStation_t *station = BarStateFindStationById(app, lastStationId);
 		if (station) {
 			BarUiMsg(&app->settings, MSG_INFO, "Resuming station: %s\n", station->name);
 			BarStateSetNextStation(app, station);
-		} else {
-			BarWsEmitErrorEx(app, "app.pandora-reconnect", "Last station was deleted",
-			                  app->lastStationId);
+			resumed = true;
 		}
-		free(app->lastStationId);
-		app->lastStationId = NULL;
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+	if (lastStationId != NULL && !resumed) {
+		BarWsEmitErrorEx(app, "app.pandora-reconnect", "Last station was deleted",
+		                  lastStationId);
+	}
+	free(lastStationId);
 	
 	BarUiMsg(&app->settings, MSG_INFO, "Reconnected to Pandora.\n");
 	/* A working session again: allow auto-recovery for the next failure. */

@@ -206,6 +206,34 @@ PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id) {
 	return station;
 }
 
+/*	Replace the resume station id. The copy and the free of the old value
+ *	happen outside the lock; only the pointer swap is locked.
+ */
+void BarStateSetLastStationId(BarApp_t *app, const char *stationId) {
+	assert(app != NULL);
+
+	char *copy = stationId != NULL ? strdup(stationId) : NULL;
+	char *old;
+	WITH_STATE_LOCK(app, "SetLastStationId", NULL) {
+		old = app->lastStationId;
+		app->lastStationId = copy;
+	}
+	free(old);
+}
+
+/*	Detach the resume station id; the caller owns (and frees) the result
+ */
+char *BarStateTakeLastStationId(BarApp_t *app) {
+	assert(app != NULL);
+
+	char *id;
+	WITH_STATE_LOCK(app, "TakeLastStationId", NULL) {
+		id = app->lastStationId;
+		app->lastStationId = NULL;
+	}
+	return id;
+}
+
 /*	Get station list (thread-safe)
  */
 PianoStation_t *BarStateGetStationList(const BarApp_t *app) {

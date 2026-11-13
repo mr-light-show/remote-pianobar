@@ -1237,6 +1237,57 @@ START_TEST (test_bar_state_delete_station_response_clears_current_and_next)
 }
 END_TEST
 
+START_TEST (test_bar_state_last_station_id_set_and_take)
+{
+	BarApp_t app;
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+
+	ck_assert_ptr_null (BarStateTakeLastStationId (&app));
+	BarStateSetLastStationId (&app, "first");
+	BarStateSetLastStationId (&app, "second");
+	char *id = BarStateTakeLastStationId (&app);
+	ck_assert_str_eq (id, "second");
+	free (id);
+	ck_assert_ptr_null (BarStateTakeLastStationId (&app));
+
+	BarStateSetLastStationId (&app, "third");
+	BarStateSetLastStationId (&app, NULL);
+	ck_assert_ptr_null (app.lastStationId);
+
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
+static void *last_station_id_churn (void *arg) {
+	BarApp_t *app = arg;
+	for (int i = 0; i < 2000; i++) {
+		BarStateSetLastStationId (app, (i & 1) ? "odd" : "even");
+		free (BarStateTakeLastStationId (app));
+	}
+	return NULL;
+}
+
+/* Concurrent set/take from several threads never frees the same copy twice
+ * (run under make test-asan to see a violation) */
+START_TEST (test_bar_state_last_station_id_concurrent_set_take)
+{
+	BarApp_t app;
+	pthread_t threads[4];
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+
+	for (size_t i = 0; i < 4; i++) {
+		ck_assert_int_eq (pthread_create (&threads[i], NULL,
+				last_station_id_churn, &app), 0);
+	}
+	for (size_t i = 0; i < 4; i++) {
+		ck_assert_int_eq (pthread_join (threads[i], NULL), 0);
+	}
+	free (BarStateTakeLastStationId (&app));
+
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -1288,6 +1339,8 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_misc, test_bar_update_station_display_names_null_app_noop);
 	tcase_add_test(tc_misc, test_bar_state_piano_request_response_wrappers);
 	tcase_add_test(tc_misc, test_bar_state_delete_station_response_clears_current_and_next);
+	tcase_add_test(tc_misc, test_bar_state_last_station_id_set_and_take);
+	tcase_add_test(tc_misc, test_bar_state_last_station_id_concurrent_set_take);
 	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 

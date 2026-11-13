@@ -48,7 +48,8 @@ typedef struct {
 	_Atomic sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
-	char *lastStationId;  /* Station ID to auto-resume after reconnect */
+	char *lastStationId;  /* Station ID to auto-resume after reconnect; use
+	                       * BarStateSetLastStationId/TakeLastStationId */
 	/* Serializes all use of `http` and overlapping PianoRequest/PianoResponse
 	 * work in BarUiPianoCall (recursive: re-login path calls BarUi again).
 	 * Placed after playlist/station fields so their offsets match pre-mutex
