@@ -179,6 +179,13 @@ bool BarStateSnapshotUpcoming (const BarApp_t *app, size_t maxSongs,
                                BarSongSnapshotList_t *out);
 void BarStateFreeSongSnapshot (BarSongSnapshotList_t *snap);
 
+/* Free a list of songs that other threads may have borrowed (playlist, its
+ * tail, song history). Callers hold app->pianoHttpMutex, so a thread that
+ * holds it across a Pandora call keeps its song alive. */
+void BarStateFreeSongs (BarApp_t *app, PianoSong_t *songs);
+typedef void (*BarStateSongFreeTestHook_fn) (BarApp_t *app, const PianoSong_t *songs);
+void BarStateSetSongFreeTestHook (BarStateSongFreeTestHook_fn hook);
+
 /* Initialize/destroy state mutex */
 void BarStateInit(BarApp_t *app);
 void BarStateDestroy(BarApp_t *app);

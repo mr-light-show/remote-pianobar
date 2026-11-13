@@ -54,6 +54,25 @@ static bool state_needs_lock (const BarApp_t *app) {
 	return false;
 }
 
+static BarStateSongFreeTestHook_fn g_songFreeTestHook = NULL;
+
+void BarStateSetSongFreeTestHook (BarStateSongFreeTestHook_fn hook) {
+	g_songFreeTestHook = hook;
+}
+
+/*	Every song list other threads can borrow is freed here, with the caller
+ *	holding pianoHttpMutex (order: pianoHttpMutex, then stateRwlock).
+ */
+void BarStateFreeSongs (BarApp_t *app, PianoSong_t *songs) {
+	if (songs == NULL) {
+		return;
+	}
+	if (g_songFreeTestHook != NULL) {
+		g_songFreeTestHook (app, songs);
+	}
+	PianoDestroyPlaylist (songs);
+}
+
 void BarStateSignalPlaybackManager(BarApp_t *app)
 {
 	if (app == NULL || !state_needs_lock(app)) {
@@ -295,6 +314,7 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 	assert(app != NULL);
 
 	PianoSong_t *tail = NULL;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "TruncatePlaylistTail");
 	if (app->playlist != NULL) {
 		tail = PianoListNextP(app->playlist);
@@ -302,8 +322,9 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 	}
 	state_rwlock_unlock_internal(app, "TruncatePlaylistTail", NULL);
 	if (tail != NULL) {
-		PianoDestroyPlaylist(tail);
+		BarStateFreeSongs(app, tail);
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -312,12 +333,14 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 void BarStateDrainPlaylist(BarApp_t *app) {
 	assert(app != NULL);
 	
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	WITH_STATE_LOCK(app, "DrainPlaylist", NULL) {
 		if (app->playlist != NULL) {
-			PianoDestroyPlaylist(app->playlist);
+			BarStateFreeSongs(app, app->playlist);
 			app->playlist = NULL;
 		}
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -326,15 +349,17 @@ void BarStateDrainPlaylist(BarApp_t *app) {
 void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	WITH_STATE_LOCK(app, "SwitchStation", "State: SwitchStation <- %s\n", station ? station->name : "null") {
 		/* Drain current playlist */
 		if (app->playlist != NULL) {
-			PianoDestroyPlaylist(app->playlist);
+			BarStateFreeSongs(app, app->playlist);
 			app->playlist = NULL;
 		}
 		/* Set new station */
 		app->nextStation = station;
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -347,6 +372,7 @@ void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station) {
 	assert(station != NULL);
 
 	PianoSong_t *tail = NULL;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "PrepareStationSwitch");
 	log_write(DEBUG_UI, "State: PrepareStationSwitch <- %s\n", station->name);
 	app->nextStation = station;
@@ -356,8 +382,9 @@ void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station) {
 	}
 	state_rwlock_unlock_internal(app, "PrepareStationSwitch", NULL);
 	if (tail != NULL) {
-		PianoDestroyPlaylist(tail);
+		BarStateFreeSongs(app, tail);
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -374,6 +401,7 @@ bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
 
 	bool found = false;
 	PianoSong_t *tail = NULL;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "PrepareStationSwitchById");
 	PianoStation_t *station = NULL;
 	if (app->ph.stations != NULL) {
@@ -395,8 +423,9 @@ bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
 	}
 	state_rwlock_unlock_internal(app, "PrepareStationSwitchById", NULL);
 	if (tail != NULL) {
-		PianoDestroyPlaylist(tail);
+		BarStateFreeSongs(app, tail);
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (found) {
 		BarStateSignalPlaybackManager(app);
 	}
