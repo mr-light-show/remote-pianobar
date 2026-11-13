@@ -25,6 +25,7 @@ THE SOFTWARE.
 #include <curl/curl.h>
 #include <piano.h>
 #include <pthread.h>
+#include <errno.h>
 #include <stdatomic.h>
 #include <limits.h>
 #include <stdio.h>
@@ -838,21 +839,27 @@ typedef struct {
 	int listenFd;
 	_Atomic int clientFd;
 	_Atomic bool stop, failed;
+	/* Published before the test skips, disconnects, or quits the player, so a
+	 * resulting EPIPE is not mistaken for a fixture failure. Unlike stop, it
+	 * neither ends the thread nor releases the withheld EOF. */
+	_Atomic bool cancelExpected;
 	pthread_t thread;
 } UnfinishedAudioStream;
 
-static bool stream_send_all (int fd, const char *data, size_t size) {
+/* Returns 0 on success, otherwise the errno of the failed send. */
+static int stream_send_all (int fd, const char *data, size_t size) {
 	while (size > 0) {
 #ifdef MSG_NOSIGNAL
 		const ssize_t sent = send (fd, data, size, MSG_NOSIGNAL);
 #else
 		const ssize_t sent = send (fd, data, size, 0);
 #endif
-		if (sent <= 0) { return false; }
+		if (sent < 0 && errno == EINTR) { continue; }
+		if (sent <= 0) { return sent < 0 ? errno : EIO; }
 		data += sent;
 		size -= (size_t)sent;
 	}
-	return true;
+	return 0;
 }
 
 /* Send enough real MP3 audio for FFmpeg probing, but withhold the final byte
@@ -869,6 +876,7 @@ static void *unfinished_audio_stream_thread (void *data) {
 #endif
 	char request[4096];
 	FILE *audio = fopen (integration_fixture_path (), "rb");
+	int sendErr = 0;
 	bool sent = audio != NULL && recv (client, request, sizeof request, 0) > 0;
 	if (sent) {
 		fseek (audio, 0, SEEK_END);
@@ -878,18 +886,23 @@ static void *unfinished_audio_stream_thread (void *data) {
 		const int length = snprintf (header, sizeof header,
 			"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\n"
 			"Content-Length: %ld\r\nConnection: close\r\n\r\n", bytes * 32 + 1);
-		sent = stream_send_all (client, header, (size_t)length);
+		sendErr = stream_send_all (client, header, (size_t)length);
+		sent = sendErr == 0;
 		for (unsigned repeat = 0; repeat < 32 && sent; ++repeat) {
 			char buffer[4096];
 			size_t count;
 			while ((count = fread (buffer, 1, sizeof buffer, audio)) > 0 && sent) {
-				sent = stream_send_all (client, buffer, count);
+				sendErr = stream_send_all (client, buffer, count);
+				sent = sendErr == 0;
 			}
 			rewind (audio);
 		}
 	}
 	if (audio != NULL) { fclose (audio); }
-	if (!sent && !atomic_load (&stream->stop)) { atomic_store (&stream->failed, true); }
+	if (!sent && !atomic_load (&stream->stop) &&
+		!FixtureSendErrorExpected (sendErr, atomic_load (&stream->cancelExpected))) {
+		atomic_store (&stream->failed, true);
+	}
 	while (!atomic_load (&stream->stop)) { usleep (1000); }
 	close (client);
 	return NULL;
@@ -974,6 +987,7 @@ START_TEST (test_player_paused_active_and_decoded_stop_paths_join_promptly)
 				"Immediately before %s, phase=%s must observe decodingFinished=%d, observed %d",
 				action == 0 ? "skip" : action == 1 ? "disconnect" : "quit",
 				phase ? "decoded" : "active", phase == 1, decodingFinishedBeforeStop);
+			if (phase == 0) { atomic_store (&stream.cancelExpected, true); }
 			if (action == 0) { BarUiActSkipSong (&app, NULL, NULL, 1); }
 			else if (action == 1) { BarUiActPandoraDisconnect (&app, NULL, NULL, 1); }
 			else { BarUiActQuit (&app, NULL, NULL, 1); }
@@ -1096,6 +1110,28 @@ START_TEST (test_playback_manager_plays_fixture_song)
 }
 END_TEST
 
+START_TEST (test_fixture_epipe_before_cancel_is_error)
+{
+	ck_assert (!FixtureSendErrorExpected (EPIPE, false));
+	ck_assert (!FixtureSendErrorExpected (ECONNRESET, false));
+}
+END_TEST
+
+START_TEST (test_fixture_epipe_after_cancel_is_expected)
+{
+	ck_assert (FixtureSendErrorExpected (EPIPE, true));
+	ck_assert (FixtureSendErrorExpected (ECONNRESET, true));
+}
+END_TEST
+
+START_TEST (test_fixture_other_error_after_cancel_is_error)
+{
+	ck_assert (!FixtureSendErrorExpected (0, true));
+	ck_assert (!FixtureSendErrorExpected (EIO, true));
+	ck_assert (!FixtureSendErrorExpected (ETIMEDOUT, true));
+}
+END_TEST
+
 Suite *playback_integration_suite (void) {
 	Suite *s = suite_create ("playback_integration");
 	TCase *tc = tcase_create ("core");
@@ -1110,9 +1146,16 @@ Suite *playback_integration_suite (void) {
 	tcase_add_test (tc, test_player_pause_resume_stops_device_and_preserves_cursor);
 	tcase_add_test (tc, test_player_pause_parks_decoder_until_same_http_song_resumes);
 	tcase_add_test (tc, test_playback_two_song_manual_advance);
-	tcase_add_test (tc, test_player_paused_active_and_decoded_stop_paths_join_promptly);
 	tcase_add_test (tc, test_playback_manager_plays_fixture_song);
+	tcase_add_test (tc, test_fixture_epipe_before_cancel_is_error);
+	tcase_add_test (tc, test_fixture_epipe_after_cancel_is_expected);
+	tcase_add_test (tc, test_fixture_other_error_after_cancel_is_error);
 	suite_add_tcase (s, tc);
+
+	TCase *shutdown = tcase_create ("stream_shutdown");
+	tcase_set_timeout (shutdown, 120.0);
+	tcase_add_test (shutdown, test_player_paused_active_and_decoded_stop_paths_join_promptly);
+	suite_add_tcase (s, shutdown);
 	return s;
 }
 
