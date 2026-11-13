@@ -64,20 +64,14 @@ struct json_object *BarSocketIoBuildStartPayload    (BarApp_t *app);
 struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app);
 struct json_object *BarSocketIoBuildProcessPayload  (BarApp_t *app);
 
-/* Emit 'start' event (song started) */
-void BarSocketIoEmitStart(BarApp_t *app);
+/* Song start/stop, progress and play state are broadcast only through the
+ * bridge (BarWsBroadcastSongStart/Stop/Progress/PlayState*), which applies
+ * the song generation, progress tag and play-state watermark. */
 
-/* Emit 'stop' event (song stopped) */
-void BarSocketIoEmitStop(BarApp_t *app);
-
-/* Emit 'volume' event (volume should be 0-100 percentage) */
+/* Broadcast 'volume' (0-100 percentage), keyed: an unsent one is replaced */
 void BarSocketIoEmitVolume(BarApp_t *app, int volume);
 
-/* Emit 'progress' event */
-void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
-                              unsigned int duration);
-
-/* Emit 'stations' event (station list) */
+/* Broadcast 'stations' (station list), keyed: an unsent one is replaced */
 void BarSocketIoEmitStations(BarApp_t *app);
 
 /* Emit 'process' event (full state) to all clients, or to `dest` only */
@@ -95,9 +89,6 @@ void BarSocketIoEmitErrorTo (BarApp_t *app, BarWsConnId_t dest, const char *oper
 
 /* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", or "connection_lost") */
 void BarSocketIoEmitPandoraDisconnected (BarApp_t *app, const char *reason);
-
-/* Emit 'playState' event (paused/resumed state) */
-void BarSocketIoEmitPlayState(BarApp_t *app);
 
 /* Emit 'query.upcoming.result' event (up to `max` queued songs, copied under
  * the state lock) to `dest`; false when nothing is queued */

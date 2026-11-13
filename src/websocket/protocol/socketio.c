@@ -393,9 +393,10 @@ char *BarSocketIoFormatEventMessage(const char *event, json_object *data) {
 	return formatted;
 }
 
-/* Queue event for `dest` as an ordered (unkeyed) frame */
-void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
-                      json_object *data) {
+/* Queue event for `dest`; BAR_WS_KEY_NONE frames are ordered, keyed ones
+ * replace an unsent frame with the same key (see BarWebsocketSend) */
+static void BarSocketIoEmitKeyed (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
+                                  const char *event, json_object *data) {
 	char *message;
 	
 	if (!event) {
@@ -403,82 +404,46 @@ void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
 		return;
 	}
 	
-	/* Use separate debug flag for progress events */
-	bool isProgress = (strcmp(event, "progress") == 0);
-	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
-
-	log_write(dbgFlag, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
 
 	message = BarSocketIoFormatEventMessage(event, data);
 	if (!message) {
-		log_write(dbgFlag, "Socket.IO: Failed to format message for event '%s'\n", event);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Failed to format message for event '%s'\n", event);
 		return;
 	}
 
-	log_write(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.*s%s\n",
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Formatted message (len=%zu): %.*s%s\n",
 	           strlen(message), (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
 	/* Takes ownership of message */
-	if (!BarWebsocketSend (app, dest, BAR_WS_KEY_NONE, message)) {
-		log_write(dbgFlag, "Socket.IO: Emit '%s' not queued (no server or ingress full)\n", event);
+	if (!BarWebsocketSend (app, dest, key, message)) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Emit '%s' not queued (no server or ingress full)\n", event);
 	}
-	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
-/* Emit 'start' event (song started) */
-void BarSocketIoEmitStart(BarApp_t *app) {
-	if (!app) {
-		return;
-	}
-
-	json_object *data = BarSocketIoBuildStartPayload (app);
-	if (data == NULL) {
-		return;
-	}
-
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "start", data);
-	json_object_put(data);
+/* Queue event for `dest` as an ordered (unkeyed) frame */
+void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
+                      json_object *data) {
+	BarSocketIoEmitKeyed (app, dest, BAR_WS_KEY_NONE, event, data);
 }
 
-/* Emit 'stop' event (song stopped) */
-void BarSocketIoEmitStop(BarApp_t *app) {
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "stop", NULL);
-}
-
-/* Emit 'volume' event */
+/* Broadcast 'volume' event (latest value wins) */
 void BarSocketIoEmitVolume(BarApp_t *app, int volume) {
 	json_object *data = json_object_new_int(volume);
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "volume", data);
+	BarSocketIoEmitKeyed (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_VOLUME, "volume", data);
 	json_object_put(data);
 }
 
-/* Emit 'progress' event */
-void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
-                              unsigned int duration) {
-	json_object *data;
-	float percentage = 0.0;
-	
-	if (duration > 0) {
-		percentage = (elapsed * 100.0) / duration;
-	}
-	
-	data = json_object_new_object();
-	json_object_object_add(data, "elapsed",    json_object_new_int(elapsed));
-	json_object_object_add(data, "duration",   json_object_new_int(duration));
-	json_object_object_add(data, "percentage", json_object_new_double(percentage));
-	
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "progress", data);
-	json_object_put(data);
-}
-
-/* Emit 'stations' event (station list) to `dest` */
+/* Emit 'stations' event (station list) to `dest`: a broadcast is a keyed
+ * snapshot, a reply to one client stays ordered */
 static void BarSocketIoEmitStationsTo (BarApp_t *app, BarWsConnId_t dest) {
 	if (!app) {
 		return;
 	}
 
 	json_object *stations = BarSocketIoBuildStationsPayload (app);
-	BarSocketIoEmit(app, dest, "stations", stations);
+	BarSocketIoEmitKeyed (app, dest, dest == BAR_WS_DEST_BROADCAST ?
+			BAR_WS_KEY_STATIONS : BAR_WS_KEY_NONE, "stations", stations);
 	json_object_put(stations);
 }
 
@@ -503,11 +468,8 @@ void BarSocketIoEmitProcessTo (BarApp_t *app, BarWsConnId_t dest) {
 	if (data == NULL) {
 		return;
 	}
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
 	BarSocketIoEmit(app, dest, "process", data);
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
 	json_object_put(data);
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
 }
 
 /* --- Payload builders (snapshot app state; caller json_object_put()s the result) --- */
@@ -737,22 +699,6 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
 	BarSocketIoEmitError(app, operation, buf);
 	return false;
-}
-
-/* Emit 'playState' event (paused/resumed state) */
-void BarSocketIoEmitPlayState(BarApp_t *app) {
-	if (!app) {
-		return;
-	}
-	
-	json_object *data = json_object_new_object();
-	
-	pthread_mutex_lock(&app->player.lock);
-	json_object_object_add(data, "paused", json_object_new_boolean(app->player.doPause));
-	pthread_mutex_unlock(&app->player.lock);
-	
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "playState", data);
-	json_object_put(data);
 }
 
 /* Emit 'query.upcoming.result' event (up to maxSongs queued songs) to `dest`.

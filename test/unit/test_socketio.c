@@ -38,6 +38,7 @@ THE SOFTWARE.
 #include "../../src/ui.h"
 #include "../../src/system_volume.h"
 #include "../../src/websocket/core/websocket.h"
+#include "../../src/websocket_bridge.h"
 #include "../../src/websocket/core/queue.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "test_ws_capture.h"
@@ -119,7 +120,8 @@ START_TEST(test_socketio_emit_stop) {
 	
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
-	BarSocketIoEmitStop(&app);
+	BarWsBroadcastSongStop (&app);
+	TestWsCaptureFlush ();
 	
 	ck_assert_ptr_nonnull(test_last_broadcast ());
 	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
@@ -135,9 +137,15 @@ START_TEST(test_socketio_emit_progress) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	app.player.mode = PLAYER_PLAYING;
+	app.player.songPlayed = 60;
+	app.player.songDuration = 180;
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
-	BarSocketIoEmitProgress(&app, 60, 180);
+	BarWsBroadcastProgress (&app);
+	TestWsCaptureFlush ();
+	pthread_mutex_destroy (&app.player.lock);
 	
 	ck_assert_ptr_nonnull(test_last_broadcast ());
 	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
@@ -671,7 +679,8 @@ START_TEST (test_socketio_emit_play_state_reports_paused_flag) {
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitPlayState (&app);
+	BarWsBroadcastPlayState (&app);
+	TestWsCaptureFlush ();
 
 	ck_assert_ptr_nonnull (test_last_broadcast ());
 	ck_assert (strstr (test_last_broadcast (), "playState") != NULL);
@@ -2248,7 +2257,7 @@ START_TEST (test_capture_playback_start_stop_broadcast) {
 	capture_app_init (&app, &station, &song);
 	BarStateSetPlaylist (&app, &song);
 
-	BarSocketIoEmitStart (&app);
+	BarWsBroadcastSongStart (&app);
 	assert_broadcast_frame ("start");
 	json_object *start = frame_payload (0);
 	json_object *field;
@@ -2259,7 +2268,7 @@ START_TEST (test_capture_playback_start_stop_broadcast) {
 	json_object_put (start);
 
 	TestWsCaptureClear ();
-	BarSocketIoEmitStop (&app);
+	BarWsBroadcastSongStop (&app);
 	assert_broadcast_frame ("stop");
 	ck_assert_ptr_null (frame_payload (0));
 
@@ -2273,7 +2282,12 @@ START_TEST (test_capture_progress_broadcast) {
 	PianoSong_t song;
 	capture_app_init (&app, &station, &song);
 
-	BarSocketIoEmitProgress (&app, 30, 120);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.mode = PLAYER_PLAYING;
+	app.player.songPlayed = 30;
+	app.player.songDuration = 120;
+	pthread_mutex_unlock (&app.player.lock);
+	BarWsBroadcastProgress (&app);
 	assert_broadcast_frame ("progress");
 	json_object *p = frame_payload (0);
 	json_object *field;
@@ -2320,6 +2334,38 @@ START_TEST (test_capture_stations_broadcast) {
 	ck_assert (json_object_object_get_ex (json_object_array_get_idx (list, 0), "id", &id));
 	ck_assert_str_eq (json_object_get_string (id), "S1");
 	json_object_put (list);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+
+/* Volume and station-list broadcasts from web commands are latest-value-wins
+ * like the bridge's: unsent ones collapse; a requester's ordered stations
+ * reply is never replaced by a later broadcast. */
+START_TEST (test_emit_volume_and_stations_coalesce_unsent) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitVolume (&app, 10);
+	BarSocketIoEmitVolume (&app, 20);
+	BarSocketIoEmitStations (&app);
+	BarSocketIoEmitStations (&app);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"volume\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"volume\", 20"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"stations\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"stations\""), 1);
+
+	TestWsCaptureClear ();
+	BarSocketIoHandleQuery (&app, test_ws_cap.ids[0]);
+	BarSocketIoEmitStations (&app);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"process\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"stations\""), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"stations\""), 1);
 
 	capture_app_destroy (&app);
 }
@@ -2865,6 +2911,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test (tc_dest, test_capture_progress_broadcast);
 	tcase_add_test (tc_dest, test_capture_volume_broadcast);
 	tcase_add_test (tc_dest, test_capture_stations_broadcast);
+	tcase_add_test (tc_dest, test_emit_volume_and_stations_coalesce_unsent);
 	tcase_add_test (tc_dest, test_capture_error_broadcast_and_to_requester);
 	tcase_add_test (tc_dest, test_capture_pandora_disconnected_broadcast);
 	tcase_add_test (tc_dest, test_capture_explanation_and_upcoming_to_requester);
