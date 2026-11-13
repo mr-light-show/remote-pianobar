@@ -605,28 +605,40 @@ void outerFunction(BarApp_t *app) {
 
 #### Scenario 1: Adding a New UI Action
 
+The dispatcher runs the action while holding `pianoHttpMutex`, so `selStation`
+and `selSong` are valid until the action first waits. A prompt must not be
+waited on with the hold, so `BarUiActInputBegin` records the station ID and
+song token and suspends every hold of the thread; `BarUiActInputEnd` retakes
+the holds and resolves both again. Never use the old pointers after that, and
+treat NULL as "no longer exists" (`cli.station_gone` / `cli.song_gone`).
+
 ```c
-// Template for thread-safe UI action
+// Template for an interactive UI action (src/ui_act.c)
 BarUiActCallback(BarUiActMyNewAction) {
-    // 1. Get required state (locks/unlocks internally)
-    PianoStation_t *station = BarStateGetCurrentStation(app);
-    if (!station) {
-        BarUiMsg(&app->settings, MSG_ERR, "No station selected.\n");
+    assert (selStation != NULL);
+
+    // 1. Prompt without the hold; the pointers are resolved again by ID after
+    BarUiActInputWait_t wait;
+    BarUiActInputBegin (app, &wait, selStation, selSong);
+    char *answer = BarUiSelectMusicId (app, NULL, "Prompt: ");
+    BarUiActInputEnd (app, &wait, &selStation, &selSong);
+    if (answer == NULL) {
         return;
     }
-    
-    // 2. Perform non-locked work (API calls, user input, etc.)
-    PianoReturn_t pRet;
-    CURLcode wRet;
-    bool success = BarUiPianoCall(app, PIANO_REQUEST_XYZ, ...);
-    
-    // 3. Update state atomically (if needed)
-    if (success) {
-        BarStateSetNextStation(app, newStation);
+    if (selStation == NULL) {
+        BarUiActSelectionGone (app, true);
+        free (answer);
+        return;
     }
-    
-    // 4. Broadcast changes to WebSocket clients
-    BarWsBroadcastStations(app);
+
+    // 2. API call and state update inside the hold; selStation is valid here
+    if (BarUiActDefaultPianoCall (PIANO_REQUEST_XYZ, &reqData)) {
+        /* ... use selStation ... */
+    }
+    free (answer);
+
+    // 3. Broadcast changes to WebSocket clients
+    BarWsBroadcastStations (app);
 }
 ```
 
