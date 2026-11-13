@@ -151,7 +151,7 @@ The Makefile defaults to **ISO C17** (`-std=c17`) by appending it to **`CFLAGS`*
 git clone https://github.com/yourusername/pianobar.git
 cd pianobar
 
-# Build without WebSocket support
+# Build
 make clean
 make
 
@@ -517,8 +517,9 @@ pianobar/
 │   ├── libpiano/            # Pandora API client
 │   └── websocket/           # WebSocket implementation
 │       ├── core/            # WebSocket server core
-│       │   ├── websocket.c  # Main WebSocket logic
-│       │   └── queue.c      # Message queue
+│       │   ├── websocket.c  # Transport, connections, command worker
+│       │   ├── outbox.c     # Outbound event queues (per client)
+│       │   └── commands.c   # Inbound command queue
 │       ├── http/            # HTTP static file server
 │       │   └── http_server.c
 │       ├── protocol/        # Socket.IO protocol

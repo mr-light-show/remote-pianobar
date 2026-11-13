@@ -5,6 +5,7 @@ This document provides a complete reference for the pianobar-websockets Socket.I
 ## Table of Contents
 
 1. [Connection](#connection)
+   - [Delivery, limits and overload](#delivery-limits-and-overload)
 2. [Message Format](#message-format)
 3. [Server-to-Client Events](#server-to-client-events)
 4. [Client-to-Server Events](#client-to-server-events)
@@ -53,10 +54,27 @@ ws.onerror = (error) => {
 ### Connection Lifecycle
 
 1. Client opens WebSocket connection with `socketio` subprotocol
-2. On successful connection, client should send `query` event to request current state
-3. Server responds with `process` event (full state) and `stations` event (station list)
+2. On connection the server sends a `process` event (full state) to that client
+3. Client should send a `query` event; the server answers that client with `process` and `stations` (station list)
 4. Server broadcasts events as state changes occur
 5. Client can send commands at any time while connected
+
+### Delivery, limits and overload
+
+**Server to client.** Each client has its own queue, delivered in order; a slow client never delays the others.
+
+- Unsent `progress`, `volume` and `stations` events are replaced by a newer event of the same kind unless another event lies between them. No other event is coalesced, and query replies are never reordered.
+- `progress` sampled for a previous song is dropped once the next song's `start` is queued.
+- A single frame over 256 KiB is refused and logged, not delivered; no connection is closed.
+- A client that falls behind (64 frames or 1 MiB unsent) is closed with code **1008** "Client event queue full". If the server's shared event queue overflows, every client is closed with code **1011** "Server event queue full". Clients should reconnect; the server sends `process` on connect, and a `query` brings back `stations`.
+
+**Client to server.** Commands from all clients run **one at a time, in the order the server received them**. Connections, keepalive pings and server events keep flowing while a command runs, but a slow command (a Pandora request can take up to the configured `timeout`) delays every later command, including cheap ones such as volume or pause. This is by design.
+
+- A command must be one text frame of at most 4096 bytes. Larger or fragmented messages are dropped and logged; the connection stays open.
+- Up to 32 commands (64 KiB) can wait. When that is full the command is refused and only its sender receives
+  `2["error",{"operation":"command","message":"The player is busy. Try again in a moment."}]`
+  (the message is localized). Send it again later.
+- When the server shuts down, waiting commands are discarded and replies not yet sent are abandoned.
 
 ---
 
