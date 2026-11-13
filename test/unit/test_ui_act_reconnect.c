@@ -5,6 +5,9 @@
 #include <check.h>
 #include <json-c/json.h>
 #include <pthread.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -2466,6 +2469,158 @@ START_TEST (test_ui_act_delete_station_confirmed)
 }
 END_TEST
 
+/* --- B4: CLI actions never hold pianoHttpMutex while waiting for input --- */
+
+typedef struct {
+	BarApp_t *app;
+	int writeFd;
+	const char *input;
+	PianoStation_t *removeStation; /* unlinked while the input is pending */
+	atomic_bool sawReleased;
+} BarTestInputFeeder_t;
+
+/* Types the answer only once the prompting thread has released
+ * pianoHttpMutex (the waiting thread cannot test its own recursive hold).
+ * Gives up after ~2 s so a regression fails instead of hanging. */
+static void *input_feeder_thread (void *arg) {
+	BarTestInputFeeder_t *f = arg;
+	for (int i = 0; i < 2000; i++) {
+		if (pthread_mutex_trylock (&f->app->pianoHttpMutex) == 0) {
+			atomic_store (&f->sawReleased, true);
+			if (f->removeStation != NULL) {
+				/* A delete on another thread, while the user types */
+				pthread_rwlock_wrlock (&f->app->stateRwlock);
+				f->app->ph.stations = PianoListDeleteP (f->app->ph.stations,
+						f->removeStation);
+				pthread_rwlock_unlock (&f->app->stateRwlock);
+			}
+			pthread_mutex_unlock (&f->app->pianoHttpMutex);
+			break;
+		}
+		usleep (1000);
+	}
+	rl_write_input (f->writeFd, f->input);
+	return NULL;
+}
+
+static unsigned g_deleteCalls;
+static bool g_deleteCallHeld;
+
+static void *ui_act_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static bool
+mock_delete_station_records_hold (BarApp_t *app, const PianoRequestType_t type,
+                                  void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	ck_assert_int_eq (type, PIANO_REQUEST_DELETE_STATION);
+	ck_assert_ptr_nonnull (data);
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, ui_act_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	g_deleteCallHeld = (intptr_t) rc == EBUSY;
+	g_deleteCalls++;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+static void run_delete_with_feeder (BarApp_t *app, PianoStation_t *selected,
+		PianoStation_t *removeStation, BarTestInputFeeder_t *feeder) {
+	int pipefd[2];
+	pthread_t thread;
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_input_from_fd (&app->input, pipefd[0]);
+	feeder->app = app;
+	feeder->writeFd = pipefd[1];
+	feeder->input = "y\n";
+	feeder->removeStation = removeStation;
+	atomic_init (&feeder->sawReleased, false);
+	g_deleteCalls = 0;
+	g_deleteCallHeld = false;
+
+	BarUiPianoCallSetTestHook (mock_delete_station_records_hold);
+	/* As the CLI dispatcher does for this action */
+	BarUiPianoHold (app);
+	ck_assert_int_eq (pthread_create (&thread, NULL, input_feeder_thread, feeder), 0);
+	BarUiActDeleteStation (app, selected, NULL, 1);
+	BarUiPianoRelease (app);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	BarUiPianoCallClearTestHook ();
+	close (pipefd[0]);
+}
+
+static void delete_wait_app_setup (BarApp_t *app, BarWsContext_t *ctx,
+		PianoStation_t *keep, PianoStation_t *doomed) {
+	memset (app, 0, sizeof (*app));
+	memset (keep, 0, sizeof (*keep));
+	memset (doomed, 0, sizeof (*doomed));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_WEB;
+	ck_assert (BarL10nInit (&app->l10n, &app->settings));
+	app->wsContext = ctx;
+	ws_context_init (ctx);
+	BarStateInit (app);
+	BarUiPianoHttpMutexInit (app);
+	ck_assert_int_eq (pthread_mutex_init (&app->player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app->player.cond, NULL), 0);
+	app->player.settings = &app->settings;
+	keep->id = "S1";
+	keep->name = "Keep";
+	doomed->id = "S2";
+	doomed->name = "Delete Me";
+	ck_assert_ptr_nonnull (PianoListAppend (&keep->head, &doomed->head));
+	app->ph.stations = keep;
+}
+
+static void delete_wait_app_teardown (BarApp_t *app, BarWsContext_t *ctx) {
+	BarUiPianoHttpMutexDestroy (app);
+	BarL10nDestroy (&app->l10n);
+	teardown_web_app_with_station (app, ctx);
+}
+
+/* The hold is released while the user answers and taken back for the call */
+START_TEST (test_ui_act_delete_station_releases_hold_during_prompt)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	BarTestInputFeeder_t feeder;
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+
+	run_delete_with_feeder (&app, &doomed, NULL, &feeder);
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_uint_eq (g_deleteCalls, 1);
+	ck_assert (g_deleteCallHeld);
+
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* A station deleted elsewhere while the user answers is not used */
+START_TEST (test_ui_act_delete_station_gone_after_prompt_skips_call)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	BarTestInputFeeder_t feeder;
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+
+	run_delete_with_feeder (&app, &doomed, &doomed, &feeder);
+	ck_assert (atomic_load (&feeder.sawReleased));
+	ck_assert_uint_eq (g_deleteCalls, 0);
+
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
 static bool
 mock_bookmark_song_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
                        PianoReturn_t *pRet, CURLcode *wRet)
@@ -2655,6 +2810,8 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_cli_explain_prints_terminal_output_and_no_web_reply);
 	tcase_add_test (tc, test_cli_upcoming_prints_terminal_list_and_no_web_reply);
 	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
+	tcase_add_test (tc, test_ui_act_delete_station_releases_hold_during_prompt);
+	tcase_add_test (tc, test_ui_act_delete_station_gone_after_prompt_skips_call);
 	tcase_add_test (tc, test_ui_act_bookmark_song);
 	tcase_add_test (tc, test_ui_act_bookmark_artist);
 	tcase_add_test (tc, test_ui_act_settings_change_username);

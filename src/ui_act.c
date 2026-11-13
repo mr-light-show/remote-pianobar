@@ -107,6 +107,73 @@ bool BarWsTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 	return BarTransformIfSharedWithFeedback (app, station, TRANSFORM_FEEDBACK_LOGGED);
 }
 
+/*	Waiting for terminal input inside a dispatched action.
+ *
+ *	Actions that use the selected station/song run with pianoHttpMutex held
+ *	(BarUiDispatchHoldsPianoLock), which keeps stations and songs alive. That
+ *	hold must never be kept while the user types, so the selection is
+ *	remembered by ID, the hold is released for the wait, and the selection is
+ *	resolved again afterwards. It is NULL when it went away meanwhile.
+ */
+typedef struct {
+	char *stationId;
+	char *trackToken;
+	unsigned int holds;
+} BarUiActInputWait_t;
+
+/*	Find a song the user may have selected: the playing song or one in the
+ *	history. Caller holds pianoHttpMutex (both lists are freed under it).
+ */
+static PianoSong_t *BarUiActFindSongByToken (BarApp_t *app, const char *trackToken) {
+	if (trackToken == NULL) {
+		return NULL;
+	}
+	PianoSong_t *song = BarStateGetPlaylist (app);
+	if (song != NULL && song->trackToken != NULL &&
+			strcmp (song->trackToken, trackToken) == 0) {
+		return song;
+	}
+	song = app->songHistory;
+	PianoListForeachP (song) {
+		if (song->trackToken != NULL && strcmp (song->trackToken, trackToken) == 0) {
+			return song;
+		}
+	}
+	return NULL;
+}
+
+static void BarUiActInputBegin (BarApp_t *app, BarUiActInputWait_t *wait,
+		const PianoStation_t *station, const PianoSong_t *song) {
+	wait->stationId = (station != NULL && station->id != NULL) ?
+			strdup (station->id) : NULL;
+	wait->trackToken = (song != NULL && song->trackToken != NULL) ?
+			strdup (song->trackToken) : NULL;
+	wait->holds = BarUiPianoSuspend (app);
+}
+
+static void BarUiActInputEnd (BarApp_t *app, BarUiActInputWait_t *wait,
+		PianoStation_t **station, PianoSong_t **song) {
+	BarUiPianoResume (app, wait->holds);
+	if (station != NULL) {
+		*station = wait->stationId != NULL ?
+				BarStateFindStationById (app, wait->stationId) : NULL;
+	}
+	if (song != NULL) {
+		*song = BarUiActFindSongByToken (app, wait->trackToken);
+	}
+	free (wait->stationId);
+	free (wait->trackToken);
+	wait->stationId = NULL;
+	wait->trackToken = NULL;
+}
+
+/*	The selection went away (deleted, disconnected) during an input wait
+ */
+static void BarUiActSelectionGone (BarApp_t *app, bool station) {
+	BarUiMsg (&app->settings, MSG_ERR, "%s", BarL10nGet (&app->l10n,
+			station ? "cli.station_gone" : "cli.song_gone"));
+}
+
 /*	print current shortcut configuration
  */
 BarUiActCallback(BarUiActHelp) {
@@ -130,9 +197,17 @@ BarUiActCallback(BarUiActAddMusic) {
 
 	assert (selStation != NULL);
 
-	reqData.musicId = BarUiSelectMusicId (app, selStation,
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
+	reqData.musicId = BarUiSelectMusicId (app, NULL,
 			"Add artist or title to station: ");
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
 	if (reqData.musicId != NULL) {
+		if (selStation == NULL) {
+			BarUiActSelectionGone (app, true);
+			free (reqData.musicId);
+			return;
+		}
 		if (!BarTransformIfShared (app, selStation)) {
 			return;
 		}
@@ -189,8 +264,11 @@ BarUiActCallback(BarUiActCreateStation) {
 	PianoRequestDataCreateStation_t reqData;
 
 	reqData.type = PIANO_MUSICTYPE_INVALID;
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
 	reqData.token = BarUiSelectMusicId (app, NULL,
 			"Create station from artist or title: ");
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
 	if (reqData.token != NULL) {
 		BarUiMsg (&app->settings, MSG_INFO, "Creating station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_CREATE_STATION, &reqData)) {
@@ -212,12 +290,19 @@ BarUiActCallback(BarUiActCreateStationFromSong) {
 	PianoRequestDataCreateStation_t reqData;
 	char selectBuf[2];
 
-	reqData.token = selSong->trackToken;
 	reqData.type = PIANO_MUSICTYPE_INVALID;
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "Create station from [s]ong or [a]rtist? ");
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
 	BarReadline (selectBuf, sizeof (selectBuf), "sa", &app->input,
 			BAR_RL_FULLRETURN, -1);
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
+	if (selSong == NULL) {
+		BarUiActSelectionGone (app, false);
+		return;
+	}
+	reqData.token = selSong->trackToken;
 	switch (selectBuf[0]) {
 		case 's':
 			reqData.type = PIANO_MUSICTYPE_SONG;
@@ -251,8 +336,12 @@ BarUiActCallback(BarUiActAddSharedStation) {
 	reqData.type = PIANO_MUSICTYPE_INVALID;
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "Station id: ");
-	if (BarReadline (stationId, sizeof (stationId), "0123456789", &app->input,
-			BAR_RL_DEFAULT, -1) > 0) {
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
+	const size_t idLen = BarReadline (stationId, sizeof (stationId), "0123456789",
+			&app->input, BAR_RL_DEFAULT, -1);
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
+	if (idLen > 0) {
 		BarUiMsg (&app->settings, MSG_INFO, "Adding shared station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_CREATE_STATION, &reqData)) {
 			/* Update display names for newly created station */
@@ -307,7 +396,13 @@ BarUiActCallback(BarUiActDeleteStation) {
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "Really delete \"%s\"? [yN] ",
 			selStation->name);
-	if (BarReadlineYesNo (false, &app->input)) {
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
+	const bool confirmed = BarReadlineYesNo (false, &app->input);
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
+	if (confirmed && selStation == NULL) {
+		BarUiActSelectionGone (app, true);
+	} else if (confirmed) {
 		BarUiMsg (&app->settings, MSG_INFO, "Deleting station... ");
 		/* The response clears current/next when they point at the deleted
 		 * station (BarStatePianoResponse), so compare before the call. */
@@ -402,13 +497,20 @@ BarUiActCallback(BarUiActStationFromGenre) {
 		i++;
 	}
 
+	/* The genre list is freed by a session reset (inside pianoHttpMutex):
+	 * re-resolve by index after every input wait. */
+	BarUiActInputWait_t wait;
+	int catIndex;
 	do {
 		/* select category or exit */
 		BarUiMsg (&app->settings, MSG_QUESTION, "Select category: ");
-		if (BarReadlineInt (&i, &app->input) == 0) {
+		BarUiActInputBegin (app, &wait, selStation, selSong);
+		const size_t len = BarReadlineInt (&catIndex, &app->input);
+		BarUiActInputEnd (app, &wait, &selStation, &selSong);
+		if (len == 0) {
 			return;
 		}
-		curCat = PianoListGetP (app->ph.genreStations, i);
+		curCat = PianoListGetP (app->ph.genreStations, catIndex);
 	} while (curCat == NULL);
 
 	/* print all available stations */
@@ -421,7 +523,14 @@ BarUiActCallback(BarUiActStationFromGenre) {
 
 	do {
 		BarUiMsg (&app->settings, MSG_QUESTION, "Select genre: ");
-		if (BarReadlineInt (&i, &app->input) == 0) {
+		BarUiActInputBegin (app, &wait, selStation, selSong);
+		const size_t len = BarReadlineInt (&i, &app->input);
+		BarUiActInputEnd (app, &wait, &selStation, &selSong);
+		if (len == 0) {
+			return;
+		}
+		curCat = PianoListGetP (app->ph.genreStations, catIndex);
+		if (curCat == NULL) {
 			return;
 		}
 		curGenre = PianoListGetP (curCat->genres, i);
@@ -558,7 +667,14 @@ BarUiActCallback(BarUiActRenameStation) {
 	assert (selStation != NULL);
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "New name: ");
-	if (BarReadlineStr (lineBuf, sizeof (lineBuf), &app->input, BAR_RL_DEFAULT) > 0) {
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
+	const size_t len = BarReadlineStr (lineBuf, sizeof (lineBuf), &app->input,
+			BAR_RL_DEFAULT);
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
+	if (len > 0 && selStation == NULL) {
+		BarUiActSelectionGone (app, true);
+	} else if (len > 0) {
 		PianoRequestDataRenameStation_t reqData;
 		if (!BarTransformIfShared (app, selStation)) {
 			return;
@@ -581,13 +697,26 @@ BarUiActCallback(BarUiActRenameStation) {
 /*	play another station
  */
 BarUiActCallback(BarUiActSelectStation) {
-	PianoStation_t *newStation = BarUiSelectStation (app, BarStateGetStationList(app),
-			"Select station: ", NULL, app->settings.autoselect);
-	if (newStation != NULL) {
-		/* Clear saved station - user made explicit choice */
-		free(BarStateTakeLastStationId(app));
-		BarStateSetNextStation(app, newStation);
-		drainPlaylist (app);
+	/* Select by ID; no pianoHttpMutex hold while the user picks */
+	const unsigned int holds = BarUiPianoSuspend (app);
+	char *stationId = BarUiSelectStationId (app, "Select station: ", NULL,
+			app->settings.autoselect);
+	BarUiPianoResume (app, holds);
+	if (stationId != NULL) {
+		BarUiPianoHold (app);
+		PianoStation_t *newStation = BarStateFindStationById (app, stationId);
+		if (newStation != NULL) {
+			/* Clear saved station - user made explicit choice */
+			free(BarStateTakeLastStationId(app));
+			BarStateSetNextStation(app, newStation);
+		}
+		BarUiPianoRelease (app);
+		if (newStation != NULL) {
+			drainPlaylist (app);
+		} else {
+			BarUiActSelectionGone (app, true);
+		}
+		free (stationId);
 	}
 }
 
@@ -632,8 +761,6 @@ void BarUiActPrintUpcomingTo (BarApp_t *app, BarWsConnId_t requester) {
  *	all/none
  */
 static void BarUiActQuickmixCallback (BarApp_t *app, char *buf) {
-	PianoStation_t *curStation = BarStateGetStationList(app);
-
 	/* do nothing if buf is empty/contains more than one character */
 	if (buf[0] == '\0' || buf[1] != '\0') {
 		return;
@@ -642,25 +769,19 @@ static void BarUiActQuickmixCallback (BarApp_t *app, char *buf) {
 	switch (*buf) {
 		case 't':
 			/* toggle */
-			PianoListForeachP (curStation) {
-				curStation->useQuickMix = !curStation->useQuickMix;
-			}
+			BarStateChangeQuickMixAll (app, BAR_QUICKMIX_TOGGLE_ALL);
 			*buf = '\0';
 			break;
 
 		case 'a':
 			/* enable all */
-			PianoListForeachP (curStation) {
-				curStation->useQuickMix = true;
-			}
+			BarStateChangeQuickMixAll (app, BAR_QUICKMIX_SELECT_ALL);
 			*buf = '\0';
 			break;
 
 		case 'n':
 			/* enable none */
-			PianoListForeachP (curStation) {
-				curStation->useQuickMix = false;
-			}
+			BarStateChangeQuickMixAll (app, BAR_QUICKMIX_SELECT_NONE);
 			*buf = '\0';
 			break;
 	}
@@ -676,11 +797,18 @@ BarUiActCallback(BarUiActSelectQuickMix) {
 	assert (selStation != NULL);
 
 	if (selStation->isQuickMix) {
-		PianoStation_t *toggleStation;
-		while ((toggleStation = BarUiSelectStation (app, BarStateGetStationList(app),
-				"Toggle QuickMix for station: ",
-				BarUiActQuickmixCallback, false)) != NULL) {
-			toggleStation->useQuickMix = !toggleStation->useQuickMix;
+		char *toggleId;
+		BarUiActInputWait_t wait;
+		while (true) {
+			BarUiActInputBegin (app, &wait, selStation, selSong);
+			toggleId = BarUiSelectStationId (app, "Toggle QuickMix for station: ",
+					BarUiActQuickmixCallback, false);
+			BarUiActInputEnd (app, &wait, &selStation, &selSong);
+			if (toggleId == NULL) {
+				break;
+			}
+			BarStateToggleQuickMixById (app, toggleId);
+			free (toggleId);
 		}
 		BarUiMsg (&app->settings, MSG_INFO, "Setting QuickMix stations... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_SET_QUICKMIX, NULL)) {
@@ -805,7 +933,65 @@ void BarUiDoPandoraDisconnect(BarApp_t *app, const char *reason,
 /*	stop - full reset without quitting (UI action wrapper)
  */
 BarUiActCallback(BarUiActPandoraDisconnect) {
+	/* Teardown waits for the playback manager, which may need pianoHttpMutex */
+	const unsigned int holds = BarUiPianoSuspend (app);
 	BarUiDoPandoraDisconnect(app, "user", NULL);
+	BarUiPianoResume (app, holds);
+}
+
+/*	Let the user pick a song from the history. The history is listed inside
+ *	pianoHttpMutex, the hold is released while the user types, and the choice
+ *	is resolved again by track token.
+ *	@return selected history song or NULL
+ */
+static PianoSong_t *BarUiActSelectHistorySong (BarApp_t *app) {
+	char buf[BAR_INPUT_MAX];
+
+	memset (buf, 0, sizeof (buf));
+
+	while (true) {
+		const size_t count = BarUiListSongs (app, app->songHistory, buf);
+		char **tokens = count > 0 ? calloc (count, sizeof (*tokens)) : NULL;
+		if (count > 0 && tokens == NULL) {
+			return NULL;
+		}
+		const PianoSong_t *listed = app->songHistory;
+		for (size_t i = 0; i < count && listed != NULL;
+				i++, listed = PianoListNextP (listed)) {
+			tokens[i] = listed->trackToken ? strdup (listed->trackToken) : NULL;
+		}
+
+		BarUiMsg (&app->settings, MSG_QUESTION, "Select song: ");
+		BarUiActInputWait_t wait;
+		BarUiActInputBegin (app, &wait, NULL, NULL);
+		const size_t len = BarReadlineStr (buf, sizeof (buf), &app->input,
+				BAR_RL_DEFAULT);
+		BarUiActInputEnd (app, &wait, NULL, NULL);
+
+		PianoSong_t *song = NULL;
+		bool chosen = false;
+		if (len > 0 && strspn (buf, "0123456789") == len) {
+			const unsigned long i = strtoul (buf, NULL, 10);
+			if (i < count) {
+				chosen = true;
+				song = BarUiActFindSongByToken (app, tokens[i]);
+			}
+		}
+		for (size_t i = 0; i < count; i++) {
+			free (tokens[i]);
+		}
+		free (tokens);
+
+		if (len == 0) {
+			return NULL;
+		}
+		if (chosen) {
+			if (song == NULL) {
+				BarUiActSelectionGone (app, false);
+			}
+			return song;
+		}
+	}
 }
 
 /*	song history
@@ -815,8 +1001,7 @@ BarUiActCallback(BarUiActHistory) {
 	PianoSong_t *histSong;
 
 	if (app->songHistory != NULL) {
-		histSong = BarUiSelectSong (app, app->songHistory,
-				&app->input);
+		histSong = BarUiActSelectHistorySong (app);
 		if (histSong != NULL) {
 			BarKeyShortcutId_t action;
 			PianoStation_t *songStation = BarStateFindStationById(app, 
@@ -832,8 +1017,16 @@ BarUiActCallback(BarUiActHistory) {
 
 				BarUiMsg (&app->settings, MSG_QUESTION, "What to do with this song? ");
 
-				if (BarReadline (buf, sizeof (buf), NULL, &app->input,
-						BAR_RL_FULLRETURN, -1) > 0) {
+				BarUiActInputWait_t wait;
+				BarUiActInputBegin (app, &wait, songStation, histSong);
+				const size_t len = BarReadline (buf, sizeof (buf), NULL,
+						&app->input, BAR_RL_FULLRETURN, -1);
+				BarUiActInputEnd (app, &wait, &songStation, &histSong);
+				if (len > 0) {
+					if (songStation == NULL || histSong == NULL) {
+						BarUiActSelectionGone (app, songStation == NULL);
+						return;
+					}
 					/* actions assume that selStation is the song's original
 					 * station */
 					action = BarUiDispatch (app, buf[0], songStation, histSong,
@@ -857,9 +1050,14 @@ BarUiActCallback(BarUiActBookmark) {
 	assert (selSong != NULL);
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "Bookmark [s]ong or [a]rtist? ");
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
 	BarReadline (selectBuf, sizeof (selectBuf), "sa", &app->input,
 			BAR_RL_FULLRETURN, -1);
-	if (selectBuf[0] == 's') {
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
+	if ((selectBuf[0] == 's' || selectBuf[0] == 'a') && selSong == NULL) {
+		BarUiActSelectionGone (app, false);
+	} else if (selectBuf[0] == 's') {
 		BarUiMsg (&app->settings, MSG_INFO, "Bookmarking song... ");
 		BarUiActDefaultPianoCall (PIANO_REQUEST_BOOKMARK_SONG, selSong);
 		BarUiActDefaultEventcmd ("songbookmark");
@@ -943,6 +1141,9 @@ BarUiActCallback(BarUiActSettings) {
 	BarUiMsg (&app->settings, MSG_LIST, " 2) Explicit content filter (%s)\n",
 			boolToYesNo (settings.explicitContentFilter));
 
+	/* No Pandora data is used while the user edits settings */
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
 	while (true) {
 		int val;
 
@@ -994,6 +1195,7 @@ BarUiActCallback(BarUiActSettings) {
 				break;
 		}
 	}
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
 
 	if (modified) {
 		reqData.currentUsername = app->settings.username;
@@ -1116,12 +1318,21 @@ BarUiActCallback(BarUiActManageStation) {
 		return;
 	}
 
+	/* Seeds and feedback are owned by reqData; only the station is shared */
 	BarUiMsg (&app->settings, MSG_QUESTION, "%s", question);
-	if (BarReadline (selectBuf, sizeof (selectBuf), allowedActions, &app->input,
-					BAR_RL_FULLRETURN, -1)) {
+	BarUiActInputWait_t wait;
+	BarUiActInputBegin (app, &wait, selStation, selSong);
+	const size_t len = BarReadline (selectBuf, sizeof (selectBuf), allowedActions,
+			&app->input, BAR_RL_FULLRETURN, -1);
+	BarUiActInputEnd (app, &wait, &selStation, &selSong);
+	if (len > 0 && selStation == NULL) {
+		BarUiActSelectionGone (app, true);
+	} else if (len > 0) {
 		if (selectBuf[0] == 'a') {
+			BarUiActInputBegin (app, &wait, selStation, selSong);
 			PianoArtist_t *artist = BarUiSelectArtist (app,
 					reqData.info.artistSeeds);
+			BarUiActInputEnd (app, &wait, &selStation, &selSong);
 			if (artist != NULL) {
 				PianoRequestDataDeleteSeed_t subReqData;
 
@@ -1133,8 +1344,10 @@ BarUiActCallback(BarUiActManageStation) {
 				BarUiActDefaultEventcmd ("stationdeleteartistseed");
 			}
 		} else if (selectBuf[0] == 's') {
+			BarUiActInputBegin (app, &wait, selStation, selSong);
 			PianoSong_t *song = BarUiSelectSong (app,
 					reqData.info.songSeeds, &app->input);
+			BarUiActInputEnd (app, &wait, &selStation, &selSong);
 			if (song != NULL) {
 				PianoRequestDataDeleteSeed_t subReqData;
 
@@ -1146,9 +1359,11 @@ BarUiActCallback(BarUiActManageStation) {
 				BarUiActDefaultEventcmd ("stationdeletesongseed");
 			}
 		} else if (selectBuf[0] == 't') {
+			BarUiActInputBegin (app, &wait, selStation, selSong);
 			PianoStation_t *station = BarUiSelectStation (app,
 					reqData.info.stationSeeds, "Delete seed station: ", NULL,
 					false);
+			BarUiActInputEnd (app, &wait, &selStation, &selSong);
 			if (station != NULL) {
 				PianoRequestDataDeleteSeed_t subReqData;
 
@@ -1160,8 +1375,10 @@ BarUiActCallback(BarUiActManageStation) {
 				BarUiActDefaultEventcmd ("stationdeletestationseed");
 			}
 		} else if (selectBuf[0] == 'f') {
+			BarUiActInputBegin (app, &wait, selStation, selSong);
 			PianoSong_t *song = BarUiSelectSong (app,
 					reqData.info.feedback, &app->input);
+			BarUiActInputEnd (app, &wait, &selStation, &selSong);
 			if (song != NULL) {
 				BarUiMsg (&app->settings, MSG_INFO, "Deleting feedback... ");
 				BarUiActDefaultPianoCall (PIANO_REQUEST_DELETE_FEEDBACK, song);
@@ -1187,7 +1404,14 @@ BarUiActCallback(BarUiActManageStation) {
 			BarUiMsg (&app->settings, MSG_QUESTION, "Pick a new mode: ");
 			int selected;
 			while (true) {
-				if (BarReadlineInt (&selected, &app->input) == 0) {
+				BarUiActInputBegin (app, &wait, selStation, selSong);
+				const size_t modeLen = BarReadlineInt (&selected, &app->input);
+				BarUiActInputEnd (app, &wait, &selStation, &selSong);
+				if (modeLen == 0) {
+					break;
+				}
+				if (selStation == NULL) {
+					BarUiActSelectionGone (app, true);
 					break;
 				}
 
@@ -1309,7 +1533,10 @@ bool BarUiDoPandoraReconnect (BarApp_t *app,
 /*	pandora reconnect (UI/WebSocket action wrapper)
  */
 BarUiActCallback(BarUiActPandoraReconnect) {
+	/* Teardown waits for the playback manager, which may need pianoHttpMutex */
+	const unsigned int holds = BarUiPianoSuspend (app);
 	(void) BarUiDoPandoraReconnect (app, NULL);
+	BarUiPianoResume (app, holds);
 }
 
 /*	Restore a session that died without the user asking for it

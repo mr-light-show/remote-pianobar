@@ -321,8 +321,11 @@ static bool BarMainGetStations (BarApp_t *app) {
 		BarWsBroadcastStations(app);
 	}
 	
+	/* eventcmd walks the station list: keep it alive (pianoHttpMutex) */
+	BarUiPianoHold (app);
 	BarUiStartEventCmd (&app->settings, "usergetstations", NULL, NULL, &app->player,
 			BarStateGetStationList(app), pRet, wRet);
+	BarUiPianoRelease (app);
 	return ret;
 }
 

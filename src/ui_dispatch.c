@@ -123,10 +123,11 @@ BarKeyShortcutId_t BarUiDispatchKeyToId (const BarApp_t *app, const char key) {
 	return BAR_KS_COUNT;
 }
 
-/*	Actions that use the selected station/song (or the queue behind it)
- *	without waiting for terminal input. Stations and songs are only freed
- *	inside pianoHttpMutex, so holding it from resolution to return keeps them
- *	alive across the Pandora call and eventcmd.
+/*	Actions that use the selected station/song (or the queue behind it).
+ *	Stations and songs are only freed inside pianoHttpMutex, so holding it
+ *	from resolution to return keeps them alive across the Pandora call and
+ *	eventcmd. Station selection, playback, volume, quit and the Pandora
+ *	disconnect/reconnect (which wait for the playback manager) run without.
  */
 bool BarUiDispatchHoldsPianoLock (const BarKeyShortcutId_t id) {
 	switch (id) {
@@ -137,6 +138,23 @@ bool BarUiDispatchHoldsPianoLock (const BarKeyShortcutId_t id) {
 		case BAR_KS_INFO:
 		case BAR_KS_DEBUG:
 		case BAR_KS_UPCOMING:
+			return true;
+
+		/* Interactive: they release the hold around every wait for
+		 * terminal input and resolve the selection again by ID afterwards
+		 * (BarUiActInputBegin/End in ui_act.c). */
+		case BAR_KS_ADDMUSIC:
+		case BAR_KS_CREATESTATION:
+		case BAR_KS_DELETESTATION:
+		case BAR_KS_GENRESTATION:
+		case BAR_KS_HISTORY:
+		case BAR_KS_ADDSHARED:
+		case BAR_KS_RENAMESTATION:
+		case BAR_KS_SELECTQUICKMIX:
+		case BAR_KS_BOOKMARK:
+		case BAR_KS_MANAGESTATION:
+		case BAR_KS_CREATESTATIONFROMSONG:
+		case BAR_KS_SETTINGS:
 			return true;
 
 		default:

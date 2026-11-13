@@ -44,6 +44,8 @@ static const BarL10nDefaultPair_t bar_l10n_defaults[] = {
 	{ "cli.select_station", "Select station: " },
 	{ "cli.session_auto_recover", "Pandora session error; reconnecting to resume playback... " },
 	{ "cli.session_auto_recover_failed", "Automatic reconnect failed.\n" },
+	{ "cli.song_gone", "The song is no longer available.\n" },
+	{ "cli.station_gone", "The station no longer exists.\n" },
 	{ "cli.username_missing_web", "Error: Username not found in config file. In web-only mode, credentials must be provided in the config.\n" },
 	{ "cli.wait_station_web", "Waiting for station selection via web interface...\n" },
 	{ "cli.wait_station_web_alt", "Waiting for station selection via web interface...\n" },

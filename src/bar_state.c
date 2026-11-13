@@ -467,9 +467,55 @@ void BarStateApplyQuickMixIds(BarApp_t *app, const char * const *stationIds,
 	state_rwlock_unlock_internal(app, "ApplyQuickMixIds", NULL);
 }
 
+void BarStateChangeQuickMixAll(BarApp_t *app, BarQuickMixChange_t change) {
+	assert(app != NULL);
+
+	state_rwlock_wrlock_internal(app, "ChangeQuickMixAll");
+	PianoStation_t *station = app->ph.stations;
+	PianoListForeachP (station) {
+		switch (change) {
+			case BAR_QUICKMIX_TOGGLE_ALL:
+				station->useQuickMix = !station->useQuickMix;
+				break;
+			case BAR_QUICKMIX_SELECT_ALL:
+				station->useQuickMix = true;
+				break;
+			case BAR_QUICKMIX_SELECT_NONE:
+				station->useQuickMix = false;
+				break;
+		}
+	}
+	state_rwlock_unlock_internal(app, "ChangeQuickMixAll", NULL);
+}
+
+bool BarStateToggleQuickMixById(BarApp_t *app, const char *stationId) {
+	assert(app != NULL);
+
+	if (stationId == NULL) {
+		return false;
+	}
+	bool found = false;
+	state_rwlock_wrlock_internal(app, "ToggleQuickMixById");
+	PianoStation_t *station = NULL;
+	if (app->ph.stations != NULL) {
+		station = PianoFindStationById(app->ph.stations, stationId);
+	}
+	if (station != NULL) {
+		station->useQuickMix = !station->useQuickMix;
+		found = true;
+	}
+	state_rwlock_unlock_internal(app, "ToggleQuickMixById", NULL);
+	return found;
+}
+
+/*	Rebuild display names. displayName is read by threads that hold either
+ *	stateRwlock (snapshots) or pianoHttpMutex (printing), so take both
+ *	(order: pianoHttpMutex, then stateRwlock).
+ */
 void BarStateUpdateStationDisplayNames(BarApp_t *app) {
 	assert(app != NULL);
 
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "UpdateStationDisplayNames");
 	PianoStation_t *station = app->ph.stations;
 	PianoListForeachP (station) {
@@ -482,6 +528,7 @@ void BarStateUpdateStationDisplayNames(BarApp_t *app) {
 		}
 	}
 	state_rwlock_unlock_internal(app, "UpdateStationDisplayNames", NULL);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
 /*	Serialize libpiano state reads/writes with state snapshots.
@@ -617,6 +664,7 @@ bool BarStateSnapshotStations (const BarApp_t *app,
 		out->items[i].displayName = s->displayName ? strdup (s->displayName) : NULL;
 		out->items[i].isQuickMix  = s->isQuickMix  != 0;
 		out->items[i].isQuickMixed = s->useQuickMix != 0;
+		out->items[i].isCreator   = s->isCreator   != 0;
 		i++;
 	}
 

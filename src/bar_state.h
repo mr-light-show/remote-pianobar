@@ -126,6 +126,7 @@ typedef struct {
 	char *displayName;
 	bool  isQuickMix;
 	bool  isQuickMixed; /* useQuickMix — included in QuickMix */
+	bool  isCreator;    /* false for shared stations */
 } BarStationSnapshot_t;
 
 typedef struct {
@@ -199,6 +200,16 @@ void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station);
 PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app);
 void BarStateSetCurrentStation(BarApp_t *app, PianoStation_t *station);
 PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id);
+
+/* QuickMix membership edits from the CLI (stateRwlock write) */
+typedef enum {
+	BAR_QUICKMIX_TOGGLE_ALL,
+	BAR_QUICKMIX_SELECT_ALL,
+	BAR_QUICKMIX_SELECT_NONE,
+} BarQuickMixChange_t;
+void BarStateChangeQuickMixAll(BarApp_t *app, BarQuickMixChange_t change);
+/* Toggle one station's QuickMix membership; false if the id is unknown */
+bool BarStateToggleQuickMixById(BarApp_t *app, const char *stationId);
 
 /* Station to resume after reconnect (app->lastStationId), thread-safe.
  * Set stores a copy (NULL clears); Take returns the owned copy and clears it. */

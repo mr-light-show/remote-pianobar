@@ -1396,6 +1396,45 @@ START_TEST (test_history_frees_hold_piano_mutex)
 }
 END_TEST
 
+START_TEST (test_bar_state_quickmix_changes_and_snapshot_creator)
+{
+	BarApp_t app;
+	PianoStation_t a, b;
+	memset (&a, 0, sizeof (a));
+	memset (&b, 0, sizeof (b));
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+	a.id = "a";
+	a.isCreator = true;
+	b.id = "b";
+	b.useQuickMix = true;
+	app.ph.stations = PianoListAppendP (&a, &b);
+
+	BarStateChangeQuickMixAll (&app, BAR_QUICKMIX_TOGGLE_ALL);
+	ck_assert (a.useQuickMix);
+	ck_assert (!b.useQuickMix);
+	BarStateChangeQuickMixAll (&app, BAR_QUICKMIX_SELECT_ALL);
+	ck_assert (a.useQuickMix && b.useQuickMix);
+	BarStateChangeQuickMixAll (&app, BAR_QUICKMIX_SELECT_NONE);
+	ck_assert (!a.useQuickMix && !b.useQuickMix);
+
+	ck_assert (BarStateToggleQuickMixById (&app, "b"));
+	ck_assert (b.useQuickMix);
+	ck_assert (!BarStateToggleQuickMixById (&app, "missing"));
+	ck_assert (!BarStateToggleQuickMixById (&app, NULL));
+
+	BarStationSnapshotList_t snap;
+	ck_assert (BarStateSnapshotStations (&app, &snap));
+	ck_assert_uint_eq (snap.count, 2);
+	ck_assert (snap.items[0].isCreator);
+	ck_assert (!snap.items[1].isCreator);
+	BarStateFreeStationSnapshot (&snap);
+
+	app.ph.stations = NULL;
+	ck_assert (!BarStateToggleQuickMixById (&app, "a"));
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -1451,6 +1490,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_misc, test_bar_state_last_station_id_concurrent_set_take);
 	tcase_add_test(tc_misc, test_bar_state_playlist_frees_hold_piano_mutex);
 	tcase_add_test(tc_misc, test_history_frees_hold_piano_mutex);
+	tcase_add_test(tc_misc, test_bar_state_quickmix_changes_and_snapshot_creator);
 	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 
