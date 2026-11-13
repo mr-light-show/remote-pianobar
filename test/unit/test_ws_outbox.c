@@ -21,6 +21,9 @@ THE SOFTWARE.
 */
 
 #include <check.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../../src/bar_constants.h"
@@ -243,6 +246,324 @@ START_TEST (test_frame_null_and_empty_safe) {
 }
 END_TEST
 
+static BarWsFrame_t *frame_of_size (size_t n, char c) {
+	char *buf = malloc (n);
+	ck_assert_ptr_nonnull (buf);
+	memset (buf, c, n);
+	BarWsFrame_t *f = BarWsFrameNew (buf, n);
+	free (buf);
+	ck_assert_ptr_nonnull (f);
+	return f;
+}
+
+START_TEST (test_replace_with_larger_frame_updates_bytes) {
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	ck_assert_int_eq (append_text (&q, "ab", BAR_WS_KEY_PROGRESS, 1), BAR_WS_Q_OK);
+	ck_assert_uint_eq (q.bytes, 2);
+	ck_assert_int_eq (append_text (&q, "abcdef", BAR_WS_KEY_PROGRESS, 1), BAR_WS_Q_OK);
+	ck_assert_uint_eq (q.count, 1);
+	ck_assert_uint_eq (q.bytes, 6);
+	BarWsClientQueueClear (&q);
+}
+END_TEST
+
+START_TEST (test_replace_with_smaller_frame_updates_bytes) {
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	ck_assert_int_eq (append_text (&q, "abcdef", BAR_WS_KEY_VOLUME, 1), BAR_WS_Q_OK);
+	ck_assert_int_eq (append_text (&q, "ab", BAR_WS_KEY_VOLUME, 1), BAR_WS_Q_OK);
+	ck_assert_uint_eq (q.count, 1);
+	ck_assert_uint_eq (q.bytes, 2);
+	expect_pop (&q, 1, "ab");
+	BarWsClientQueueClear (&q);
+}
+END_TEST
+
+START_TEST (test_replace_over_byte_cap_rejected_original_intact) {
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	BarWsFrame_t *big = frame_of_size (WS_FRAME_MAX_BYTES, 'x');
+	for (int i = 0; i < 3; i++) {
+		ck_assert_int_eq (BarWsClientQueueAppend (&q, big, BAR_WS_KEY_NONE, 0), BAR_WS_Q_OK);
+	}
+	BarWsFrame_t *mid = frame_of_size (40 * 1024, 'm');
+	ck_assert_int_eq (BarWsClientQueueAppend (&q, mid, BAR_WS_KEY_NONE, 0), BAR_WS_Q_OK);
+	ck_assert_int_eq (append_text (&q, "p", BAR_WS_KEY_PROGRESS, 1), BAR_WS_Q_OK);
+	size_t before = q.bytes;
+	/* replacing the 1-byte progress with a max frame would exceed the cap */
+	ck_assert_int_eq (BarWsClientQueueAppend (&q, big, BAR_WS_KEY_PROGRESS, 2), BAR_WS_Q_OVERFLOW);
+	ck_assert_uint_eq (q.bytes, before);
+	ck_assert_uint_eq (q.count, 5);
+	BarWsFrameUnref (big);
+	BarWsFrameUnref (mid);
+	for (int i = 0; i < 4; i++) {
+		BarWsFrame_t *f = BarWsClientQueuePop (&q, 1);
+		ck_assert_ptr_nonnull (f);
+		BarWsFrameUnref (f);
+	}
+	expect_pop (&q, 1, "p");
+	BarWsClientQueueClear (&q);
+}
+END_TEST
+
+START_TEST (test_replace_updates_generation) {
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	append_text (&q, "p-gen1", BAR_WS_KEY_PROGRESS, 1);
+	append_text (&q, "p-gen2", BAR_WS_KEY_PROGRESS, 2);
+	ck_assert_uint_eq (q.count, 1);
+	expect_pop (&q, 2, "p-gen2");
+	BarWsClientQueueClear (&q);
+}
+END_TEST
+
+/* ---- ingress ---- */
+
+static char *dup_text (const char *s) {
+	char *d = strdup (s);
+	ck_assert_ptr_nonnull (d);
+	return d;
+}
+
+static bool push_text (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key, const char *s) {
+	return BarWsOutboxPush (o, dest, key, dup_text (s), strlen (s));
+}
+
+START_TEST (test_push_does_not_deliver_until_take) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (o);
+	ck_assert_ptr_null (BarWsOutboxTake (o));
+	ck_assert (push_text (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "a"));
+	ck_assert (push_text (o, 7, BAR_WS_KEY_VOLUME, "bb"));
+	ck_assert (push_text (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "c"));
+	BarWsPending_t *list = BarWsOutboxTake (o);
+	ck_assert_ptr_nonnull (list);
+	ck_assert_uint_eq (list->dest, BAR_WS_DEST_BROADCAST);
+	ck_assert_int_eq (list->key, BAR_WS_KEY_NONE);
+	ck_assert_uint_eq (BarWsFrameLen (list->frame), 1);
+	ck_assert_uint_eq (list->next->dest, 7);
+	ck_assert_int_eq (list->next->key, BAR_WS_KEY_VOLUME);
+	ck_assert_int_eq (memcmp (BarWsFrameData (list->next->frame), "bb", 2), 0);
+	ck_assert_int_eq (BarWsFrameData (list->next->next->frame)[0], 'c');
+	ck_assert_ptr_null (list->next->next->next);
+	BarWsPendingFree (list);
+	/* taken entries are gone */
+	ck_assert_ptr_null (BarWsOutboxTake (o));
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_ingress_full_returns_false_and_frees) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (o);
+	for (size_t i = 0; i < WS_INGRESS_MAX_MSGS; i++) {
+		ck_assert (push_text (o, 1, BAR_WS_KEY_NONE, "m"));
+	}
+	/* leak detection of the rejected text runs under make test-asan */
+	ck_assert (!push_text (o, 1, BAR_WS_KEY_NONE, "m"));
+	BarWsPending_t *list = BarWsOutboxTake (o);
+	size_t n = 0;
+	for (BarWsPending_t *p = list; p; p = p->next) {
+		n++;
+	}
+	ck_assert_uint_eq (n, WS_INGRESS_MAX_MSGS);
+	BarWsPendingFree (list);
+	/* room again after Take */
+	ck_assert (push_text (o, 1, BAR_WS_KEY_NONE, "m"));
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_ingress_byte_cap_and_oversize_rejected) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	size_t fit = WS_INGRESS_MAX_BYTES / WS_FRAME_MAX_BYTES;
+	for (size_t i = 0; i < fit; i++) {
+		char *t = malloc (WS_FRAME_MAX_BYTES);
+		ck_assert_ptr_nonnull (t);
+		memset (t, 'x', WS_FRAME_MAX_BYTES);
+		ck_assert (BarWsOutboxPush (o, 1, BAR_WS_KEY_NONE, t, WS_FRAME_MAX_BYTES));
+	}
+	ck_assert (!push_text (o, 1, BAR_WS_KEY_NONE, "x"));
+	BarWsPendingFree (BarWsOutboxTake (o));
+	char *t = malloc (WS_FRAME_MAX_BYTES + 1);
+	ck_assert_ptr_nonnull (t);
+	memset (t, 'x', WS_FRAME_MAX_BYTES + 1);
+	ck_assert (!BarWsOutboxPush (o, 1, BAR_WS_KEY_NONE, t, WS_FRAME_MAX_BYTES + 1));
+	ck_assert_ptr_null (BarWsOutboxTake (o));
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_progress_pushed_before_start_is_dropped_after_start) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	ck_assert_uint_eq (BarWsOutboxGeneration (o), 0);
+	ck_assert (push_text (o, 0, BAR_WS_KEY_PROGRESS, "old-p1"));
+	ck_assert (push_text (o, 0, BAR_WS_KEY_NONE, "event"));
+	ck_assert (push_text (o, 0, BAR_WS_KEY_PROGRESS, "old-p2"));
+	ck_assert (push_text (o, 0, BAR_WS_KEY_VOLUME, "vol"));
+	ck_assert_uint_eq (BarWsOutboxSongStarted (o), 1);
+	ck_assert_uint_eq (BarWsOutboxGeneration (o), 1);
+	BarWsPending_t *list = BarWsOutboxTake (o);
+	ck_assert_ptr_nonnull (list);
+	ck_assert_int_eq (list->key, BAR_WS_KEY_NONE);
+	ck_assert_int_eq (list->next->key, BAR_WS_KEY_VOLUME);
+	ck_assert_ptr_null (list->next->next);
+	BarWsPendingFree (list);
+	/* byte/message accounting stayed consistent: a full batch still fits */
+	for (size_t i = 0; i < WS_INGRESS_MAX_MSGS; i++) {
+		ck_assert (push_text (o, 0, BAR_WS_KEY_NONE, "m"));
+	}
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_start_discards_progress_at_head_and_tail_keeps_order) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	push_text (o, 0, BAR_WS_KEY_PROGRESS, "p-head");
+	push_text (o, 0, BAR_WS_KEY_NONE, "a");
+	push_text (o, 0, BAR_WS_KEY_PROGRESS, "p-tail");
+	BarWsOutboxSongStarted (o);
+	push_text (o, 0, BAR_WS_KEY_NONE, "b");
+	BarWsPending_t *list = BarWsOutboxTake (o);
+	ck_assert_int_eq (BarWsFrameData (list->frame)[0], 'a');
+	ck_assert_int_eq (BarWsFrameData (list->next->frame)[0], 'b');
+	ck_assert_ptr_null (list->next->next);
+	BarWsPendingFree (list);
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_progress_for_new_song_survives) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	push_text (o, 0, BAR_WS_KEY_PROGRESS, "old");
+	uint32_t gen = BarWsOutboxSongStarted (o);
+	push_text (o, 0, BAR_WS_KEY_PROGRESS, "new");
+	BarWsPending_t *list = BarWsOutboxTake (o);
+	ck_assert_ptr_nonnull (list);
+	ck_assert_ptr_null (list->next);
+	ck_assert_int_eq (memcmp (BarWsFrameData (list->frame), "new", 3), 0);
+	ck_assert_uint_eq (list->generation, gen);
+	BarWsPendingFree (list);
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_outbox_null_safe) {
+	BarWsOutboxFree (NULL);
+	BarWsPendingFree (NULL);
+	ck_assert_ptr_null (BarWsOutboxTake (NULL));
+	ck_assert_uint_eq (BarWsOutboxSongStarted (NULL), 0);
+	ck_assert_uint_eq (BarWsOutboxGeneration (NULL), 0);
+	ck_assert (!BarWsOutboxPush (NULL, 0, BAR_WS_KEY_NONE, dup_text ("x"), 1));
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	ck_assert (!BarWsOutboxPush (o, 0, BAR_WS_KEY_NONE, NULL, 0));
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_free_releases_pending) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	push_text (o, 0, BAR_WS_KEY_NONE, "left");
+	push_text (o, 0, BAR_WS_KEY_PROGRESS, "behind");
+	BarWsOutboxFree (o); /* leak detection runs under make test-asan */
+}
+END_TEST
+
+#define CONC_PRODUCERS 4
+#define CONC_PER_PRODUCER 2000
+
+typedef struct {
+	BarWsOutbox_t *o;
+	int id;
+	size_t accepted;
+	pthread_mutex_t *gateLock;
+	pthread_cond_t *gateCond;
+	int *ready;
+	bool *go;
+} ConcProducer_t;
+
+static void *conc_producer (void *arg) {
+	ConcProducer_t *c = arg;
+	/* barrier: all producers (and the consumer) start together */
+	pthread_mutex_lock (c->gateLock);
+	(*c->ready)++;
+	pthread_cond_broadcast (c->gateCond);
+	while (!*c->go) {
+		pthread_cond_wait (c->gateCond, c->gateLock);
+	}
+	pthread_mutex_unlock (c->gateLock);
+
+	for (int seq = 0; seq < CONC_PER_PRODUCER; seq++) {
+		char buf[32];
+		int n = snprintf (buf, sizeof (buf), "%d:%d", c->id, seq);
+		char *text = malloc ((size_t) n + 1);
+		memcpy (text, buf, (size_t) n + 1);
+		/* a full ingress means the consumer is behind; retry that same seq
+		 * only after it drains (the module itself never retries) */
+		while (!BarWsOutboxPush (c->o, 0, BAR_WS_KEY_NONE, text, (size_t) n)) {
+			text = malloc ((size_t) n + 1);
+			memcpy (text, buf, (size_t) n + 1);
+			sched_yield ();
+		}
+		c->accepted++;
+	}
+	return NULL;
+}
+
+START_TEST (test_concurrent_push_take_no_loss_no_leak) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	pthread_mutex_t gateLock = PTHREAD_MUTEX_INITIALIZER;
+	pthread_cond_t gateCond = PTHREAD_COND_INITIALIZER;
+	int ready = 0;
+	bool go = false;
+	pthread_t th[CONC_PRODUCERS];
+	ConcProducer_t pc[CONC_PRODUCERS];
+	for (int i = 0; i < CONC_PRODUCERS; i++) {
+		pc[i] = (ConcProducer_t) {o, i, 0, &gateLock, &gateCond, &ready, &go};
+		ck_assert_int_eq (pthread_create (&th[i], NULL, conc_producer, &pc[i]), 0);
+	}
+	pthread_mutex_lock (&gateLock);
+	while (ready < CONC_PRODUCERS) {
+		pthread_cond_wait (&gateCond, &gateLock);
+	}
+	go = true;
+	pthread_cond_broadcast (&gateCond);
+	pthread_mutex_unlock (&gateLock);
+
+	int next[CONC_PRODUCERS] = {0};
+	size_t received = 0;
+	const size_t total = (size_t) CONC_PRODUCERS * CONC_PER_PRODUCER;
+	while (received < total) {
+		BarWsPending_t *list = BarWsOutboxTake (o);
+		if (!list) {
+			sched_yield ();
+			continue;
+		}
+		for (BarWsPending_t *p = list; p; p = p->next) {
+			char buf[32] = {0};
+			size_t len = BarWsFrameLen (p->frame);
+			ck_assert_uint_lt (len, sizeof (buf));
+			memcpy (buf, BarWsFrameData (p->frame), len);
+			int id, seq;
+			ck_assert_int_eq (sscanf (buf, "%d:%d", &id, &seq), 2);
+			/* per-producer order preserved, nothing lost or duplicated */
+			ck_assert_int_eq (seq, next[id]);
+			next[id]++;
+			received++;
+		}
+		BarWsPendingFree (list);
+	}
+	for (int i = 0; i < CONC_PRODUCERS; i++) {
+		pthread_join (th[i], NULL);
+		ck_assert_uint_eq (pc[i].accepted, CONC_PER_PRODUCER);
+		ck_assert_int_eq (next[i], CONC_PER_PRODUCER);
+	}
+	ck_assert_ptr_null (BarWsOutboxTake (o));
+	BarWsOutboxFree (o);
+}
+END_TEST
+
 Suite *ws_outbox_suite (void) {
 	Suite *s = suite_create ("ws_outbox");
 	TCase *tc = tcase_create ("Core");
@@ -260,6 +581,20 @@ Suite *ws_outbox_suite (void) {
 	tcase_add_test (tc, test_clear_frees_pending);
 	tcase_add_test (tc, test_shared_frame_survives_other_queue_clear);
 	tcase_add_test (tc, test_frame_null_and_empty_safe);
+	tcase_add_test (tc, test_replace_with_larger_frame_updates_bytes);
+	tcase_add_test (tc, test_replace_with_smaller_frame_updates_bytes);
+	tcase_add_test (tc, test_replace_over_byte_cap_rejected_original_intact);
+	tcase_add_test (tc, test_replace_updates_generation);
+	tcase_add_test (tc, test_push_does_not_deliver_until_take);
+	tcase_add_test (tc, test_ingress_full_returns_false_and_frees);
+	tcase_add_test (tc, test_ingress_byte_cap_and_oversize_rejected);
+	tcase_add_test (tc, test_progress_pushed_before_start_is_dropped_after_start);
+	tcase_add_test (tc, test_start_discards_progress_at_head_and_tail_keeps_order);
+	tcase_add_test (tc, test_progress_for_new_song_survives);
+	tcase_add_test (tc, test_outbox_null_safe);
+	tcase_add_test (tc, test_free_releases_pending);
+	tcase_add_test (tc, test_concurrent_push_take_no_loss_no_leak);
+	tcase_set_timeout (tc, 30);
 	suite_add_tcase (s, tc);
 	return s;
 }

@@ -26,6 +26,8 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdint.h>
 
+#include "queue.h"
+
 /* Coalescing key for a queued frame. NONE entries are ordered events and are
  * never replaced; keyed entries are replaced by a later entry with the same
  * key unless an ordered event was queued in between. */
@@ -72,3 +74,37 @@ BarWsQResult_t BarWsClientQueueAppend (BarWsClientQueue_t *q, BarWsFrame_t *f,
 /* Remove and return the oldest entry, discarding progress entries whose
  * generation differs from currentGeneration. Caller must Unref the result. */
 BarWsFrame_t *BarWsClientQueuePop (BarWsClientQueue_t *q, uint32_t currentGeneration);
+
+/* Producer-facing ingress. Producer threads Push; the service thread Takes
+ * everything pushed so far. One mutex guards the queue and the song
+ * generation counter. */
+typedef struct BarWsOutbox BarWsOutbox_t;
+
+/* One taken message. The list and its frame references are owned by the
+ * caller of BarWsOutboxTake: move each frame into client queues (they take
+ * their own reference) and release the list with BarWsPendingFree. */
+typedef struct BarWsPending {
+	BarWsConnId_t dest;
+	BarWsKey_t key;
+	uint32_t generation; /* song generation at push time (progress only) */
+	BarWsFrame_t *frame;
+	struct BarWsPending *next;
+} BarWsPending_t;
+
+BarWsOutbox_t *BarWsOutboxNew (void);
+/* Frees anything still pending */
+void BarWsOutboxFree (BarWsOutbox_t *o);
+/* Takes ownership of text (heap, freed here on every path). Copies it into a
+ * frame. False if the ingress limits are reached, len exceeds
+ * WS_FRAME_MAX_BYTES, or memory is short. The full path allocates nothing. */
+bool BarWsOutboxPush (BarWsOutbox_t *o, BarWsConnId_t dest, BarWsKey_t key,
+		char *text, size_t len);
+/* Service thread: detach everything pushed so far, in push order. NULL if
+ * empty. Release with BarWsPendingFree. */
+BarWsPending_t *BarWsOutboxTake (BarWsOutbox_t *o);
+/* Release a taken list: unref each frame and free the nodes */
+void BarWsPendingFree (BarWsPending_t *list);
+/* Admit a song start: increments the generation and discards unsent keyed
+ * PROGRESS entries still in ingress. Returns the new generation. */
+uint32_t BarWsOutboxSongStarted (BarWsOutbox_t *o);
+uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o);
