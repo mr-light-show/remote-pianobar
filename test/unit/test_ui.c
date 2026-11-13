@@ -38,6 +38,9 @@ THE SOFTWARE.
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include "../test_tmp.h"
 
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
@@ -435,6 +438,78 @@ START_TEST (test_ui_select_station_id_returns_copied_id)
 }
 END_TEST
 
+typedef struct {
+	BarApp_t *app;
+	const char *fifo;
+	atomic_bool sawReleased;
+} BarTestEventcmdProbe_t;
+
+/* Waits (bounded) until pianoHttpMutex can be taken, then lets the fake
+ * eventcmd exit by writing to the FIFO it blocks on. */
+static void *eventcmd_probe_thread (void *arg) {
+	BarTestEventcmdProbe_t *p = arg;
+	for (int i = 0; i < 2000; i++) {
+		if (pthread_mutex_trylock (&p->app->pianoHttpMutex) == 0) {
+			pthread_mutex_unlock (&p->app->pianoHttpMutex);
+			atomic_store (&p->sawReleased, true);
+			break;
+		}
+		usleep (1000);
+	}
+	int fd = -1;
+	for (int i = 0; i < 5000 && fd == -1; i++) {
+		fd = open (p->fifo, O_WRONLY | O_NONBLOCK);
+		if (fd == -1) {
+			usleep (1000);
+		}
+	}
+	ck_assert_int_ne (fd, -1);
+	ck_assert (write (fd, "x\n", 2) == 2);
+	close (fd);
+	return NULL;
+}
+
+/* The eventcmd child is reaped without the caller's pianoHttpMutex hold, so
+ * a slow script does not stall other Pandora users */
+START_TEST (test_ui_eventcmd_wait_releases_piano_hold)
+{
+	BarApp_t app;
+	char dir[512], script[600], fifo[600];
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	BarUiPianoHttpMutexInit (&app);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "eventcmd"));
+	snprintf (fifo, sizeof (fifo), "%s/release", dir);
+	ck_assert_int_eq (mkfifo (fifo, 0600), 0);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	fprintf (f, "#!/bin/sh\ncat > /dev/null\nread x < '%s'\n", fifo);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	app.settings.eventCmd = strdup (script);
+
+	BarTestEventcmdProbe_t probe = { .app = &app, .fifo = fifo };
+	atomic_init (&probe.sawReleased, false);
+	pthread_t thread;
+	BarUiPianoHold (&app);
+	ck_assert_int_eq (pthread_create (&thread, NULL, eventcmd_probe_thread, &probe), 0);
+	BarUiStartEventCmd (&app.settings, "songstart", NULL, NULL, &app.player,
+			NULL, PIANO_RET_OK, CURLE_OK);
+	/* The hold is restored for the caller */
+	ck_assert (ui_piano_mutex_held (&app));
+	BarUiPianoRelease (&app);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	ck_assert (atomic_load (&probe.sawReleased));
+
+	pthread_mutex_destroy (&app.player.lock);
+	BarUiPianoHttpMutexDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -452,6 +527,7 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_ui_piano_hold_suspend_resume);
 	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
 	tcase_add_test (tc, test_ui_select_station_id_returns_copied_id);
+	tcase_add_test (tc, test_ui_eventcmd_wait_releases_piano_hold);
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
