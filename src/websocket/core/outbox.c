@@ -480,3 +480,15 @@ bool BarWsOutboxAtHighWater (BarWsOutbox_t *o) {
 	pthread_mutex_unlock (&o->lock);
 	return high;
 }
+
+void BarWsOutboxDepth (BarWsOutbox_t *o, size_t *msgs, size_t *bytes) {
+	*msgs = 0;
+	*bytes = 0;
+	if (!o) {
+		return;
+	}
+	pthread_mutex_lock (&o->lock);
+	*msgs = o->count;
+	*bytes = o->bytes;
+	pthread_mutex_unlock (&o->lock);
+}

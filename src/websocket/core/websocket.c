@@ -53,6 +53,7 @@ static const lws_retry_bo_t keepalive_policy = {
 
 /* Forward declarations */
 static void* BarWebsocketThread(void *arg);
+static long long BarWsNowMs (void);
 
 /*	Outbound delivery
  *
@@ -115,6 +116,17 @@ BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
 			return conn->id;
 		}
 	}
+	/* The client stays connected but gets nothing: at most one error a second */
+	const long long now = BarWsNowMs ();
+	if (now < ctx->tableFullNextMs) {
+		ctx->tableFullSuppressed++;
+	} else {
+		log_write (LOG_ERROR, "Connection table full (%zu/%zu in use): a new client is "
+		           "connected but untracked (%u more since the last report)\n",
+		           ctx->numConnections, ctx->maxConnections, ctx->tableFullSuppressed);
+		ctx->tableFullNextMs = now + 1000;
+		ctx->tableFullSuppressed = 0;
+	}
 	return BAR_WS_CONN_NONE;
 }
 
@@ -154,10 +166,25 @@ static void BarWsQueueRequest (BarApp_t *app, BarWsConnection_t *conn,
 	switch (BarWsCommandQueuePush (ctx->commands, conn->id, bytes, len)) {
 		case BAR_WS_CMD_OK:
 			conn->busyNotified = false;
+			if (ctx->cmdRefusing) {
+				ctx->cmdRefusing = false;
+				log_write (DEBUG_WEBSOCKET, "Command queue accepting again after %zu refused requests\n",
+				           ctx->cmdRefused);
+			}
 			break;
 		case BAR_WS_CMD_FULL:
-			log_write (DEBUG_WEBSOCKET, "Command queue full; refusing a request from client %llu\n",
-			           (unsigned long long) conn->id);
+			/* One error per overload episode, not per refused request */
+			if (!ctx->cmdRefusing) {
+				BarWsCommandQueueStats_t st;
+				BarWsCommandQueueStats (ctx->commands, &st);
+				log_write (LOG_ERROR, "Command queue full (%zu/%d items, %zu/%d bytes); "
+				           "refusing requests, first from client %llu\n", st.items,
+				           WS_CMD_MAX_ITEMS, st.bytes, WS_CMD_MAX_BYTES,
+				           (unsigned long long) conn->id);
+				ctx->cmdRefusing = true;
+				ctx->cmdRefused = 0;
+			}
+			ctx->cmdRefused++;
 			/* Once per overload: a burst must not flood the shared ingress */
 			if (!conn->busyNotified) {
 				conn->busyNotified = true;
@@ -294,10 +321,14 @@ void BarWsServiceOutbox (BarWsContext_t *ctx) {
 		return;
 	}
 	bool overflowed = BarWsOutboxTakeOverflow (ctx->outbox);
+	size_t msgs, bytes;
+	BarWsOutboxDepth (ctx->outbox, &msgs, &bytes);
 	BarWsPending_t *list = BarWsOutboxTake (ctx->outbox);
 
 	if (overflowed) {
-		log_write (LOG_ERROR, "Outbound event queue overflowed; closing all clients so they resync\n");
+		log_write (LOG_ERROR, "Outbound event queue overflowed (%zu/%d messages, %zu/%d bytes "
+		           "queued); closing all clients so they resync\n", msgs,
+		           WS_INGRESS_MAX_MSGS, bytes, WS_INGRESS_MAX_BYTES);
 		for (size_t i = 0; i < ctx->maxConnections; i++) {
 			if (ctx->connections[i].wsi != NULL) {
 				BarWsConnectionClose (ctx, &ctx->connections[i],
@@ -318,6 +349,11 @@ void BarWsServiceOutbox (BarWsContext_t *ctx) {
 			}
 			if (BarWsClientQueueAppend (&conn->pending, p->frame, p->key,
 					p->generation) != BAR_WS_Q_OK) {
+				log_write (LOG_ERROR, "Client %llu event queue full (%zu/%d messages, %zu/%d "
+				           "bytes pending, %zu-byte event refused); closing it\n",
+				           (unsigned long long) conn->id, conn->pending.count,
+				           WS_CLIENT_MAX_MSGS, conn->pending.bytes, WS_CLIENT_MAX_BYTES,
+				           BarWsFrameLen (p->frame));
 				BarWsConnectionClose (ctx, conn, LWS_CLOSE_STATUS_POLICY_VIOLATION,
 				                      BAR_WS_CLOSE_CLIENT_FULL);
 			}
@@ -678,6 +714,22 @@ static BarWsThreadCreate_fn g_threadCreateHook = NULL;
 
 void BarWebsocketSetTestThreadCreateHook (BarWsThreadCreate_fn hook) {
 	g_threadCreateHook = hook;
+}
+
+static BarWsClock_fn g_clockHook = NULL;
+
+void BarWebsocketSetTestClock (BarWsClock_fn clock) {
+	g_clockHook = clock;
+}
+
+/* Monotonic milliseconds for the diagnostics */
+static long long BarWsNowMs (void) {
+	if (g_clockHook != NULL) {
+		return g_clockHook ();
+	}
+	struct timespec ts;
+	clock_gettime (CLOCK_MONOTONIC, &ts);
+	return (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 static int BarWsThreadCreate (pthread_t *thread, void *(*fn) (void *), void *arg) {

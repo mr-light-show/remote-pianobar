@@ -140,3 +140,5 @@ uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o);
 /* True once the ingress holds WS_INGRESS_HIGH_WATER_MSGS frames or
  * WS_INGRESS_HIGH_WATER_BYTES bytes: the service thread should drain it now */
 bool BarWsOutboxAtHighWater (BarWsOutbox_t *o);
+/* Messages and bytes currently in the ingress (diagnostics; 0 for NULL) */
+void BarWsOutboxDepth (BarWsOutbox_t *o, size_t *msgs, size_t *bytes);

@@ -25,6 +25,7 @@ THE SOFTWARE.
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "conn_id.h"
 
@@ -69,3 +70,23 @@ bool BarWsCommandQueuePop (BarWsCommandQueue_t *q, BarWsConnId_t *requester,
 /* Reject all later pushes, drop and free every queued item, and wake every
  * consumer blocked in Pop. Idempotent. */
 void BarWsCommandQueueClose (BarWsCommandQueue_t *q);
+
+/* Diagnostics. The consumer marks the command it runs from Begin (nowMs is
+ * its clock reading; the first BAR_WS_CMD_NAME_LEN bytes of the request are
+ * kept) until End, so another thread can tell a stuck command. Stats takes
+ * a snapshot under the queue lock (all zero for a NULL queue). */
+#define BAR_WS_CMD_NAME_LEN 40
+
+typedef struct {
+	size_t items;              /* queued, not counting the running command */
+	size_t bytes;
+	uint64_t started;          /* Begin calls so far */
+	bool running;              /* between Begin and End */
+	long long runningSinceMs;  /* nowMs given to Begin */
+	char name[BAR_WS_CMD_NAME_LEN + 1];
+} BarWsCommandQueueStats_t;
+
+void BarWsCommandQueueBegin (BarWsCommandQueue_t *q, const char *bytes,
+		long long nowMs);
+void BarWsCommandQueueEnd (BarWsCommandQueue_t *q);
+void BarWsCommandQueueStats (BarWsCommandQueue_t *q, BarWsCommandQueueStats_t *out);

@@ -25,6 +25,7 @@ THE SOFTWARE.
 
 #include <pthread.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,6 +57,7 @@ struct BarWsCommandQueue {
 	size_t count;
 	size_t bytes;
 	bool closed;
+	BarWsCommandQueueStats_t run; /* running-command fields only */
 };
 
 static void item_free (BarWsCommandItem_t *it) {
@@ -195,4 +197,38 @@ void BarWsCommandQueueClose (BarWsCommandQueue_t *q) {
 	pthread_cond_broadcast (&q->notEmpty);
 	pthread_mutex_unlock (&q->lock);
 	item_list_free (dropped);
+}
+
+void BarWsCommandQueueBegin (BarWsCommandQueue_t *q, const char *bytes,
+		long long nowMs) {
+	if (!q) {
+		return;
+	}
+	pthread_mutex_lock (&q->lock);
+	q->run.started++;
+	q->run.running = true;
+	q->run.runningSinceMs = nowMs;
+	snprintf (q->run.name, sizeof (q->run.name), "%s", bytes ? bytes : "");
+	pthread_mutex_unlock (&q->lock);
+}
+
+void BarWsCommandQueueEnd (BarWsCommandQueue_t *q) {
+	if (!q) {
+		return;
+	}
+	pthread_mutex_lock (&q->lock);
+	q->run.running = false;
+	pthread_mutex_unlock (&q->lock);
+}
+
+void BarWsCommandQueueStats (BarWsCommandQueue_t *q, BarWsCommandQueueStats_t *out) {
+	memset (out, 0, sizeof (*out));
+	if (!q) {
+		return;
+	}
+	pthread_mutex_lock (&q->lock);
+	*out = q->run;
+	out->items = q->count;
+	out->bytes = q->bytes;
+	pthread_mutex_unlock (&q->lock);
 }

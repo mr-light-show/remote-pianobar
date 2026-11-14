@@ -3074,6 +3074,222 @@ START_TEST (test_delayed_volume_broadcast_fires_without_other_traffic)
 }
 END_TEST
 
+/* ------------------------------------------------------------------------
+ * Diagnostics log lines
+ * ------------------------------------------------------------------------ */
+
+/* stderr (where log_write goes) captured into a temporary file */
+static int test_log_saved = -1;
+static FILE *test_log_file;
+static char test_log_text[16384];
+
+static void test_log_start (unsigned int mask) {
+	fflush (stderr);
+	test_log_file = tmpfile ();
+	ck_assert_ptr_nonnull (test_log_file);
+	test_log_saved = dup (STDERR_FILENO);
+	ck_assert_int_ge (test_log_saved, 0);
+	ck_assert_int_ge (dup2 (fileno (test_log_file), STDERR_FILENO), 0);
+	log_set_debug_mask (mask);
+}
+
+/* Stop capturing; returns everything logged since test_log_start */
+static const char *test_log_stop (void) {
+	fflush (stderr);
+	log_set_debug_mask (0);
+	dup2 (test_log_saved, STDERR_FILENO);
+	close (test_log_saved);
+	test_log_saved = -1;
+	rewind (test_log_file);
+	size_t n = fread (test_log_text, 1, sizeof (test_log_text) - 1, test_log_file);
+	test_log_text[n] = '\0';
+	fclose (test_log_file);
+	test_log_file = NULL;
+	return test_log_text;
+}
+
+static size_t test_count_lines (const char *text, const char *needle) {
+	size_t n = 0;
+	for (const char *p = strstr (text, needle); p; p = strstr (p + 1, needle)) {
+		n++;
+	}
+	return n;
+}
+
+/* Injectable clock (ms); atomic because the worker reads it too */
+static _Atomic long long test_now_ms;
+
+static long long test_clock (void) {
+	return atomic_load (&test_now_ms);
+}
+
+START_TEST (test_diag_ingress_overflow_logs_numbers)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0);
+	for (int i = 0; i < WS_INGRESS_MAX_MSGS; i++) {
+		ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	}
+	ck_assert (!test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+
+	test_log_start (0); /* an error: logged with debugging off */
+	BarWsServiceOutbox (&ctx);
+	const char *log = test_log_stop ();
+	char want[160];
+	snprintf (want, sizeof (want),
+			"Outbound event queue overflowed (%d/%d messages, %d/%d bytes queued); "
+			"closing all clients so they resync\n",
+			WS_INGRESS_MAX_MSGS, WS_INGRESS_MAX_MSGS, WS_INGRESS_MAX_MSGS * 6,
+			WS_INGRESS_MAX_BYTES);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert (test_conn (&ctx, 0)->pendingClose);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_diag_client_overflow_logs_its_pending)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0); /* stops reading */
+	BarWsConnId_t fast = test_add_client (&ctx, 1);
+	for (int i = 0; i < WS_CLIENT_MAX_MSGS; i++) {
+		ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	}
+	test_drain_client (&ctx, 1);
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"last\"]"));
+
+	test_log_start (0);
+	test_drain_client (&ctx, 1);
+	const char *log = test_log_stop ();
+	char want[160];
+	snprintf (want, sizeof (want),
+			"Client 1 event queue full (%d/%d messages, %d/%d bytes pending, "
+			"9-byte event refused); closing it\n",
+			WS_CLIENT_MAX_MSGS, WS_CLIENT_MAX_MSGS, WS_CLIENT_MAX_MSGS * 6,
+			WS_CLIENT_MAX_BYTES);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert_uint_eq (test_count_lines (log, "event queue full"), 1); /* not the fast one */
+	ck_assert (test_conn (&ctx, 0)->pendingClose);
+	ck_assert (!test_conn (&ctx, 1)->pendingClose);
+	ck_assert_uint_eq (fast, 2);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* One error per overload episode, not per refused frame; the episode ends
+ * when a request is accepted again (logged at debug level) */
+START_TEST (test_diag_busy_episode_logged_once)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew (); /* no worker: nothing drains it */
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_ws_cap.sockets[0];
+	void *b = &test_ws_cap.sockets[1];
+	const size_t len = strlen (TEST_PING);
+	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
+		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	}
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsHandleReceive (&app, b, TEST_PING, len, true); /* first refusal */
+	BarWsHandleReceive (&app, a, TEST_PING, len, true); /* same episode */
+	BarWsHandleReceive (&app, b, TEST_PING, len, true);
+	const char *log = test_log_stop ();
+	char want[160];
+	snprintf (want, sizeof (want),
+			"Command queue full (%d/%d items, %zu/%d bytes); refusing requests, "
+			"first from client 2\n",
+			WS_CMD_MAX_ITEMS, WS_CMD_MAX_ITEMS, WS_CMD_MAX_ITEMS * len,
+			WS_CMD_MAX_BYTES);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert_uint_eq (test_count_lines (log, "Command queue full"), 1);
+#ifdef HAVE_DEBUGLOG
+	ck_assert (strstr (log, "Error") != NULL); /* LOG_ERROR label */
+#endif
+
+	/* Accepted again: the episode ends */
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	log = test_log_stop ();
+#ifdef HAVE_DEBUGLOG
+	ck_assert_msg (strstr (log, "Command queue accepting again after 3 refused requests\n")
+			!= NULL, "log was: %s", log);
+#endif
+	ck_assert (strstr (log, "Command queue full") == NULL);
+
+	/* A later refusal starts a new episode (debugging off: error only) */
+	test_log_start (0);
+	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Command queue full"), 1);
+	ck_assert (strstr (log, "first from client 1\n") != NULL);
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	test_log_start (0);
+	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	log = test_log_stop ();
+	ck_assert_str_eq (log, ""); /* the recovery line is debug only */
+
+	/* The busy reply is still sent once per connection per overload */
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "busy"), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "busy"), 1);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+/* A client accepted while the table is full is connected but untracked:
+ * an error, at most once per second with the number not logged */
+START_TEST (test_diag_table_full_logged_rate_limited)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+		test_add_client (&ctx, c);
+	}
+	char extra[3];
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, 500000);
+
+	test_log_start (0);
+	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &extra[0], "socketio"), BAR_WS_CONN_NONE);
+	atomic_store (&test_now_ms, 500999);
+	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &extra[1], "socketio"), BAR_WS_CONN_NONE);
+	const char *log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table full"), 1);
+	ck_assert_msg (strstr (log, "Connection table full (4/4 in use): a new client is "
+			"connected but untracked (0 more since the last report)\n") != NULL,
+			"log was: %s", log);
+
+	atomic_store (&test_now_ms, 501000);
+	test_log_start (0);
+	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &extra[2], "socketio"), BAR_WS_CONN_NONE);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Connection table full (4/4 in use): a new client is "
+			"connected but untracked (1 more since the last report)\n") != NULL,
+			"log was: %s", log);
+	ck_assert_uint_eq (ctx.numConnections, TEST_MAX_CLIENTS);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
 Suite *websocket_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -3172,6 +3388,13 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_compat, test_wire_compat_stop_has_no_payload);
 	tcase_add_test (tc_compat, test_wire_compat_stations_is_array);
 	suite_add_tcase (s, tc_compat);
+
+	TCase *tc_diag = tcase_create ("diagnostics");
+	tcase_add_test (tc_diag, test_diag_ingress_overflow_logs_numbers);
+	tcase_add_test (tc_diag, test_diag_client_overflow_logs_its_pending);
+	tcase_add_test (tc_diag, test_diag_busy_episode_logged_once);
+	tcase_add_test (tc_diag, test_diag_table_full_logged_rate_limited);
+	suite_add_tcase (s, tc_diag);
 	
 	return s;
 }

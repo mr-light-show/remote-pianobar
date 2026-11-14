@@ -393,6 +393,56 @@ START_TEST (test_cmd_stress_fifo_per_producer_no_loss) {
 }
 END_TEST
 
+/* Diagnostics snapshot: queued depth, and the command the consumer marked
+ * as running (its first bytes) */
+START_TEST (test_cmd_stats_depth_and_running) {
+	BarWsCommandQueueStats_t st;
+	memset (&st, 0xAB, sizeof (st));
+	BarWsCommandQueueStats (NULL, &st);
+	ck_assert_uint_eq (st.items, 0);
+	ck_assert_uint_eq (st.bytes, 0);
+	ck_assert_uint_eq (st.started, 0);
+	ck_assert (!st.running);
+	BarWsCommandQueueBegin (NULL, "x", 1); /* no-ops */
+	BarWsCommandQueueEnd (NULL);
+
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	ck_assert_int_eq (push_str (q, 1, "one"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 2, "three"), BAR_WS_CMD_OK);
+	BarWsCommandQueueStats (q, &st);
+	ck_assert_uint_eq (st.items, 2);
+	ck_assert_uint_eq (st.bytes, 8);
+	ck_assert (!st.running);
+	expect_pop (q, 1, "one");
+	BarWsCommandQueueStats (q, &st);
+	ck_assert_uint_eq (st.items, 1);
+	ck_assert_uint_eq (st.bytes, 5);
+
+	static const char longCmd[] =
+			"2[\"action\",\"song.explain\",\"0123456789abcdefghijklmnop\"]";
+	BarWsCommandQueueBegin (q, longCmd, 1234);
+	BarWsCommandQueueStats (q, &st);
+	ck_assert (st.running);
+	ck_assert_uint_eq (st.started, 1);
+	ck_assert_int_eq (st.runningSinceMs, 1234);
+	ck_assert_uint_eq (strlen (st.name), BAR_WS_CMD_NAME_LEN);
+	ck_assert (strncmp (st.name, longCmd, BAR_WS_CMD_NAME_LEN) == 0);
+	ck_assert_uint_eq (st.items, 1); /* the running one is not queued */
+	BarWsCommandQueueEnd (q);
+	BarWsCommandQueueStats (q, &st);
+	ck_assert (!st.running);
+	ck_assert_uint_eq (st.started, 1);
+
+	BarWsCommandQueueBegin (q, NULL, 5);
+	BarWsCommandQueueStats (q, &st);
+	ck_assert (st.running);
+	ck_assert_uint_eq (st.started, 2);
+	ck_assert_str_eq (st.name, "");
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
 Suite *ws_commands_suite (void) {
 	Suite *s = suite_create ("ws_commands");
 	TCase *tc = tcase_create ("Core");
@@ -410,6 +460,7 @@ Suite *ws_commands_suite (void) {
 	tcase_add_test (tc, test_cmd_nomem_returns_nomem);
 	tcase_add_test (tc, test_cmd_empty_and_null_safe);
 	tcase_add_test (tc, test_cmd_stress_fifo_per_producer_no_loss);
+	tcase_add_test (tc, test_cmd_stats_depth_and_running);
 	tcase_set_timeout (tc, 30);
 	suite_add_tcase (s, tc);
 	return s;

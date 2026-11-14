@@ -102,6 +102,12 @@ typedef struct {
 	                                * any thread may read it lock-free */
 	size_t maxConnections;
 	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
+	/* Diagnostics (service thread only): the command-queue-full episode
+	 * and the rate limit of the table-full error */
+	bool cmdRefusing;             /* refusing since the last accepted request */
+	size_t cmdRefused;            /* requests refused in this episode */
+	long long tableFullNextMs;    /* earliest next table-full error */
+	unsigned int tableFullSuppressed;
 	/* Socket adapters (NULL = libwebsockets); seams so tests can drive
 	 * delivery with fake clients. writeFrame is the only socket write and is
 	 * called only from the writable handler. */
@@ -136,6 +142,10 @@ void BarWebsocketWorkerStop (BarApp_t *app);
 typedef int (*BarWsThreadCreate_fn) (pthread_t *thread, void *(*fn) (void *),
                                      void *arg);
 void BarWebsocketSetTestThreadCreateHook (BarWsThreadCreate_fn hook);
+/* Test seam: replaces the monotonic millisecond clock of the diagnostics
+ * (NULL restores it). */
+typedef long long (*BarWsClock_fn) (void);
+void BarWebsocketSetTestClock (BarWsClock_fn clock);
 
 /*
  * Queue a pre-formatted Socket.IO event for `dest` (a connection ID or
