@@ -3380,6 +3380,48 @@ START_TEST (test_cli_add_music_and_rename_gone_while_typing)
 }
 END_TEST
 
+/* Regression: the song actions offered after picking a history song were
+ * silently refused because the dispatch context lacked
+ * BAR_DC_PANDORA_CONNECTED (required since f2c595d). */
+START_TEST (test_cli_history_song_actions_run)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	PianoSong_t hist;
+	cli_app_setup (&app, &ctx, &keep, &other);
+	memset (&hist, 0, sizeof (hist));
+	hist.title = "Earlier";
+	hist.artist = "Someone";
+	hist.trackToken = "H1";
+	hist.stationId = "S1";
+	app.songHistory = &hist;
+	/* BarSettingsInit leaves every key disabled */
+	app.settings.keys[BAR_KS_LOVE] = '+';
+	app.settings.keys[BAR_KS_BAN] = '-';
+	app.settings.keys[BAR_KS_TIRED] = 't';
+	app.settings.keys[BAR_KS_EXPLAIN] = 'e';
+	app.settings.keys[BAR_KS_INFO] = 'i';
+
+	cli_run (&app, BarUiActHistory, NULL, NULL, "0\n+\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_RATE_SONG), 1);
+	cli_run (&app, BarUiActHistory, NULL, NULL, "0\n-\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_RATE_SONG), 2);
+	cli_run (&app, BarUiActHistory, NULL, NULL, "0\nt\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_ADD_TIRED_SONG), 1);
+	cli_run (&app, BarUiActHistory, NULL, NULL, "0\ne\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_EXPLAIN), 1);
+
+	/* actions that act on the playing song (BAR_DC_GLOBAL) stay refused */
+	unsigned before = g_cliCount;
+	cli_run (&app, BarUiActHistory, NULL, NULL, "0\ni\n");
+	ck_assert_uint_eq (g_cliCount, before);
+
+	app.songHistory = NULL;
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
 /* History: abort, pick, and the picked song gone while choosing */
 START_TEST (test_cli_history_pick_abort_and_gone)
 {
@@ -3400,9 +3442,7 @@ START_TEST (test_cli_history_pick_abort_and_gone)
 	cli_run (&app, BarUiActHistory, NULL, NULL, "\n");
 	ck_assert_uint_eq (g_cliCount, 0);
 	/* pick it and leave the action prompt empty. (An action key cannot be
-	 * used here: history dispatches with BAR_DC_UNDEFINED, so actions that
-	 * need BAR_DC_PANDORA_CONNECTED or BAR_DC_GLOBAL are refused; a
-	 * pre-existing limit, reported.) "?" re-asks. */
+	 * used here: see test_cli_history_song_actions_run.) "?" re-asks. */
 	cli_run (&app, BarUiActHistory, NULL, NULL, "0\n?\n");
 	ck_assert_uint_eq (g_cliCount, 0);
 	ck_assert_ptr_eq (app.songHistory, &hist);
@@ -3488,6 +3528,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_cli_create_add_and_rename_prompts);
 	tcase_add_test (tc, test_cli_add_music_and_rename_gone_while_typing);
 	tcase_add_test (tc, test_cli_history_pick_abort_and_gone);
+	tcase_add_test (tc, test_cli_history_song_actions_run);
 	tcase_add_test (tc, test_ui_act_history_pick_parses_number_like_before);
 	tcase_add_test (tc, test_ui_act_create_from_song_gone_only_reported_on_choice);
 	tcase_add_test (tc, test_ui_act_bookmark_song);

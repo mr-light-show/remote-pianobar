@@ -1044,9 +1044,10 @@ BarUiActCallback(BarUiActHistory) {
 						return;
 					}
 					/* actions assume that selStation is the song's original
-					 * station */
+					 * station. History needs a Pandora connection, so we are
+					 * connected here; most actions require that context. */
 					action = BarUiDispatch (app, buf[0], songStation, histSong,
-							false, BAR_DC_UNDEFINED);
+							false, BAR_DC_PANDORA_CONNECTED);
 				}
 			} while (action == BAR_KS_HELP);
 		} /* end if histSong != NULL */
