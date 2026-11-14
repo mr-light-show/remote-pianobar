@@ -59,6 +59,15 @@ typedef struct {
 	uint32_t lastGeneration;      /* Song generation lastBroadcast belonged to */
 } BarWsProgress_t;
 
+/* What the heartbeat reported last (diagnostics, service thread only) */
+typedef struct {
+	size_t connections, ingressMsgs, ingressBytes, cmdItems, cmdBytes;
+	size_t worstMsgs, worstBytes;
+	BarWsConnId_t worstId;
+	uint64_t cmdStarted;
+	bool cmdRunning;
+} BarWsDiagSnapshot_t;
+
 /* WebSocket server context */
 typedef struct {
 	void *context;                /* libwebsockets context */
@@ -108,6 +117,11 @@ typedef struct {
 	size_t cmdRefused;            /* requests refused in this episode */
 	long long tableFullNextMs;    /* earliest next table-full error */
 	unsigned int tableFullSuppressed;
+	bool tableHigh;               /* at least 75% full */
+	uint64_t stallSeq;            /* command the long-running check watches */
+	long long stallNextMs;        /* when to check it next */
+	long long heartbeatNextMs;    /* 0: not scheduled */
+	BarWsDiagSnapshot_t lastHeartbeat;
 	/* Socket adapters (NULL = libwebsockets); seams so tests can drive
 	 * delivery with fake clients. writeFrame is the only socket write and is
 	 * called only from the writable handler. */
@@ -181,6 +195,11 @@ void BarWsServiceOutbox (BarWsContext_t *ctx);
  * pending frame to `wsi` and request another callback if more are pending.
  * Returns -1 when libwebsockets must close the connection. */
 int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi);
+
+/* Service thread: log the long-running-command check and the heartbeat
+ * that are due (DEBUG_WEBSOCKET only). Returns the milliseconds until the
+ * next one is due, or -1 when that debugging is off (nothing to arm). */
+long long BarWsServiceDiagnostics (BarWsContext_t *ctx);
 
 /* Service-thread connection table updates (exposed for tests).
  * Add returns the new connection's ID, or BAR_WS_CONN_NONE if the table is

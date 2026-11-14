@@ -179,6 +179,18 @@ bool log_is_debug_cli_enabled(void)
 #endif
 }
 
+bool log_is_enabled (logKind kind)
+{
+	if (kind == LOG_ERROR) {
+		return true;
+	}
+#ifdef HAVE_DEBUGLOG
+	return (log_get_debug_mask () & (unsigned int) kind) != 0;
+#else
+	return false;
+#endif
+}
+
 void log_write(logKind kind, const char *format, ...)
 {
 	va_list args;

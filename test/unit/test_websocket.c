@@ -3290,6 +3290,236 @@ START_TEST (test_diag_table_full_logged_rate_limited)
 }
 END_TEST
 
+#define TEST_T0 1000000LL
+
+/* With debugging off nothing is due (no timer is armed), no debug line is
+ * written, even while a command runs past the threshold */
+START_TEST (test_diag_debug_off_no_lines_no_timer)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_log_start (DEBUG_AUDIO); /* another category only */
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	atomic_store (&test_now_ms, TEST_T0 + 60000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	test_add_client (&ctx, 1);
+	test_add_client (&ctx, 2); /* 75% */
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "WebSocket") == NULL, "log was: %s", log);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+
+START_TEST (test_diag_table_75_percent_transitions)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 0);
+	test_add_client (&ctx, 1);
+	const char *log = test_log_stop ();
+	ck_assert (strstr (log, "Connection table") == NULL);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 2);
+	test_add_client (&ctx, 3);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[3]); /* 3/4: still high */
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table"), 1);
+	ck_assert (strstr (log, "Connection table 75% full (3/4 in use)\n") != NULL);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[1]);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table"), 1);
+	ck_assert (strstr (log, "Connection table below 75% full again (2/4 in use)\n") != NULL);
+
+	/* Crossing again is logged again */
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 1);
+	test_add_client (&ctx, 2);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table 75% full (3/4 in use)\n"), 1);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* The worker marks the command it runs; the service thread logs it after
+ * 10 s and every further 10 s while it still runs, then the worker logs how
+ * long it took. Driven by the test clock, no real waiting. */
+START_TEST (test_diag_stall_check_logs_running_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_log_start (DEBUG_WEBSOCKET);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1); /* inside the handler */
+	test_receive (&app, 0, TEST_PING); /* queued behind it */
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* the check is due */
+	atomic_store (&test_now_ms, TEST_T0 + 9999);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 1);
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running") == NULL, "log was: %s", log);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 10000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000);
+	atomic_store (&test_now_ms, TEST_T0 + 15000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 5000); /* not due: silent */
+	atomic_store (&test_now_ms, TEST_T0 + 25000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 5000); /* next at 30 s */
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Command running"), 2);
+	char want[160];
+	snprintf (want, sizeof (want), "Command running for 10 s: %s (queue 1 items/%zu bytes)\n",
+			TEST_EXPLAIN, strlen (TEST_PING));
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	snprintf (want, sizeof (want), "Command running for 25 s: %s", TEST_EXPLAIN);
+	ck_assert (strstr (log, want) != NULL);
+
+	/* The heartbeat reports it as well */
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 30000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000);
+	log = test_log_stop ();
+	snprintf (want, sizeof (want), "worker running %s for 30 s,", TEST_EXPLAIN);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert (strstr (log, "commands 1 items/") != NULL);
+
+	/* It finishes: the worker logs the duration, the check goes quiet */
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 31000);
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	atomic_store (&test_now_ms, TEST_T0 + 50000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* heartbeat only */
+	log = test_log_stop ();
+	snprintf (want, sizeof (want), "Command finished after 31 s: %s\n", TEST_EXPLAIN);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert (strstr (log, "Command running") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_diag_stall_check_skips_finished_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_log_start (DEBUG_WEBSOCKET);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	BarWebsocketWorkerStop (&app); /* finished in no (test) time */
+	atomic_store (&test_now_ms, TEST_T0 + 20000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000); /* nothing to check */
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running") == NULL, "log was: %s", log);
+	ck_assert (strstr (log, "Command finished") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* Every 30 s with debugging on: one status line, skipped while everything
+ * is idle and unchanged since the last one */
+START_TEST (test_diag_heartbeat_content_and_idle_skip)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	atomic_store (&test_now_ms, TEST_T0 + 30000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Status:") == NULL, "log was: %s", log); /* idle */
+
+	/* A client with a pending frame: logged, and again while it stays */
+	test_add_client (&ctx, 0);
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	BarWsServiceOutbox (&ctx);
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 60000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	atomic_store (&test_now_ms, TEST_T0 + 75000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 15000); /* not due */
+	atomic_store (&test_now_ms, TEST_T0 + 90000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Status:"), 2);
+	ck_assert_msg (strstr (log, "Status: connections 1/4, ingress 0 msgs/0 bytes, "
+			"commands 0 items/0 bytes, worker idle, worst pending 1 msgs/6 bytes "
+			"(client 1)\n") != NULL, "log was: %s", log);
+
+	/* Drained: logged once (changed), then skipped (idle, unchanged) */
+	test_log_start (DEBUG_WEBSOCKET);
+	test_drain_client (&ctx, 0);
+	atomic_store (&test_now_ms, TEST_T0 + 120000);
+	BarWsServiceDiagnostics (&ctx);
+	atomic_store (&test_now_ms, TEST_T0 + 150000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Status:"), 1);
+	ck_assert (strstr (log, "worst pending 0 msgs/0 bytes (client 0)\n") != NULL);
+
+	/* Undelivered ingress is reported */
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 180000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "ingress 1 msgs/6 bytes") != NULL, "log was: %s", log);
+
+	/* Turning debugging off disarms it; on again it waits a full period */
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 190000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	log = test_log_stop ();
+	ck_assert (strstr (log, "Status:") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+#endif /* HAVE_DEBUGLOG */
+
 Suite *websocket_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -3394,6 +3624,14 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_diag, test_diag_client_overflow_logs_its_pending);
 	tcase_add_test (tc_diag, test_diag_busy_episode_logged_once);
 	tcase_add_test (tc_diag, test_diag_table_full_logged_rate_limited);
+	tcase_add_test (tc_diag, test_diag_debug_off_no_lines_no_timer);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test (tc_diag, test_diag_table_75_percent_transitions);
+	tcase_add_test (tc_diag, test_diag_stall_check_logs_running_command);
+	tcase_add_test (tc_diag, test_diag_stall_check_skips_finished_command);
+	tcase_add_test (tc_diag, test_diag_heartbeat_content_and_idle_skip);
+#endif
+	tcase_set_timeout (tc_diag, 30);
 	suite_add_tcase (s, tc_diag);
 	
 	return s;

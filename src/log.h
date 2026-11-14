@@ -48,6 +48,11 @@ bool log_is_any_debug_enabled(void);
 /* True when log_write(DEBUG_CLI, ...) would emit (debug_mask & DEBUG_CLI); HAVE_DEBUGLOG only. */
 bool log_is_debug_cli_enabled(void);
 
+/* True when log_write (kind, ...) would emit: always for LOG_ERROR, else when
+ * the kind's bit is in the debug mask (never without HAVE_DEBUGLOG). Lets a
+ * caller skip diagnostics work, e.g. arming a timer, when nothing is logged. */
+bool log_is_enabled (logKind kind);
+
 /* Log message. LOG_ERROR always emits; DEBUG_* use debug_mask (DEBUG_CLI OR'd at init when any bit set);
  * other DEBUG_* kinds emit when the corresponding PIANOBAR_DEBUG bit is set. */
 void log_write(logKind kind, const char *format, ...)

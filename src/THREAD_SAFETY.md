@@ -715,7 +715,7 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 | Thread | Owns | Runs |
 |---|---|---|
 | Main (lifecycle owner) | `BarWebsocketInit`/`BarWebsocketDestroy` (they start and stop the worker; `BarWebsocketWorkerStart`/`Stop` are public only as test seams) | CLI input in Both mode |
-| Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks collect a message and queue a copy; the initial `process` snapshot on connect; the debounced volume broadcast and the 1 s system-volume poll, on an `lws_sul` timer armed only while such work is due (`lws_service` otherwise sleeps until socket activity or a producer's `lws_cancel_service`) |
+| Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks collect a message and queue a copy; the initial `process` snapshot on connect; the debounced volume broadcast and the 1 s system-volume poll (and, with `DEBUG_WEBSOCKET`, the diagnostics below), on an `lws_sul` timer armed only while such work is due (`lws_service` otherwise sleeps until socket activity or a producer's `lws_cancel_service`) |
 | Command worker (`BarWsWorkerThread`) | nothing shared; pops one command at a time | `BarSocketIoHandleMessage` for every client command, FIFO, with the handlers' own locking (below) |
 | Any producer (worker, playback manager, CLI) | nothing | `BarWebsocketSend` and friends: push to the outbox and `lws_cancel_service()`; never blocks on a client |
 | Playback manager | `ctx->progress` (progress de-duplication) | `BarWsBroadcastProgress` |
@@ -745,6 +745,24 @@ A message that arrives in parts is collected per connection (the buffer is freed
 If `BarWebsocketInit` fails after the worker started (the service thread cannot be created), it closes the queue and joins the idle worker without an interrupt: at startup the interrupt target is `app->doQuit`, so interrupting would quit the player instead of continuing without the web server.
 
 `app.quit` arriving as a command runs on the worker: it sets `doQuit` and stops the player, which the main loop notices as it does for the CLI `q` key. The worker never joins itself; `BarWebsocketWorkerStop` called on the worker logs and returns.
+
+### Diagnostics and log lines
+
+Errors are logged whenever a client, an event or a request is lost, dropped or refused; the rest needs `debug=8` in the config (or `PIANOBAR_DEBUG=8`, `DEBUG_WEBSOCKET`). With that bit off the diagnostics arm no timer and the worker sends no extra wakeup. Depths are read on the service thread: the command queue and the ingress under their own locks, per-client queues directly (service thread owned).
+
+| Line (prefix) | Level | When | What it tells you |
+|---|---|---|---|
+| `Outbound event queue overflowed (m/M messages, b/B bytes queued); closing all clients so they resync` | Error | A producer push was refused (ingress full or out of memory) | Every client is closed (1011) and resyncs. Numbers at the limit: the service thread is not draining (stuck or starved); below it: out of memory |
+| `Client N event queue full (m/M messages, b/B bytes pending, s-byte event refused); closing it` | Error | One client's pending queue overflowed | That client stopped reading (or is too slow); only it is closed (1008) |
+| `Command queue full (i/I items, b/B bytes); refusing requests, first from client N` | Error | First refusal of an overload episode (each refused client still gets one `web.socket.busy` error) | The worker is behind: look for `Command running` lines |
+| `Command queue accepting again after K refused requests` | Debug | First accepted request after that | The episode ended; K requests were refused in it |
+| `Connection table full (n/N in use): a new client is connected but untracked (K more since the last report)` | Error | A client connected while all slots were in use; at most once a second, K counts the ones not logged | That client gets no events and its requests are dropped (it looks connected but dead). Stale connections are holding slots |
+| `Connection table 75% full (n/N in use)` / `Connection table below 75% full again (n/N in use)` | Debug | Crossing 75% upward / back down (once per crossing) | Early warning before the table fills |
+| `Command running for T s: <first 40 bytes> (queue i items/b bytes)` | Debug | The worker has been inside one command for 10 s, then every further 10 s | Which command blocks the worker, for how long, and what waits behind it |
+| `Command finished after T s: <first 40 bytes>` | Debug | A command that ran 10 s or longer returns | How long the stall lasted |
+| `Status: connections n/N, ingress m msgs/b bytes, commands i items/b bytes, worker idle\|running <cmd> for T s, worst pending m msgs/b bytes (client N)` | Debug | Every 30 s, skipped while everything is idle and unchanged since the last one (client 0: no client has pending frames) | One-line health: which queue is filling, whether the worker is busy, which client lags |
+
+The worker marks the command it runs in the command queue (`BarWsCommandQueueBegin`/`End`; the first 40 bytes, a monotonic start time and a sequence number) and, with `DEBUG_WEBSOCKET` on, wakes the service thread with `lws_cancel_service`. The service thread (`BarWsServiceDiagnostics`) then arms its one `lws_sul` timer for the 10 s check of that sequence number and the 30 s heartbeat; when the check fires it logs only if the same command is still running. Other existing errors stay: an oversize frame or request (`Dropping …`), out of memory, and thread or context creation failures.
 
 Limit: the interrupt reaches a request only while it is in curl. A command that is between Pandora calls, or a target redirected by the playback manager meanwhile, is not interrupted, and the join waits for it. One request can take up to `timeout` × `max_retry` (`BarPianoHttpRequest` retries temporary network errors; 30 s × 5 = 150 s by default), and a handler may issue several requests (re-login, then the call). A service manager's stop timeout shorter than that (systemd's default `TimeoutStopSec` is 90 s) can kill the process during shutdown on a dead network; raise it, or lower `timeout`/`max_retry`, where that matters.
 

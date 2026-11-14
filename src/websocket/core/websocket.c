@@ -113,6 +113,11 @@ BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
 			BarWsClientQueueInit (&conn->pending);
 			snprintf (conn->protocol, sizeof (conn->protocol), "%s", protocol);
 			ctx->numConnections++;
+			if (!ctx->tableHigh && ctx->numConnections * 4 >= ctx->maxConnections * 3) {
+				ctx->tableHigh = true;
+				log_write (DEBUG_WEBSOCKET, "Connection table 75%% full (%zu/%zu in use)\n",
+				           ctx->numConnections, ctx->maxConnections);
+			}
 			return conn->id;
 		}
 	}
@@ -288,6 +293,11 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi) {
 	conn->closeReason = NULL;
 	conn->protocol[0] = '\0';
 	ctx->numConnections--;
+	if (ctx->tableHigh && ctx->numConnections * 4 < ctx->maxConnections * 3) {
+		ctx->tableHigh = false;
+		log_write (DEBUG_WEBSOCKET, "Connection table below 75%% full again (%zu/%zu in use)\n",
+		           ctx->numConnections, ctx->maxConnections);
+	}
 }
 
 /* Overflow policies. Events are never silently dropped:
@@ -637,16 +647,96 @@ static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
 	}
 }
 
+/*	Diagnostics (DEBUG_WEBSOCKET): a command still running after
+ * BAR_WS_STALL_MS, then every further BAR_WS_STALL_MS, and a status line
+ * every BAR_WS_HEARTBEAT_MS unless everything is idle and unchanged. The
+ * worker wakes this thread when it starts a command, so the check is armed
+ * on the shared timer below; with debugging off nothing is armed. */
+#define BAR_WS_STALL_MS 10000
+#define BAR_WS_HEARTBEAT_MS 30000
+
+static void BarWsHeartbeat (BarWsContext_t *ctx, const BarWsCommandQueueStats_t *cmd,
+                            long long now) {
+	BarWsDiagSnapshot_t s;
+	memset (&s, 0, sizeof (s));
+	s.connections = ctx->numConnections;
+	BarWsOutboxDepth (ctx->outbox, &s.ingressMsgs, &s.ingressBytes);
+	s.cmdItems = cmd->items;
+	s.cmdBytes = cmd->bytes;
+	s.cmdStarted = cmd->started;
+	s.cmdRunning = cmd->running;
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		const BarWsConnection_t *conn = &ctx->connections[i];
+		if (conn->wsi != NULL && conn->pending.count > 0 &&
+				(s.worstId == 0 || conn->pending.bytes > s.worstBytes)) {
+			s.worstId = conn->id;
+			s.worstMsgs = conn->pending.count;
+			s.worstBytes = conn->pending.bytes;
+		}
+	}
+	const bool idle = s.ingressMsgs == 0 && s.cmdItems == 0 && !s.cmdRunning &&
+			s.worstMsgs == 0;
+	if (idle && memcmp (&s, &ctx->lastHeartbeat, sizeof (s)) == 0) {
+		return;
+	}
+	memcpy (&ctx->lastHeartbeat, &s, sizeof (s));
+	char worker[96] = "idle";
+	if (cmd->running) {
+		snprintf (worker, sizeof (worker), "running %s for %lld s", cmd->name,
+		          (now - cmd->runningSinceMs) / 1000);
+	}
+	log_write (DEBUG_WEBSOCKET, "Status: connections %zu/%zu, ingress %zu msgs/%zu bytes, "
+	           "commands %zu items/%zu bytes, worker %s, worst pending %zu msgs/%zu bytes "
+	           "(client %llu)\n", s.connections, ctx->maxConnections, s.ingressMsgs,
+	           s.ingressBytes, s.cmdItems, s.cmdBytes, worker, s.worstMsgs, s.worstBytes,
+	           (unsigned long long) s.worstId);
+}
+
+long long BarWsServiceDiagnostics (BarWsContext_t *ctx) {
+	if (!log_is_enabled (DEBUG_WEBSOCKET)) {
+		ctx->heartbeatNextMs = 0;
+		return -1;
+	}
+	const long long now = BarWsNowMs ();
+	BarWsCommandQueueStats_t cmd;
+	BarWsCommandQueueStats (ctx->commands, &cmd);
+	if (ctx->heartbeatNextMs == 0) {
+		ctx->heartbeatNextMs = now + BAR_WS_HEARTBEAT_MS;
+	} else if (now >= ctx->heartbeatNextMs) {
+		BarWsHeartbeat (ctx, &cmd, now);
+		ctx->heartbeatNextMs = now + BAR_WS_HEARTBEAT_MS;
+	}
+	long long next = ctx->heartbeatNextMs;
+	if (cmd.running) {
+		if (cmd.started != ctx->stallSeq) {
+			ctx->stallSeq = cmd.started;
+			ctx->stallNextMs = cmd.runningSinceMs + BAR_WS_STALL_MS;
+		}
+		if (now >= ctx->stallNextMs) {
+			const long long ran = now - cmd.runningSinceMs;
+			log_write (DEBUG_WEBSOCKET, "Command running for %lld s: %s (queue %zu items/%zu bytes)\n",
+			           ran / 1000, cmd.name, cmd.items, cmd.bytes);
+			ctx->stallNextMs = now + BAR_WS_STALL_MS - ran % BAR_WS_STALL_MS;
+		}
+		if (ctx->stallNextMs < next) {
+			next = ctx->stallNextMs;
+		}
+	}
+	return next - now;
+}
+
 /* The timer only has to end lws_service(): the loop below does the work */
 static void BarWsTimerWake (lws_sorted_usec_list_t *sul) {
 	(void) sul;
 }
 
 /* Arm the service-loop timer for the next due work: the debounced volume
- * deadline and, in system volume mode, the 1 s poll. Nothing is armed when
- * idle, so the thread sleeps until a socket event or a producer's wake.
+ * deadline, in system volume mode the 1 s poll, and the diagnostics due in
+ * diagMs (-1: none). Nothing is armed when idle, so the thread sleeps until
+ * a socket event or a producer's wake.
  * Service thread only (lws_sul is not thread-safe). */
-static void BarWsArmTimer (BarWsContext_t *ctx, const BarApp_t *app) {
+static void BarWsArmTimer (BarWsContext_t *ctx, const BarApp_t *app,
+                           long long diagMs) {
 	long long delayMs = -1;
 
 	pthread_mutex_lock (&ctx->volumeBroadcastMutex);
@@ -663,6 +753,9 @@ static void BarWsArmTimer (BarWsContext_t *ctx, const BarApp_t *app) {
 	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM &&
 			(delayMs < 0 || delayMs > 1000)) {
 		delayMs = 1000;
+	}
+	if (diagMs >= 0 && (delayMs < 0 || diagMs < delayMs)) {
+		delayMs = diagMs;
 	}
 	if (delayMs >= 0) {
 		lws_sul_schedule ((struct lws_context *) ctx->context, 0,
@@ -699,7 +792,7 @@ static void* BarWebsocketThread(void *arg) {
 		/* Deliver what producers (and the callbacks above) queued */
 		BarWsServiceOutbox (ctx);
 		
-		BarWsArmTimer (ctx, app);
+		BarWsArmTimer (ctx, app, BarWsServiceDiagnostics (ctx));
 		
 		/* NOTE: Progress broadcasting now handled by playback_manager thread
 		 * This ensures timing is independent of WebSocket servicing delays
@@ -749,13 +842,27 @@ static int BarWsThreadCreate (pthread_t *thread, void *(*fn) (void *), void *arg
  */
 static void *BarWsWorkerThread (void *arg) {
 	BarApp_t *app = arg;
-	BarWsCommandQueue_t *commands = ((BarWsContext_t *) app->wsContext)->commands;
+	const BarWsContext_t *ctx = app->wsContext;
+	BarWsCommandQueue_t *commands = ctx->commands;
 	BarWsConnId_t requester;
 	char *text;
 
 	log_write (DEBUG_WEBSOCKET, "Command worker started\n");
 	while (BarWsCommandQueuePop (commands, &requester, &text, NULL)) {
+		/* Marked for the service thread's long-running check, which is
+		 * armed when it wakes (only while it would log) */
+		const long long start = BarWsNowMs ();
+		BarWsCommandQueueBegin (commands, text, start);
+		if (log_is_enabled (DEBUG_WEBSOCKET)) {
+			BarWsWake (ctx);
+		}
 		BarSocketIoHandleMessage (app, text, requester);
+		BarWsCommandQueueEnd (commands);
+		const long long ran = BarWsNowMs () - start;
+		if (ran >= BAR_WS_STALL_MS) {
+			log_write (DEBUG_WEBSOCKET, "Command finished after %lld s: %.40s\n",
+			           ran / 1000, text);
+		}
 		free (text);
 	}
 	log_write (DEBUG_WEBSOCKET, "Command worker stopped\n");
