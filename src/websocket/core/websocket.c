@@ -126,9 +126,14 @@ BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
 	if (now < ctx->tableFullNextMs) {
 		ctx->tableFullSuppressed++;
 	} else {
+		char more[48] = "";
+		if (ctx->tableFullSuppressed > 0) {
+			snprintf (more, sizeof (more), " (%u more since the last report)",
+			          ctx->tableFullSuppressed);
+		}
 		log_write (LOG_ERROR, "Connection table full (%zu/%zu in use): a new client is "
-		           "connected but untracked (%u more since the last report)\n",
-		           ctx->numConnections, ctx->maxConnections, ctx->tableFullSuppressed);
+		           "connected but untracked%s\n", ctx->numConnections,
+		           ctx->maxConnections, more);
 		ctx->tableFullNextMs = now + 1000;
 		ctx->tableFullSuppressed = 0;
 	}
@@ -171,10 +176,17 @@ static void BarWsQueueRequest (BarApp_t *app, BarWsConnection_t *conn,
 	switch (BarWsCommandQueuePush (ctx->commands, conn->id, bytes, len)) {
 		case BAR_WS_CMD_OK:
 			conn->busyNotified = false;
+			/* The episode ends once the queue has drained to half; ending it
+			 * at the first accepted push would log an error per pop under
+			 * sustained overload */
 			if (ctx->cmdRefusing) {
-				ctx->cmdRefusing = false;
-				log_write (DEBUG_WEBSOCKET, "Command queue accepting again after %zu refused requests\n",
-				           ctx->cmdRefused);
+				BarWsCommandQueueStats_t st;
+				BarWsCommandQueueStats (ctx->commands, &st);
+				if (st.items <= WS_CMD_MAX_ITEMS / 2 && st.bytes <= WS_CMD_MAX_BYTES / 2) {
+					ctx->cmdRefusing = false;
+					log_write (DEBUG_WEBSOCKET, "Command queue accepting again after %zu "
+					           "refused requests\n", ctx->cmdRefused);
+				}
 			}
 			break;
 		case BAR_WS_CMD_FULL:
@@ -293,9 +305,11 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi) {
 	conn->closeReason = NULL;
 	conn->protocol[0] = '\0';
 	ctx->numConnections--;
-	if (ctx->tableHigh && ctx->numConnections * 4 < ctx->maxConnections * 3) {
+	/* Hysteresis: cleared only below half, so a table hovering at 75%
+	 * logs once */
+	if (ctx->tableHigh && ctx->numConnections * 2 < ctx->maxConnections) {
 		ctx->tableHigh = false;
-		log_write (DEBUG_WEBSOCKET, "Connection table below 75%% full again (%zu/%zu in use)\n",
+		log_write (DEBUG_WEBSOCKET, "Connection table below 50%% full again (%zu/%zu in use)\n",
 		           ctx->numConnections, ctx->maxConnections);
 	}
 }
@@ -331,8 +345,10 @@ void BarWsServiceOutbox (BarWsContext_t *ctx) {
 		return;
 	}
 	bool overflowed = BarWsOutboxTakeOverflow (ctx->outbox);
-	size_t msgs, bytes;
-	BarWsOutboxDepth (ctx->outbox, &msgs, &bytes);
+	size_t msgs = 0, bytes = 0;
+	if (overflowed) {
+		BarWsOutboxDepth (ctx->outbox, &msgs, &bytes); /* what Take drops */
+	}
 	BarWsPending_t *list = BarWsOutboxTake (ctx->outbox);
 
 	if (overflowed) {

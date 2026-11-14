@@ -208,7 +208,8 @@ void BarWsCommandQueueBegin (BarWsCommandQueue_t *q, const char *bytes,
 	q->run.started++;
 	q->run.running = true;
 	q->run.runningSinceMs = nowMs;
-	snprintf (q->run.name, sizeof (q->run.name), "%s", bytes ? bytes : "");
+	snprintf (q->run.name, sizeof (q->run.name), "%.*s", BAR_WS_CMD_NAME_LEN,
+	          bytes ? bytes : "");
 	pthread_mutex_unlock (&q->lock);
 }
 

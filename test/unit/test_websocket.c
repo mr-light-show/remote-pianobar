@@ -3108,6 +3108,16 @@ static const char *test_log_stop (void) {
 	return test_log_text;
 }
 
+/* Checked teardown of the diagnostics tests: undo a capture or clock that
+ * a failed assertion left behind */
+static void test_diag_teardown (void) {
+	if (test_log_saved >= 0) {
+		(void) test_log_stop ();
+	}
+	log_set_debug_mask (0);
+	BarWebsocketSetTestClock (NULL);
+}
+
 static size_t test_count_lines (const char *text, const char *needle) {
 	size_t n = 0;
 	for (const char *p = strstr (text, needle); p; p = strstr (p + 1, needle)) {
@@ -3203,6 +3213,13 @@ START_TEST (test_diag_busy_episode_logged_once)
 	BarWsHandleReceive (&app, b, TEST_PING, len, true); /* first refusal */
 	BarWsHandleReceive (&app, a, TEST_PING, len, true); /* same episode */
 	BarWsHandleReceive (&app, b, TEST_PING, len, true);
+	/* Sustained overload: the worker frees one slot at a time, one request
+	 * gets in, the next is refused. Still the same episode. */
+	for (int i = 0; i < 10; i++) {
+		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	}
 	const char *log = test_log_stop ();
 	char want[160];
 	snprintf (want, sizeof (want),
@@ -3216,33 +3233,39 @@ START_TEST (test_diag_busy_episode_logged_once)
 	ck_assert (strstr (log, "Error") != NULL); /* LOG_ERROR label */
 #endif
 
-	/* Accepted again: the episode ends */
-	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	/* The episode ends once the queue has drained to half */
+	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
+		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	}
 	test_log_start (DEBUG_WEBSOCKET);
-	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	BarWsHandleReceive (&app, a, TEST_PING, len, true); /* now half full */
 	log = test_log_stop ();
 #ifdef HAVE_DEBUGLOG
-	ck_assert_msg (strstr (log, "Command queue accepting again after 3 refused requests\n")
+	ck_assert_msg (strstr (log, "Command queue accepting again after 13 refused requests\n")
 			!= NULL, "log was: %s", log);
 #endif
 	ck_assert (strstr (log, "Command queue full") == NULL);
 
 	/* A later refusal starts a new episode (debugging off: error only) */
 	test_log_start (0);
-	BarWsHandleReceive (&app, a, TEST_PING, len, true);
-	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
+		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	}
 	log = test_log_stop ();
 	ck_assert_uint_eq (test_count_lines (log, "Command queue full"), 1);
 	ck_assert (strstr (log, "first from client 1\n") != NULL);
-	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
+		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	}
 	test_log_start (0);
 	BarWsHandleReceive (&app, a, TEST_PING, len, true);
 	log = test_log_stop ();
 	ck_assert_str_eq (log, ""); /* the recovery line is debug only */
 
-	/* The busy reply is still sent once per connection per overload */
+	/* The busy reply is unchanged: once per connection until one of its
+	 * requests is accepted (so once per refusal in the loop above) */
 	TestWsCaptureFlush ();
-	ck_assert_uint_eq (TestWsCaptureCount (0, "busy"), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "busy"), 12);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "busy"), 1);
 
 	BarWsCommandQueueFree (ctx.commands);
@@ -3273,7 +3296,7 @@ START_TEST (test_diag_table_full_logged_rate_limited)
 	const char *log = test_log_stop ();
 	ck_assert_uint_eq (test_count_lines (log, "Connection table full"), 1);
 	ck_assert_msg (strstr (log, "Connection table full (4/4 in use): a new client is "
-			"connected but untracked (0 more since the last report)\n") != NULL,
+			"connected but untracked\n") != NULL,
 			"log was: %s", log);
 
 	atomic_store (&test_now_ms, 501000);
@@ -3344,14 +3367,21 @@ START_TEST (test_diag_table_75_percent_transitions)
 	ck_assert_uint_eq (test_count_lines (log, "Connection table"), 1);
 	ck_assert (strstr (log, "Connection table 75% full (3/4 in use)\n") != NULL);
 
+	/* Hysteresis: hovering between 50% and 75% logs nothing */
 	test_log_start (DEBUG_WEBSOCKET);
-	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]);
-	BarWsConnectionRemove (&ctx, &test_fake_sockets[1]);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]); /* 2/4 */
+	test_add_client (&ctx, 2);                           /* 3/4 */
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]); /* 2/4 */
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Connection table") == NULL, "log was: %s", log);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[1]); /* 1/4 */
 	log = test_log_stop ();
 	ck_assert_uint_eq (test_count_lines (log, "Connection table"), 1);
-	ck_assert (strstr (log, "Connection table below 75% full again (2/4 in use)\n") != NULL);
+	ck_assert (strstr (log, "Connection table below 50% full again (1/4 in use)\n") != NULL);
 
-	/* Crossing again is logged again */
+	/* Crossing 75% again is logged again */
 	test_log_start (DEBUG_WEBSOCKET);
 	test_add_client (&ctx, 1);
 	test_add_client (&ctx, 2);
@@ -3449,6 +3479,43 @@ START_TEST (test_diag_stall_check_skips_finished_command)
 
 	BarWebsocketSetTestClock (NULL);
 	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* A check armed for command A must not report B, which started after A
+ * finished: B gets its own 10 s from its own start */
+START_TEST (test_diag_stall_check_does_not_report_a_later_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	ctx.commands = BarWsCommandQueueNew (); /* the test marks commands itself */
+	ck_assert_ptr_nonnull (ctx.commands);
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsCommandQueueBegin (ctx.commands, "2[\"a\"]", TEST_T0);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* A's deadline */
+	BarWsCommandQueueEnd (ctx.commands);
+	BarWsCommandQueueBegin (ctx.commands, "2[\"b\"]", TEST_T0 + 9000);
+	atomic_store (&test_now_ms, TEST_T0 + 10000); /* A's deadline fires */
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 9000); /* B's, at +19 s */
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running") == NULL, "log was: %s", log);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 19000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running for 10 s: 2[\"b\"]") != NULL,
+			"log was: %s", log);
+	ck_assert (strstr (log, "2[\"a\"]") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	test_teardown_clients (&app, &ctx);
 }
 END_TEST
 
@@ -3629,8 +3696,10 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_diag, test_diag_table_75_percent_transitions);
 	tcase_add_test (tc_diag, test_diag_stall_check_logs_running_command);
 	tcase_add_test (tc_diag, test_diag_stall_check_skips_finished_command);
+	tcase_add_test (tc_diag, test_diag_stall_check_does_not_report_a_later_command);
 	tcase_add_test (tc_diag, test_diag_heartbeat_content_and_idle_skip);
 #endif
+	tcase_add_checked_fixture (tc_diag, NULL, test_diag_teardown);
 	tcase_set_timeout (tc_diag, 30);
 	suite_add_tcase (s, tc_diag);
 	

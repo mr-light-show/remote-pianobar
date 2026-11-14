@@ -113,11 +113,11 @@ typedef struct {
 	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
 	/* Diagnostics (service thread only): the command-queue-full episode
 	 * and the rate limit of the table-full error */
-	bool cmdRefusing;             /* refusing since the last accepted request */
+	bool cmdRefusing;             /* refusing until the queue drains to half */
 	size_t cmdRefused;            /* requests refused in this episode */
 	long long tableFullNextMs;    /* earliest next table-full error */
 	unsigned int tableFullSuppressed;
-	bool tableHigh;               /* at least 75% full */
+	bool tableHigh;               /* reached 75% full, not yet below 50% */
 	uint64_t stallSeq;            /* command the long-running check watches */
 	long long stallNextMs;        /* when to check it next */
 	long long heartbeatNextMs;    /* 0: not scheduled */
