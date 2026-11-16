@@ -59,12 +59,13 @@ typedef struct {
 	uint32_t lastGeneration;      /* Song generation lastBroadcast belonged to */
 } BarWsProgress_t;
 
-/* What the heartbeat reported last (diagnostics, service thread only) */
+/* The load the heartbeat reported last (diagnostics, service thread only).
+ * Connection count and command sequence are not part of it: they change in
+ * normal operation and are logged where they happen. */
 typedef struct {
-	size_t connections, ingressMsgs, ingressBytes, cmdItems, cmdBytes;
+	size_t ingressMsgs, ingressBytes, cmdItems, cmdBytes;
 	size_t worstMsgs, worstBytes;
 	BarWsConnId_t worstId;
-	uint64_t cmdStarted;
 	bool cmdRunning;
 } BarWsDiagSnapshot_t;
 

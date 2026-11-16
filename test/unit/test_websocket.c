@@ -3564,6 +3564,16 @@ START_TEST (test_diag_heartbeat_content_and_idle_skip)
 	ck_assert_uint_eq (test_count_lines (log, "Status:"), 1);
 	ck_assert (strstr (log, "worst pending 0 msgs/0 bytes (client 0)\n") != NULL);
 
+	/* Connections and finished commands alone do not make it speak again */
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 1);
+	BarWsCommandQueueBegin (ctx.commands, "x", TEST_T0 + 165000);
+	BarWsCommandQueueEnd (ctx.commands);
+	atomic_store (&test_now_ms, TEST_T0 + 165000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Status:") == NULL, "log was: %s", log);
+
 	/* Undelivered ingress is reported */
 	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
 	test_log_start (DEBUG_WEBSOCKET);

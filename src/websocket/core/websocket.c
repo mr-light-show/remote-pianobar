@@ -675,11 +675,9 @@ static void BarWsHeartbeat (BarWsContext_t *ctx, const BarWsCommandQueueStats_t 
                             long long now) {
 	BarWsDiagSnapshot_t s;
 	memset (&s, 0, sizeof (s));
-	s.connections = ctx->numConnections;
 	BarWsOutboxDepth (ctx->outbox, &s.ingressMsgs, &s.ingressBytes);
 	s.cmdItems = cmd->items;
 	s.cmdBytes = cmd->bytes;
-	s.cmdStarted = cmd->started;
 	s.cmdRunning = cmd->running;
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
 		const BarWsConnection_t *conn = &ctx->connections[i];
@@ -703,7 +701,7 @@ static void BarWsHeartbeat (BarWsContext_t *ctx, const BarWsCommandQueueStats_t 
 	}
 	log_write (DEBUG_WEBSOCKET, "Status: connections %zu/%zu, ingress %zu msgs/%zu bytes, "
 	           "commands %zu items/%zu bytes, worker %s, worst pending %zu msgs/%zu bytes "
-	           "(client %llu)\n", s.connections, ctx->maxConnections, s.ingressMsgs,
+	           "(client %llu)\n", ctx->numConnections, ctx->maxConnections, s.ingressMsgs,
 	           s.ingressBytes, s.cmdItems, s.cmdBytes, worker, s.worstMsgs, s.worstBytes,
 	           (unsigned long long) s.worstId);
 }
