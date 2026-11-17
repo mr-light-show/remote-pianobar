@@ -373,7 +373,7 @@ test-all: test lint
 # Build and run tests with coverage instrumentation
 test-coverage: clean
 	${SILENTECHO} "   TEST  Building with coverage instrumentation..."
-	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -g -O0" LDFLAGS="${LDFLAGS} --coverage"
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -fprofile-update=atomic -g -O0" LDFLAGS="${LDFLAGS} --coverage"
 	${SILENTECHO} "   TEST  Running test suite (CI parity: integration + headless audio)..."
 	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
 	${SILENTECHO} "   COV   Generating coverage report..."
