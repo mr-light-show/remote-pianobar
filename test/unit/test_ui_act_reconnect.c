@@ -13,6 +13,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 
 #include "../../src/bar_constants.h"
@@ -3458,6 +3459,549 @@ START_TEST (test_cli_history_pick_abort_and_gone)
 }
 END_TEST
 
+BarKeyShortcutId_t BarUiDispatchById (BarApp_t *, BarKeyShortcutId_t,
+		PianoStation_t *, PianoSong_t *, const bool, int);
+bool BarUiDispatchHoldsPianoLock (BarKeyShortcutId_t);
+#define TEST_DC_GLOBAL_CONNECTED (1 /* BAR_DC_GLOBAL */ | 8 /* _PANDORA_CONNECTED */)
+
+/* --- No lock is held while a thread waits (CLI) ---------------------------
+ *
+ * Hard rule: nothing waits for the user, for eventcmd or for the playback
+ * manager while holding pianoHttpMutex, stateRwlock or a player lock.
+ *
+ * pianoHttpMutex is recursive, so a thread cannot test its own hold: every
+ * probe runs on another thread and must be able to take all four locks. */
+
+enum {
+	LOCK_PIANO = 1,   /* pianoHttpMutex */
+	LOCK_STATE = 2,   /* stateRwlock (write) */
+	LOCK_PLAYER = 4,  /* player.lock */
+	LOCK_DECODER = 8, /* player.decoderLock */
+};
+
+/* Locks that cannot be taken right now (from a thread other than the owner) */
+static unsigned
+lock_probe_now (BarApp_t *app)
+{
+	unsigned busy = 0;
+	if (pthread_mutex_trylock (&app->pianoHttpMutex) == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	} else {
+		busy |= LOCK_PIANO;
+	}
+	if (pthread_rwlock_trywrlock (&app->stateRwlock) == 0) {
+		pthread_rwlock_unlock (&app->stateRwlock);
+	} else {
+		busy |= LOCK_STATE;
+	}
+	if (pthread_mutex_trylock (&app->player.lock) == 0) {
+		pthread_mutex_unlock (&app->player.lock);
+	} else {
+		busy |= LOCK_PLAYER;
+	}
+	if (pthread_mutex_trylock (&app->player.decoderLock) == 0) {
+		pthread_mutex_unlock (&app->player.decoderLock);
+	} else {
+		busy |= LOCK_DECODER;
+	}
+	return busy;
+}
+
+static void *
+lock_probe_thread (void *arg)
+{
+	return (void *) (uintptr_t) lock_probe_now (arg);
+}
+
+static unsigned
+lock_probe_other_thread (BarApp_t *app)
+{
+	pthread_t probe;
+	void *busy = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, lock_probe_thread, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &busy), 0);
+	return (unsigned) (uintptr_t) busy;
+}
+
+/* Waits (about 2 s) until every lock can be taken; returns what was still
+ * held when it gave up, so a regression fails instead of hanging. */
+static unsigned
+lock_wait_all_free (BarApp_t *app)
+{
+	unsigned busy = 0;
+	for (int i = 0; i < 2000; i++) {
+		busy = lock_probe_now (app);
+		if (busy == 0) {
+			break;
+		}
+		usleep (1000);
+	}
+	return busy;
+}
+
+static bool
+pipe_drained (int fd)
+{
+	int pending = 0;
+	return ioctl (fd, FIONREAD, &pending) == 0 && pending == 0;
+}
+
+/* Types the answers one prompt at a time. Before each answer it waits for
+ * the prompting thread to have consumed the previous one and settle at the
+ * next prompt, then needs every lock: a lock still held at the prompt is
+ * recorded in `busy`. The write end stays open (the owner closes it). */
+typedef struct {
+	BarApp_t *app;
+	int readFd;
+	int writeFd;
+	const char *const *answers; /* NULL terminated */
+	unsigned firstSettleMs;
+	atomic_uint busy;
+	atomic_uint typed;
+} BarTestPromptFeeder_t;
+
+static void *
+prompt_feeder_thread (void *arg)
+{
+	BarTestPromptFeeder_t *f = arg;
+	for (size_t i = 0; f->answers[i] != NULL; i++) {
+		for (int w = 0; w < 2000 && !pipe_drained (f->readFd); w++) {
+			usleep (1000);
+		}
+		usleep ((i == 0 ? f->firstSettleMs : 20) * 1000);
+		atomic_fetch_or (&f->busy, lock_wait_all_free (f->app));
+		if (write (f->writeFd, f->answers[i], strlen (f->answers[i])) < 0) {
+			break;
+		}
+		atomic_fetch_add (&f->typed, 1);
+	}
+	return NULL;
+}
+
+typedef struct {
+	const char *name;
+	BarKeyShortcutId_t id;
+	const char *wsAction;   /* command-worker action name, or NULL if not exposed */
+	const char *const *answers;
+	int completes;          /* request proving the action ran through, or -1 */
+	bool station;           /* selected station passed to the action */
+	bool song;              /* playing song passed to the action */
+	bool useOther;          /* CLI: act on the second station */
+	bool quickmix;
+	bool genre;
+} BarTestPromptCase_t;
+
+static const char *const ans_select[] = { "0\n", NULL };
+static const char *const ans_search_pick[] = { "query\n", "0\n", NULL };
+static const char *const ans_yes[] = { "y", NULL };
+static const char *const ans_genre[] = { "7\n", "0\n", "9\n", "0\n", NULL };
+static const char *const ans_shared[] = { "123\n", NULL };
+static const char *const ans_rename[] = { "Renamed\n", NULL };
+static const char *const ans_quickmix[] = { "n\n", "0\n", "\n", NULL };
+static const char *const ans_song_char[] = { "s", NULL };
+static const char *const ans_manage_a[] = { "a", "0\n", NULL };
+static const char *const ans_manage_s[] = { "s", "0\n", NULL };
+static const char *const ans_manage_t[] = { "t", "0\n", NULL };
+static const char *const ans_manage_f[] = { "f", "0\n", NULL };
+static const char *const ans_manage_m[] = { "m", "0\n", NULL };
+static const char *const ans_set_user[] = { "0\n", "user\n", "\n", NULL };
+static const char *const ans_set_pass[] = { "1\n", "pw\n", "\n", NULL };
+static const char *const ans_set_filter[] = { "2\n", "n", "\n", NULL };
+static const char *const ans_hist_love[] = { "0\n", "?", "+", NULL };
+static const char *const ans_hist_delete[] = { "0\n", "d", "n", NULL };
+
+/* Every interactive action, with the input of each of its prompts */
+static const BarTestPromptCase_t prompt_cases[] = {
+	{ "select_station", BAR_KS_SELECTSTATION, "station.change", ans_select, -1,
+			false, false, false, false, false },
+	{ "create_station", BAR_KS_CREATESTATION, "station.create", ans_search_pick,
+			PIANO_REQUEST_CREATE_STATION, false, false, false, false, false },
+	{ "add_music", BAR_KS_ADDMUSIC, "station.addMusic", ans_search_pick,
+			PIANO_REQUEST_ADD_SEED, true, false, false, false, false },
+	{ "delete_station", BAR_KS_DELETESTATION, "station.delete", ans_yes,
+			PIANO_REQUEST_DELETE_STATION, true, false, true, false, false },
+	{ "genre_station", BAR_KS_GENRESTATION, "station.addGenre", ans_genre,
+			PIANO_REQUEST_CREATE_STATION, false, false, false, false, true },
+	{ "add_shared", BAR_KS_ADDSHARED, "station.addShared", ans_shared,
+			PIANO_REQUEST_CREATE_STATION, false, false, false, false, false },
+	{ "rename_station", BAR_KS_RENAMESTATION, "station.rename", ans_rename,
+			PIANO_REQUEST_RENAME_STATION, true, false, false, false, false },
+	{ "quickmix", BAR_KS_SELECTQUICKMIX, "station.selectQuickMix", ans_quickmix,
+			PIANO_REQUEST_SET_QUICKMIX, true, false, false, true, false },
+	{ "create_from_song", BAR_KS_CREATESTATIONFROMSONG, "song.createStationFrom",
+			ans_song_char, PIANO_REQUEST_CREATE_STATION, true, true, false, false, false },
+	{ "bookmark", BAR_KS_BOOKMARK, NULL, ans_song_char,
+			PIANO_REQUEST_BOOKMARK_SONG, true, true, false, false, false },
+	{ "manage_artist_seed", BAR_KS_MANAGESTATION, NULL, ans_manage_a,
+			PIANO_REQUEST_DELETE_SEED, true, false, false, false, false },
+	{ "manage_song_seed", BAR_KS_MANAGESTATION, NULL, ans_manage_s,
+			PIANO_REQUEST_DELETE_SEED, true, false, false, false, false },
+	{ "manage_station_seed", BAR_KS_MANAGESTATION, NULL, ans_manage_t,
+			PIANO_REQUEST_DELETE_SEED, true, false, false, false, false },
+	{ "manage_feedback", BAR_KS_MANAGESTATION, NULL, ans_manage_f,
+			PIANO_REQUEST_DELETE_FEEDBACK, true, false, false, false, false },
+	{ "manage_mode", BAR_KS_MANAGESTATION, NULL, ans_manage_m,
+			PIANO_REQUEST_SET_STATION_MODE, true, false, false, false, false },
+	{ "settings_username", BAR_KS_SETTINGS, NULL, ans_set_user,
+			PIANO_REQUEST_CHANGE_SETTINGS, false, false, false, false, false },
+	{ "settings_password", BAR_KS_SETTINGS, NULL, ans_set_pass,
+			PIANO_REQUEST_CHANGE_SETTINGS, false, false, false, false, false },
+	{ "settings_explicit_filter", BAR_KS_SETTINGS, NULL, ans_set_filter,
+			PIANO_REQUEST_CHANGE_SETTINGS, false, false, false, false, false },
+	{ "history_help_then_love", BAR_KS_HISTORY, NULL, ans_hist_love,
+			PIANO_REQUEST_RATE_SONG, false, false, false, false, false },
+	{ "history_nested_delete_prompt", BAR_KS_HISTORY, NULL, ans_hist_delete, -1,
+			false, false, false, false, false },
+};
+#define PROMPT_CASE_COUNT (sizeof (prompt_cases) / sizeof (prompt_cases[0]))
+
+/* Cases that are also reachable as WebSocket actions (run on the command
+ * worker): indexes into prompt_cases */
+static const int prompt_ws_cases[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 };
+#define PROMPT_WS_CASE_COUNT (sizeof (prompt_ws_cases) / sizeof (prompt_ws_cases[0]))
+
+typedef struct {
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	PianoSong_t song, hist;
+	PianoGenreCategory_t cat;
+	PianoGenre_t genre;
+	int pipefd[2];
+} BarTestPromptFixture_t;
+
+static void
+prompt_fixture_setup (BarTestPromptFixture_t *fx, const BarTestPromptCase_t *c)
+{
+	cli_app_setup (&fx->app, &fx->ctx, &fx->keep, &fx->other);
+	memset (&fx->song, 0, sizeof (fx->song));
+	fx->song.title = "Playing";
+	fx->song.artist = "Someone";
+	fx->song.trackToken = "T1";
+	fx->song.stationId = "S1";
+	memset (&fx->hist, 0, sizeof (fx->hist));
+	fx->hist.title = "Earlier";
+	fx->hist.artist = "Someone";
+	fx->hist.trackToken = "H1";
+	fx->hist.stationId = "S1";
+	fx->app.playlist = &fx->song;
+	fx->app.songHistory = &fx->hist;
+	fx->app.settings.keys[BAR_KS_HELP] = '?';
+	fx->app.settings.keys[BAR_KS_LOVE] = '+';
+	fx->app.settings.keys[BAR_KS_DELETESTATION] = 'd';
+	fx->keep.isQuickMix = c->quickmix;
+	if (c->genre) {
+		memset (&fx->cat, 0, sizeof (fx->cat));
+		memset (&fx->genre, 0, sizeof (fx->genre));
+		fx->cat.name = "Jazz";
+		fx->cat.genres = &fx->genre;
+		fx->genre.name = "Bebop";
+		fx->genre.musicId = "G1";
+		fx->app.ph.genreStations = &fx->cat;
+	}
+	ck_assert_int_eq (pipe (fx->pipefd), 0);
+	rl_input_from_fd (&fx->app.input, fx->pipefd[0]);
+}
+
+static void
+prompt_fixture_teardown (BarTestPromptFixture_t *fx)
+{
+	close (fx->pipefd[0]);
+	close (fx->pipefd[1]);
+	fx->app.ph.genreStations = NULL;
+	fx->app.ph.user.listenerId = NULL;
+	fx->app.playlist = NULL;
+	fx->app.songHistory = NULL;
+	BarStateSetCurrentStation (&fx->app, NULL);
+	cli_app_teardown (&fx->app, &fx->ctx);
+}
+
+static void
+prompt_feeder_start (BarTestPromptFixture_t *fx, const BarTestPromptCase_t *c,
+		BarTestPromptFeeder_t *feeder, pthread_t *thread, unsigned firstSettleMs)
+{
+	memset (feeder, 0, sizeof (*feeder));
+	feeder->app = &fx->app;
+	feeder->readFd = fx->pipefd[0];
+	feeder->writeFd = fx->pipefd[1];
+	feeder->answers = c->answers;
+	feeder->firstSettleMs = firstSettleMs;
+	atomic_init (&feeder->busy, 0);
+	atomic_init (&feeder->typed, 0);
+	ck_assert_int_eq (pthread_create (thread, NULL, prompt_feeder_thread, feeder), 0);
+}
+
+/* After the action: every answer typed and consumed, the action ran
+ * through, no lock was held at any prompt */
+static void
+prompt_check_result (BarTestPromptFixture_t *fx, const BarTestPromptCase_t *c,
+		BarTestPromptFeeder_t *feeder)
+{
+	size_t answers = 0;
+	while (c->answers[answers] != NULL) {
+		answers++;
+	}
+	ck_assert_msg (atomic_load (&feeder->busy) == 0,
+			"%s: locks held while waiting for input (mask %#x: 1 pianoHttpMutex, "
+			"2 stateRwlock, 4 player.lock, 8 decoderLock)", c->name,
+			atomic_load (&feeder->busy));
+	ck_assert_msg (atomic_load (&feeder->typed) == answers,
+			"%s: %u of %zu answers typed", c->name, atomic_load (&feeder->typed),
+			answers);
+	ck_assert_msg (pipe_drained (fx->pipefd[0]), "%s: input left unread", c->name);
+	if (c->completes >= 0) {
+		ck_assert_msg (cli_calls ((PianoRequestType_t) c->completes) >= 1,
+				"%s: the action did not run through", c->name);
+	}
+}
+
+/* As the CLI main loop runs it: hold from key lookup when the dispatcher asks
+ * for it, then dispatch; the hold is released by the caller afterwards. The
+ * prompts must run without the hold and give it back afterwards. */
+START_TEST (test_cli_prompts_hold_no_lock_while_waiting_for_input)
+{
+	const BarTestPromptCase_t *c = &prompt_cases[_i];
+	BarTestPromptFixture_t fx;
+	BarTestPromptFeeder_t feeder;
+	pthread_t thread;
+	prompt_fixture_setup (&fx, c);
+
+	const bool hold = BarUiDispatchHoldsPianoLock (c->id);
+	if (hold) {
+		BarUiPianoHold (&fx.app);
+	}
+	prompt_feeder_start (&fx, c, &feeder, &thread, 20);
+	const BarKeyShortcutId_t ran = BarUiDispatchById (&fx.app, c->id,
+			c->station ? (c->useOther ? &fx.other : &fx.keep) : NULL,
+			c->song ? &fx.song : NULL, true,
+			TEST_DC_GLOBAL_CONNECTED);
+	ck_assert_msg (ran == c->id, "%s: not dispatched", c->name);
+	/* the hold is given back exactly as it was taken */
+	const unsigned after = lock_probe_other_thread (&fx.app);
+	ck_assert_msg (after == (hold ? LOCK_PIANO : 0),
+			"%s: locks %#x held after the action, expected %#x", c->name, after,
+			hold ? LOCK_PIANO : 0u);
+	if (hold) {
+		BarUiPianoRelease (&fx.app);
+	}
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	prompt_check_result (&fx, c, &feeder);
+	ck_assert_msg (lock_probe_other_thread (&fx.app) == 0,
+			"%s: a lock leaked", c->name);
+	prompt_fixture_teardown (&fx);
+}
+END_TEST
+
+/* The same actions asked for by a WebSocket client run on the command worker
+ * thread, which takes the hold itself (BarSocketIoHandleAction) */
+START_TEST (test_websocket_action_prompts_hold_no_lock_while_waiting_for_input)
+{
+	const BarTestPromptCase_t *c = &prompt_cases[prompt_ws_cases[_i]];
+	BarTestPromptFixture_t fx;
+	BarTestPromptFeeder_t feeder;
+	pthread_t thread;
+	prompt_fixture_setup (&fx, c);
+	fx.app.ph.user.listenerId = (char *) "listener";
+	BarStateSetCurrentStation (&fx.app, &fx.keep);
+
+	/* The hold is taken inside the handler, after the feeder started: it
+	 * waits longer for the first prompt */
+	prompt_feeder_start (&fx, c, &feeder, &thread, 150);
+	BarSocketIoHandleAction (&fx.app, c->wsAction, NULL, BAR_WS_DEST_BROADCAST);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	prompt_check_result (&fx, c, &feeder);
+	ck_assert_msg (lock_probe_other_thread (&fx.app) == 0,
+			"%s: a lock leaked", c->name);
+	prompt_fixture_teardown (&fx);
+}
+END_TEST
+
+/* --- eventcmd: the script is waited for without the caller's holds --- */
+
+typedef struct {
+	BarApp_t *app;
+	const char *fifo;
+	atomic_uint busy;
+} BarTestScriptFeeder_t;
+
+static void *
+script_release_thread (void *arg)
+{
+	BarTestScriptFeeder_t *f = arg;
+	atomic_store (&f->busy, lock_wait_all_free (f->app));
+	int fd = -1;
+	for (int i = 0; i < 5000 && fd == -1; i++) {
+		fd = open (f->fifo, O_WRONLY | O_NONBLOCK);
+		if (fd == -1) {
+			usleep (1000);
+		}
+	}
+	if (fd != -1) {
+		if (write (fd, "x\n", 2) < 0) {
+			/* the script gives up when the fifo never opens */
+		}
+		close (fd);
+	}
+	return NULL;
+}
+
+/* `_i` holds (also nested ones) taken before the event: the script blocks
+ * until every lock could be taken from another thread, and the holds are
+ * back afterwards */
+START_TEST (test_eventcmd_waits_without_holds)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	char dir[512], script[600], fifo[600];
+	delete_wait_app_setup (&app, &ctx, &keep, &other);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.decoderLock, NULL), 0);
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "eventcmd_locks"));
+	snprintf (fifo, sizeof (fifo), "%s/release", dir);
+	ck_assert_int_eq (mkfifo (fifo, 0600), 0);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	fprintf (f, "#!/bin/sh\ncat > /dev/null\nread x < '%s'\n", fifo);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	app.settings.eventCmd = strdup (script);
+
+	BarTestScriptFeeder_t feeder = { .app = &app, .fifo = fifo };
+	atomic_init (&feeder.busy, 0);
+	for (int i = 0; i < _i; i++) {
+		BarUiPianoHold (&app);
+	}
+	pthread_t thread;
+	ck_assert_int_eq (pthread_create (&thread, NULL, script_release_thread, &feeder), 0);
+	BarUiStartEventCmd (&app.settings, "usergetstations", NULL, NULL, &app.player,
+			app.ph.stations, PIANO_RET_OK, CURLE_OK);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	ck_assert_msg (atomic_load (&feeder.busy) == 0,
+			"locks %#x held while eventcmd ran (%d holds)", atomic_load (&feeder.busy), _i);
+	const unsigned after = lock_probe_other_thread (&app);
+	ck_assert_msg (after == (_i > 0 ? LOCK_PIANO : 0u),
+			"locks %#x after eventcmd with %d holds", after, _i);
+	for (int i = 0; i < _i; i++) {
+		BarUiPianoRelease (&app);
+	}
+	ck_assert_uint_eq (lock_probe_other_thread (&app), 0);
+
+	unlink (fifo);
+	unlink (script);
+	rmdir (dir);
+	pthread_mutex_destroy (&app.player.decoderLock);
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* --- Pandora disconnect / reconnect: waits for the player and the
+ * playback manager run without the caller's holds --- */
+
+static atomic_uint g_teardownBusy;
+
+static bool
+teardown_wait_hook (const BarApp_t *app, unsigned int timeoutMs)
+{
+	(void) timeoutMs;
+	atomic_fetch_or (&g_teardownBusy, lock_probe_other_thread ((BarApp_t *) app));
+	return true;
+}
+
+static bool
+teardown_login_fails (BarApp_t *app, const PianoRequestType_t type, void *data,
+		PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) type;
+	(void) data;
+	*pRet = PIANO_RET_ERR;
+	*wRet = CURLE_OK;
+	return false;
+}
+
+typedef struct {
+	BarApp_t *app;
+	atomic_uint busy;
+} BarTestPlayerStop_t;
+
+/* Plays the player thread: dies once every lock could be taken */
+static void *
+player_dies_when_locks_free (void *arg)
+{
+	BarTestPlayerStop_t *s = arg;
+	atomic_store (&s->busy, lock_wait_all_free (s->app));
+	BarPlayerSetMode (&s->app->player, PLAYER_DEAD);
+	return NULL;
+}
+
+/* _i: 0/1 disconnect with 1/2 holds, 2/3 reconnect with 1/2 holds */
+START_TEST (test_pandora_disconnect_reconnect_wait_without_holds)
+{
+	const bool reconnect = _i >= 2;
+	const int holds = (_i % 2) + 1;
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarTestPlayerStop_t stop;
+	pthread_t helper;
+	memset (&app, 0, sizeof (app));
+	read_default_settings (&app.settings);
+	/* web mode: stateRwlock exists */
+	attach_ws_context_for_test (&app, &ctx);
+	app.settings.username = strdup ("user");
+	app.settings.password = strdup ("pass");
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	BarUiPianoHttpMutexInit (&app);
+	BarStateInit (&app);
+	player_primitives_init (&app);
+	BarPlayerSetMode (&app.player, PLAYER_PLAYING);
+	ck_assert_int_eq (PianoInit (&app.ph, app.settings.partnerUser,
+	                            app.settings.partnerPassword, app.settings.device,
+	                            app.settings.inkey, app.settings.outkey),
+	                  PIANO_RET_OK);
+
+	atomic_init (&g_teardownBusy, 0);
+	stop.app = &app;
+	atomic_init (&stop.busy, 0);
+	BarPlaybackManagerWaitParkedIdleSetTestHook (teardown_wait_hook);
+	BarUiPianoCallSetTestHook (teardown_login_fails);
+	for (int i = 0; i < holds; i++) {
+		BarUiPianoHold (&app);
+	}
+	ck_assert_int_eq (pthread_create (&helper, NULL, player_dies_when_locks_free, &stop), 0);
+	if (reconnect) {
+		BarUiActPandoraReconnect (&app, NULL, NULL, 1);
+	} else {
+		BarUiActPandoraDisconnect (&app, NULL, NULL, 1);
+	}
+	ck_assert_int_eq (pthread_join (helper, NULL), 0);
+	BarUiPianoCallClearTestHook ();
+	BarPlaybackManagerWaitParkedIdleClearTestHook ();
+
+	ck_assert_msg (atomic_load (&stop.busy) == 0,
+			"locks %#x held while waiting for the player to stop",
+			atomic_load (&stop.busy));
+	ck_assert_msg (atomic_load (&g_teardownBusy) == 0,
+			"locks %#x held while waiting for the playback manager",
+			atomic_load (&g_teardownBusy));
+	/* the holds are back for the caller to release */
+	ck_assert_uint_eq (lock_probe_other_thread (&app), LOCK_PIANO);
+	for (int i = 0; i < holds; i++) {
+		BarUiPianoRelease (&app);
+	}
+	ck_assert_uint_eq (lock_probe_other_thread (&app), 0);
+
+	free (app.lastStationId);
+	BarUiPianoHttpMutexDestroy (&app);
+	player_primitives_destroy (&app);
+	BarStateDestroy (&app);
+	ws_context_destroy (&ctx);
+	BarL10nDestroy (&app.l10n);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *
 ui_act_suite (void)
 {
@@ -3538,6 +4082,13 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_do_pandora_disconnect_piano_reinit_failure);
 	tcase_add_test (tc, test_ui_do_pandora_reconnect_piano_reinit_failure);
 	tcase_add_test (tc, test_ui_do_pandora_reconnect_get_stations_failure);
+	/* No lock is held while waiting (user input, eventcmd, teardown) */
+	tcase_add_loop_test (tc, test_cli_prompts_hold_no_lock_while_waiting_for_input,
+			0, (int) PROMPT_CASE_COUNT);
+	tcase_add_loop_test (tc, test_websocket_action_prompts_hold_no_lock_while_waiting_for_input,
+			0, (int) PROMPT_WS_CASE_COUNT);
+	tcase_add_loop_test (tc, test_eventcmd_waits_without_holds, 0, 3);
+	tcase_add_loop_test (tc, test_pandora_disconnect_reconnect_wait_without_holds, 0, 4);
 	suite_add_tcase (s, tc);
 	return s;
 }

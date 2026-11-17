@@ -3597,6 +3597,178 @@ END_TEST
 
 #endif /* HAVE_DEBUGLOG */
 
+/* --- No lock is held while the WebSocket layer waits ----------------------
+ *
+ * The command worker waits for commands (queue condvar), a command waits for
+ * Pandora (by design inside pianoHttpMutex, nothing else), and the service
+ * thread writes to sockets and sleeps in lws_service(). None of these waits
+ * may block another thread on a lock. */
+
+enum {
+	WS_LOCK_PIANO = 1,
+	WS_LOCK_STATE = 2,
+	WS_LOCK_PLAYER = 4,
+	WS_LOCK_DECODER = 8,
+};
+
+/* Locks that cannot be taken now. The caller owns none of them: the only
+ * other possible owner is the worker thread. */
+static unsigned ws_locks_busy (BarApp_t *app) {
+	unsigned busy = 0;
+	if (pthread_mutex_trylock (&app->pianoHttpMutex) == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	} else {
+		busy |= WS_LOCK_PIANO;
+	}
+	if (pthread_rwlock_trywrlock (&app->stateRwlock) == 0) {
+		pthread_rwlock_unlock (&app->stateRwlock);
+	} else {
+		busy |= WS_LOCK_STATE;
+	}
+	if (pthread_mutex_trylock (&app->player.lock) == 0) {
+		pthread_mutex_unlock (&app->player.lock);
+	} else {
+		busy |= WS_LOCK_PLAYER;
+	}
+	if (pthread_mutex_trylock (&app->player.decoderLock) == 0) {
+		pthread_mutex_unlock (&app->player.decoderLock);
+	} else {
+		busy |= WS_LOCK_DECODER;
+	}
+	return busy;
+}
+
+/* A worker waiting for the next command holds nothing */
+START_TEST (test_idle_worker_waits_for_commands_without_locks)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	usleep (50000); /* blocked in the queue's condition wait */
+
+	ck_assert_uint_eq (ws_locks_busy (&app), 0);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx.commands, &st); /* the queue lock is free too */
+	ck_assert (!st.running);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_PING,
+			strlen (TEST_PING)), BAR_WS_CMD_OK);
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* A command waiting for Pandora holds pianoHttpMutex by design and nothing
+ * else; a whole service-thread round (receive, volume timer, diagnostics,
+ * delivery) completes meanwhile without waiting for the worker */
+START_TEST (test_service_thread_never_waits_on_the_busy_worker)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	ck_assert_uint_eq (ws_locks_busy (&app), WS_LOCK_PIANO);
+
+	test_receive (&app, 0, TEST_QUERY);
+	BarWsScheduleVolumeBroadcast (&ctx, 0);
+	BarWsProcessVolumeBroadcast (&ctx, &app);
+	(void) BarWsServiceDiagnostics (&ctx);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (ws_locks_busy (&app), WS_LOCK_PIANO);
+
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* Refusing new commands (the first step of shutdown) does not wait for the
+ * command that is running */
+START_TEST (test_closing_the_queue_does_not_wait_for_the_running_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+
+	BarWsCommandQueueClose (ctx.commands);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_PING,
+			strlen (TEST_PING)), BAR_WS_CMD_CLOSED);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx.commands, &st);
+	ck_assert (st.running);
+
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+static BarApp_t *g_probeApp;
+static atomic_bool g_probeDone;
+
+static void *write_probe_thread (void *arg) {
+	(void) arg;
+	BarWsContext_t *ctx = g_probeApp->wsContext;
+	BarWsCommandQueueStats_t st;
+	size_t msgs, bytes;
+	BarWsOutboxDepth (ctx->outbox, &msgs, &bytes);
+	BarWsCommandQueueStats (ctx->commands, &st);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx->commands, 1, TEST_PING,
+			strlen (TEST_PING)), BAR_WS_CMD_OK);
+	char *text = strdup ("2[\"during\"]");
+	ck_assert_ptr_nonnull (text);
+	BarWebsocketSend (g_probeApp, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, text);
+	atomic_store (&g_probeDone, true);
+	return NULL;
+}
+
+/* The socket write (client I/O) runs on the service thread with neither the
+ * outbox nor the command queue locked: producers and the worker's replies
+ * are not held up behind a slow client */
+static int write_probe_frame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	(void) buf;
+	pthread_t thread;
+	atomic_store (&g_probeDone, false);
+	ck_assert_int_eq (pthread_create (&thread, NULL, write_probe_thread, NULL), 0);
+	for (int i = 0; i < 2000 && !atomic_load (&g_probeDone); i++) {
+		usleep (1000);
+	}
+	ck_assert_msg (atomic_load (&g_probeDone),
+			"outbox or command queue locked during a socket write");
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	return (int) len;
+}
+
+START_TEST (test_socket_write_holds_no_outbox_or_queue_lock)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	g_probeApp = &app;
+	ctx.writeFrame = write_probe_frame;
+
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"x\"]"));
+	BarWsServiceOutbox (&ctx);
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &test_fake_sockets[0]), 0);
+	ck_assert (atomic_load (&g_probeDone));
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
 Suite *websocket_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -3686,6 +3858,10 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_split_message_over_limit_is_dropped_with_tail);
 	tcase_add_test (tc_worker, test_split_messages_do_not_interleave_between_clients);
 	tcase_add_test (tc_worker, test_partial_message_freed_on_close);
+	tcase_add_test (tc_worker, test_idle_worker_waits_for_commands_without_locks);
+	tcase_add_test (tc_worker, test_service_thread_never_waits_on_the_busy_worker);
+	tcase_add_test (tc_worker, test_closing_the_queue_does_not_wait_for_the_running_command);
+	tcase_add_test (tc_worker, test_socket_write_holds_no_outbox_or_queue_lock);
 	tcase_set_timeout (tc_worker, 30);
 	suite_add_tcase (s, tc_worker);
 
