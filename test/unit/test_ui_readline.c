@@ -258,6 +258,40 @@ START_TEST (test_readline_restores_interrupt_target)
 }
 END_TEST
 
+/* Web-only mode has no terminal: the input set is empty and maxfd is 0.
+ * A prompt must return as if cancelled instead of blocking in select()
+ * forever (which would stall the WebSocket command worker). */
+START_TEST (test_readline_without_input_fds_returns_immediately)
+{
+	char buf[8] = "junk";
+	BarReadlineFds_t input;
+
+	memset (&input, 0, sizeof (input));
+	FD_ZERO (&input.set);
+
+	ck_assert_uint_eq (BarReadline (buf, sizeof (buf), NULL, &input,
+	                                RL_TEST_FLAGS, -1), 0);
+	ck_assert_str_eq (buf, "");
+}
+END_TEST
+
+START_TEST (test_readline_wrappers_without_input_fds_do_not_block)
+{
+	char buf[8];
+	int num = 5;
+	BarReadlineFds_t input;
+
+	memset (&input, 0, sizeof (input));
+	FD_ZERO (&input.set);
+
+	ck_assert_uint_eq (BarReadlineStr (buf, sizeof (buf), &input,
+	                                   RL_TEST_FLAGS), 0);
+	ck_assert_uint_eq (BarReadlineInt (&num, &input), 0);
+	ck_assert (BarReadlineYesNo (true, &input));
+	ck_assert (!BarReadlineYesNo (false, &input));
+}
+END_TEST
+
 Suite *ui_readline_suite (void)
 {
 	Suite *s = suite_create ("ui_readline");
@@ -275,6 +309,8 @@ Suite *ui_readline_suite (void)
 	tcase_add_test (tc, test_readline_fullreturn_when_buffer_fills);
 	tcase_add_test (tc, test_readline_timeout_returns_empty);
 	tcase_add_test (tc, test_readline_restores_interrupt_target);
+	tcase_add_test (tc, test_readline_without_input_fds_returns_immediately);
+	tcase_add_test (tc, test_readline_wrappers_without_input_fds_do_not_block);
 	suite_add_tcase (s, tc);
 	return s;
 }
