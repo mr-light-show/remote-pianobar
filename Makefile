@@ -320,6 +320,8 @@ BASE_TEST_SRC:=\
 WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_websocket.c \
 		${TEST_DIR}/unit/test_ws_outbox.c \
+		${TEST_DIR}/unit/test_ws_outbox_faults.c \
+		${TEST_DIR}/unit/test_ws_service_edges.c \
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
