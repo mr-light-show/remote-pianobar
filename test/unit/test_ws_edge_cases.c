@@ -72,8 +72,8 @@ START_TEST (test_ws_handle_receive_ignores_missing_app_or_context)
 	memset (&app, 0, sizeof (app));
 
 	/* None of these may crash or dispatch anything */
-	BarWsHandleReceive (NULL, &sock, "2[\"x\"]", 6);
-	BarWsHandleReceive (&app, &sock, "2[\"x\"]", 6);
+	BarWsHandleReceive (NULL, &sock, "2[\"x\"]", 6, true);
+	BarWsHandleReceive (&app, &sock, "2[\"x\"]", 6, true);
 	ck_assert_ptr_null (app.wsContext);
 }
 END_TEST
@@ -572,7 +572,7 @@ START_TEST (test_ui_act_print_upcoming_to_without_current_song_reports_empty)
 	BarSettingsInit (&app.settings);
 	TestWsCaptureAttach (&app, 2, NULL);
 
-	BarUiActPrintUpcomingTo (&app, &station, NULL, test_ws_cap.ids[1]);
+	BarUiActPrintUpcomingTo (&app, test_ws_cap.ids[1]);
 	TestWsCaptureFlush ();
 
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
