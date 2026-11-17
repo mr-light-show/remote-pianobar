@@ -24,6 +24,7 @@
 #include "../../src/ui.h"
 #include "../../src/ui_dispatch.h"
 #include "../../src/ui_act.h"
+#include "../../src/websocket/core/outbox.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "../../src/websocket_bridge.h"
@@ -39,7 +40,6 @@ START_TEST (test_ws_connection_add_returns_zero_when_table_full)
 
 	memset (&ctx, 0, sizeof (ctx));
 	memset (conns, 0, sizeof (conns));
-	pthread_mutex_init (&ctx.connMutex, NULL);
 	ctx.connections = conns;
 	ctx.maxConnections = 2;
 
@@ -53,7 +53,15 @@ START_TEST (test_ws_connection_add_returns_zero_when_table_full)
 	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &sockets[2], "socketio"),
 			BAR_WS_DEST_BROADCAST);
 	ck_assert_uint_eq (ctx.numConnections, 2);
-	pthread_mutex_destroy (&ctx.connMutex);
+
+	/* A freed slot is reused with a fresh ID */
+	BarWsConnectionRemove (&ctx, &sockets[0]);
+	ck_assert_uint_eq (ctx.numConnections, 1);
+	BarWsConnId_t c = BarWsConnectionAdd (&ctx, &sockets[2], "socketio");
+	ck_assert_uint_ne (c, BAR_WS_DEST_BROADCAST);
+	ck_assert_uint_ne (c, a);
+	ck_assert_uint_ne (c, b);
+	ck_assert_uint_eq (ctx.numConnections, 2);
 }
 END_TEST
 
@@ -75,19 +83,19 @@ START_TEST (test_ws_send_rejects_missing_app_context_or_message)
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
 
-	/* Immediate (BUCKET_NONE) and targeted sends need app, context and data;
+	/* Ordered (BAR_WS_KEY_NONE) and targeted sends need app, context and data;
 	 * the message is consumed in every case */
-	ck_assert (!BarWebsocketSend (NULL, BAR_WS_DEST_BROADCAST, BUCKET_NONE,
+	ck_assert (!BarWebsocketSend (NULL, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
 			strdup ("2[\"a\"]")));
-	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_NONE,
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
 			strdup ("2[\"a\"]")));
-	ck_assert (!BarWebsocketSend (&app, 7, BUCKET_NONE, strdup ("2[\"a\"]")));
+	ck_assert (!BarWebsocketSend (&app, 7, BAR_WS_KEY_NONE, strdup ("2[\"a\"]")));
 
 	BarWsContext_t ctx;
 	memset (&ctx, 0, sizeof (ctx));
 	app.wsContext = &ctx;
-	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_NONE, NULL));
-	ck_assert (!BarWebsocketSend (&app, 7, BUCKET_NONE, NULL));
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, NULL));
+	ck_assert (!BarWebsocketSend (&app, 7, BAR_WS_KEY_NONE, NULL));
 	app.wsContext = NULL;
 }
 END_TEST
@@ -103,29 +111,53 @@ count_write (void *wsi, unsigned char *buf, size_t len)
 	return (int) len;
 }
 
+static void
+ignore_writable (void *wsi)
+{
+	(void) wsi;
+}
+
+/* Delivery guards: the service pass and the writable handler ignore a
+ * missing context/outbox/connection, and an event reaches the client only
+ * through the writable handler's single write. */
 START_TEST (test_ws_deliver_ignores_null_ctx_message_or_empty)
 {
+	BarApp_t app;
 	BarWsContext_t ctx;
 	BarWsConnection_t conns[1];
 	char sock;
+	char other;
 
+	memset (&app, 0, sizeof (app));
 	memset (&ctx, 0, sizeof (ctx));
 	memset (conns, 0, sizeof (conns));
-	pthread_mutex_init (&ctx.connMutex, NULL);
 	ctx.connections = conns;
 	ctx.maxConnections = 1;
 	ctx.writeFrame = count_write;
-	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &sock, "socketio"), 0);
+	ctx.requestWritable = ignore_writable;
+	ctx.outbox = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (ctx.outbox);
+	app.wsContext = &ctx;
+	BarWsConnId_t id = BarWsConnectionAdd (&ctx, &sock, "socketio");
+	ck_assert_uint_ne (id, 0);
 
 	g_deliverWrites = 0;
-	BarWsDeliver (NULL, "2[\"a\"]", 6, BAR_WS_DEST_BROADCAST);
-	BarWsDeliver (&ctx, NULL, 6, BAR_WS_DEST_BROADCAST);
-	BarWsDeliver (&ctx, "2[\"a\"]", 0, BAR_WS_DEST_BROADCAST);
+	BarWsServiceOutbox (NULL);
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &other), 0); /* untracked */
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &sock), 0); /* nothing queued */
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, NULL));
+	BarWsServiceOutbox (&ctx);
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &sock), 0);
 	ck_assert_uint_eq (g_deliverWrites, 0);
 
-	BarWsDeliver (&ctx, "2[\"a\"]", 6, BAR_WS_DEST_BROADCAST);
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"a\"]")));
+	BarWsServiceOutbox (&ctx);
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &sock), 0);
 	ck_assert_uint_eq (g_deliverWrites, 1);
-	pthread_mutex_destroy (&ctx.connMutex);
+
+	BarWsConnectionRemove (&ctx, &sock);
+	BarWsOutboxFree (ctx.outbox);
 }
 END_TEST
 
@@ -355,6 +387,7 @@ START_TEST (test_socketio_action_with_null_name_is_ignored)
 			test_ws_cap.ids[0]);
 	BarSocketIoHandleMessage (&app, "2[\"action\",{\"command\":null}]",
 			test_ws_cap.ids[0]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	TestWsCaptureDetach (&app);
@@ -407,10 +440,12 @@ START_TEST (test_socketio_upcoming_without_requester_runs_terminal_callback)
 	/* Direct caller (no requester): the terminal callback runs, which
 	 * prints locally and sends no web-targeted reply to any client */
 	BarSocketIoHandleAction (&app, "query.upcoming", NULL, BAR_WS_DEST_BROADCAST);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	/* With a requester the same action answers that client only */
 	BarSocketIoHandleAction (&app, "query.upcoming", NULL, test_ws_cap.ids[0]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming"), 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "query.upcoming"), 0);
@@ -422,6 +457,7 @@ START_TEST (test_socketio_upcoming_without_requester_runs_terminal_callback)
 	BarUiPianoCallSetTestHook (rate_song_ok);
 	BarSocketIoHandleAction (&app, "song.love", NULL, test_ws_cap.ids[0]);
 	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
 	ck_assert_int_eq (g_rateCalls, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming"), 0);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "song.explanation"), 0);
@@ -462,9 +498,11 @@ START_TEST (test_socketio_object_action_and_command_forms_dispatch)
 
 	BarSocketIoHandleMessage (&app,
 			"2[\"action\",{\"action\":\"query.upcoming\"}]", test_ws_cap.ids[1]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (TestWsCaptureCount (1, "query.upcoming"), 1);
 	BarSocketIoHandleMessage (&app,
 			"2[\"action\",{\"command\":\"query.upcoming\"}]", test_ws_cap.ids[1]);
+	TestWsCaptureFlush ();
 	ck_assert_uint_eq (TestWsCaptureCount (1, "query.upcoming"), 2);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming"), 0);
 
@@ -527,6 +565,7 @@ START_TEST (test_ui_act_print_upcoming_to_without_current_song_reports_empty)
 	TestWsCaptureAttach (&app, 2, NULL);
 
 	BarUiActPrintUpcomingTo (&app, &station, NULL, test_ws_cap.ids[1]);
+	TestWsCaptureFlush ();
 
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "No songs in queue"), 1);
