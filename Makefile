@@ -323,7 +323,8 @@ BASE_TEST_SRC:=\
 		${TEST_DIR}/unit/test_ui.c \
 		${TEST_DIR}/unit/test_station_sort.c \
 		${TEST_DIR}/unit/test_interrupt.c \
-		${TEST_DIR}/unit/test_libpiano_response.c
+		${TEST_DIR}/unit/test_libpiano_response.c \
+		${TEST_DIR}/unit/test_state_edge_paths.c
 
 # Tests that require WebSocket objects
 WS_TEST_SRC:=\
@@ -332,13 +333,16 @@ WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_ws_outbox_faults.c \
 		${TEST_DIR}/unit/test_ws_service_edges.c \
 		${TEST_DIR}/unit/test_ws_commands.c \
+		${TEST_DIR}/unit/test_ws_failure_paths.c \
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
+		${TEST_DIR}/unit/test_socketio_station_failures.c \
 		${TEST_DIR}/unit/test_error_messages.c \
 		${TEST_DIR}/unit/test_ui_act_reconnect.c \
 		${TEST_DIR}/unit/test_ui_act_station.c \
 		${TEST_DIR}/unit/test_ws_edge_cases.c \
+		${TEST_DIR}/unit/test_cli_input_paths.c \
 		${TEST_DIR}/integration/fixture_http.c \
 		${TEST_DIR}/integration/test_playback_integration.c
 

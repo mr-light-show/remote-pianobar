@@ -65,6 +65,10 @@ Suite *ui_act_suite(void);
 Suite *ui_act_station_suite(void);
 Suite *ws_edge_cases_suite(void);
 Suite *playback_integration_suite(void);
+Suite *state_edge_paths_suite(void);
+Suite *ws_failure_paths_suite(void);
+Suite *cli_input_paths_suite(void);
+Suite *socketio_station_failures_suite(void);
 
 int main(void) {
 	int number_failed;
@@ -77,13 +81,16 @@ int main(void) {
 	srunner_add_suite(sr, ws_outbox_faults_suite());
 	srunner_add_suite(sr, ws_service_edges_suite());
 	srunner_add_suite(sr, ws_commands_suite());
+	srunner_add_suite(sr, ws_failure_paths_suite());
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
 	srunner_add_suite(sr, socketio_suite());
+	srunner_add_suite(sr, socketio_station_failures_suite());
 	srunner_add_suite(sr, error_messages_suite());
 	srunner_add_suite(sr, ui_act_suite());
 	srunner_add_suite(sr, ui_act_station_suite());
 	srunner_add_suite(sr, ws_edge_cases_suite());
+	srunner_add_suite(sr, cli_input_paths_suite());
 	srunner_add_suite(sr, playback_integration_suite());
 
 	srunner_add_suite(sr, settings_suite());
@@ -99,6 +106,7 @@ int main(void) {
 	srunner_add_suite(sr, station_sort_suite());
 	srunner_add_suite(sr, interrupt_suite());
 	srunner_add_suite(sr, libpiano_response_suite());
+	srunner_add_suite(sr, state_edge_paths_suite());
 
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);
