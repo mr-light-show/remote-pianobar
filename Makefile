@@ -323,6 +323,7 @@ WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_error_messages.c \
 		${TEST_DIR}/unit/test_ui_act_reconnect.c \
 		${TEST_DIR}/unit/test_ui_act_station.c \
+		${TEST_DIR}/unit/test_ws_edge_cases.c \
 		${TEST_DIR}/integration/fixture_http.c \
 		${TEST_DIR}/integration/test_playback_integration.c
 

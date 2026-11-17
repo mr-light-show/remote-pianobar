@@ -59,6 +59,7 @@ Suite *socketio_suite(void);
 Suite *error_messages_suite(void);
 Suite *ui_act_suite(void);
 Suite *ui_act_station_suite(void);
+Suite *ws_edge_cases_suite(void);
 Suite *playback_integration_suite(void);
 
 int main(void) {
@@ -74,6 +75,7 @@ int main(void) {
 	srunner_add_suite(sr, error_messages_suite());
 	srunner_add_suite(sr, ui_act_suite());
 	srunner_add_suite(sr, ui_act_station_suite());
+	srunner_add_suite(sr, ws_edge_cases_suite());
 	srunner_add_suite(sr, playback_integration_suite());
 
 	srunner_add_suite(sr, settings_suite());
