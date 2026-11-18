@@ -1143,7 +1143,7 @@ ws.send('2["action",{"action":"volume.set","volume":75}]');
 | `song.tired` | Mark song as "tired" | Song won't play for a while |
 | `song.explain` | Get recommendation explanation | Server sends `song.explanation` event |
 | `song.info` | Get detailed song info | (Currently same as explain) |
-| `song.createStationFrom` | Create station from song | Opens station creation flow |
+| `song.createStationFrom` | Create station from song | Not available through `action` (needs terminal input); use the `station.createFrom` event. See [Not Implemented](#not-implemented) |
 
 **Examples:**
 
@@ -1640,12 +1640,15 @@ The following features are defined in the action mappings but are **not implemen
 | `song.bookmark` | Pandora discontinued the bookmark feature in August 2022 |
 | `query.history` | Not yet implemented |
 | `app.settings` | Settings changes don't persist and are only temporary session changes |
+| `song.createStationFrom`, `station.change`, `station.create`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.selectQuickMix` (as `action` commands) | These map to terminal-prompt handlers, which the command worker never runs. Use the dedicated events of the same name (`station.change`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.createFrom`, `station.setQuickMix`) (create a station with `music.search` followed by `station.createFrom`) |
 
 Attempting to use these actions now emits an `error` event instead of silently doing nothing:
 
 ```json
 ["error", {"operation": "query.history", "message": "Song history is not available through the remote API yet."}]
 ```
+
+The terminal-prompt actions reply with `web.socket.not_implemented_interactive` ("This action asks for input on the player terminal and is not available through the generic action command.").
 
 Unknown action names (not in the mapping table at all) receive no response.
 

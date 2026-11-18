@@ -87,6 +87,7 @@ static const BarL10nDefaultPair_t bar_l10n_defaults[] = {
 	{ "web.socket.not_implemented", "This command is not supported by this server." },
 	{ "web.socket.not_implemented_bookmark", "Song bookmarking is no longer supported by Pandora." },
 	{ "web.socket.not_implemented_history", "Song history is not available through the remote API yet." },
+	{ "web.socket.not_implemented_interactive", "This action asks for input on the player terminal and is not available through the generic action command." },
 	{ "web.socket.not_implemented_settings", "Runtime settings changes are not available through the remote API yet." },
 	{ "web.song_explain_empty", "No explanation provided by Pandora" },
 	{ "web.song_explain_failed", "Failed to receive explanation" },

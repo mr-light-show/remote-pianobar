@@ -88,17 +88,19 @@ static const BarActionMapping_t actionMappings[] = {
 	{"song.bookmark",          BAR_KS_BOOKMARK,             BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_bookmark"},
 	{"song.explain",           BAR_KS_EXPLAIN,              BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
 	{"song.info",              BAR_KS_INFO,                 BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
-	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG, BAR_SOCKETIO_ACTION_DISPATCH,       NULL},
+	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG, BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
 
-	/* Station */
-	{"station.change",        BAR_KS_SELECTSTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.create",        BAR_KS_CREATESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.delete",        BAR_KS_DELETESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.rename",        BAR_KS_RENAMESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.addMusic",      BAR_KS_ADDMUSIC,       BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.addGenre",      BAR_KS_GENRESTATION,   BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.addShared",     BAR_KS_ADDSHARED,      BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.selectQuickMix",BAR_KS_SELECTQUICKMIX, BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	/* Station: these map to terminal-prompt handlers, which the command
+	 * worker must never run (it would wait on stdin); clients use the
+	 * dedicated events (station.change, station.createFrom, ...) instead */
+	{"station.change",        BAR_KS_SELECTSTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.create",        BAR_KS_CREATESTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.delete",        BAR_KS_DELETESTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.rename",        BAR_KS_RENAMESTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.addMusic",      BAR_KS_ADDMUSIC,       BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.addGenre",      BAR_KS_GENRESTATION,   BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.addShared",     BAR_KS_ADDSHARED,      BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.selectQuickMix",BAR_KS_SELECTQUICKMIX, BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
 	/* station.mode, station.seeds, music.search, query.stations handled by dedicated events */
 
 	/* Query */

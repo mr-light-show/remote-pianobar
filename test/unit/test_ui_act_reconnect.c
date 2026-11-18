@@ -3792,26 +3792,36 @@ START_TEST (test_cli_prompts_hold_no_lock_while_waiting_for_input)
 }
 END_TEST
 
-/* The same actions asked for by a WebSocket client run on the command worker
- * thread, which takes the hold itself (BarSocketIoHandleAction) */
-START_TEST (test_websocket_action_prompts_hold_no_lock_while_waiting_for_input)
+/* The same actions asked for by a WebSocket client are refused with an error
+ * naming the action: they prompt on the terminal, which the command worker
+ * must never wait on. Nothing runs, nothing is read, no lock is taken. */
+START_TEST (test_websocket_action_prompts_are_refused_on_the_worker)
 {
 	const BarTestPromptCase_t *c = &prompt_cases[prompt_ws_cases[_i]];
 	BarTestPromptFixture_t fx;
-	BarTestPromptFeeder_t feeder;
-	pthread_t thread;
 	prompt_fixture_setup (&fx, c);
 	fx.app.ph.user.listenerId = (char *) "listener";
 	BarStateSetCurrentStation (&fx.app, &fx.keep);
+	TestWsCaptureAttach (&fx.app, 1, mock_broadcast);
+	ck_assert_int_eq (write (fx.pipefd[1], "x", 1), 1);
 
-	/* The hold is taken inside the handler, after the feeder started: it
-	 * waits longer for the first prompt */
-	prompt_feeder_start (&fx, c, &feeder, &thread, 150);
 	BarSocketIoHandleAction (&fx.app, c->wsAction, NULL, BAR_WS_DEST_BROADCAST);
-	ck_assert_int_eq (pthread_join (thread, NULL), 0);
-	prompt_check_result (&fx, c, &feeder);
+	TestWsCaptureFlush ();
+
+	ck_assert_msg (TestWsCaptureCount (0, "\"error\"") == 1 &&
+			TestWsCaptureCount (0, c->wsAction) == 1,
+			"%s: expected one error naming the action", c->name);
+	ck_assert_msg (!pipe_drained (fx.pipefd[0]), "%s: input was read", c->name);
+	ck_assert_msg (cli_calls (PIANO_REQUEST_CREATE_STATION) == 0 &&
+			cli_calls (PIANO_REQUEST_DELETE_STATION) == 0 &&
+			cli_calls (PIANO_REQUEST_RENAME_STATION) == 0 &&
+			cli_calls (PIANO_REQUEST_ADD_SEED) == 0 &&
+			cli_calls (PIANO_REQUEST_SET_QUICKMIX) == 0,
+			"%s: a Pandora call ran", c->name);
 	ck_assert_msg (lock_probe_other_thread (&fx.app) == 0,
 			"%s: a lock leaked", c->name);
+	TestWsCaptureDetach (&fx.app);
+	clear_mock ();
 	prompt_fixture_teardown (&fx);
 }
 END_TEST
@@ -4085,7 +4095,7 @@ ui_act_suite (void)
 	/* No lock is held while waiting (user input, eventcmd, teardown) */
 	tcase_add_loop_test (tc, test_cli_prompts_hold_no_lock_while_waiting_for_input,
 			0, (int) PROMPT_CASE_COUNT);
-	tcase_add_loop_test (tc, test_websocket_action_prompts_hold_no_lock_while_waiting_for_input,
+	tcase_add_loop_test (tc, test_websocket_action_prompts_are_refused_on_the_worker,
 			0, (int) PROMPT_WS_CASE_COUNT);
 	tcase_add_loop_test (tc, test_eventcmd_waits_without_holds, 0, 3);
 	tcase_add_loop_test (tc, test_pandora_disconnect_reconnect_wait_without_holds, 0, 4);

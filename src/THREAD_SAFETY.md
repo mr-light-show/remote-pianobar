@@ -795,7 +795,7 @@ The mutex is never held across waits for the playback manager: teardown (disconn
 | Path | Hold |
 |---|---|
 | WebSocket station handlers (`addMusic`, `rename`, `getModes`, `setMode`, `getInfo`, `deleteSeed`, `deleteFeedback`, `delete`), `getGenres`, `setQuickMix` | From lookup to last use |
-| WebSocket `action` and CLI keys for which `BarUiDispatchHoldsPianoLock` is true (love, ban, tired, explain, info, debug, upcoming; plus the interactive actions) | From resolving the current station/song until the action returns |
+| WebSocket `action` and CLI keys for which `BarUiDispatchHoldsPianoLock` is true (love, ban, tired, explain, info, debug, upcoming; plus the interactive actions, CLI only) | From resolving the current station/song until the action returns |
 | Interactive actions (add music, create, delete, genre, history, shared, rename, QuickMix, bookmark, manage, create-from-song, settings) | Suspended around every `BarReadline`; selection resolved again afterwards; "no longer exists" reported via `cli.station_gone`/`cli.song_gone` |
 | Station selection (CLI `s`, WebSocket `station.change`) | None while picking: `BarUiSelectStationId` lists a snapshot and returns an id; resolved by id under the hold / write lock |
 | Playback manager / lifecycle | Playlist fetch resolves `nextStation` after taking the hold; song start, station print and the songstart/songfinish/stationfetchplaylist eventcmds are inside it |
@@ -814,12 +814,12 @@ The mutex is never held across waits for the playback manager: teardown (disconn
 | `station.addGenre`, `addShared`, `createFrom`, `music.search` | none (request-owned) | n/a | Safe |
 | `action` `query.upcoming` | playlist tail | `BarStateSnapshotUpcoming` under `stateRwlock` read | Safe |
 | `action` `song.love/ban/tired/explain`, `song.info` | current station/song, song's station, eventcmd lists | dispatcher hold for the whole action | Safe |
-| `action` interactive CLI callbacks (`song.createStationFrom`, `station.change/create/delete/rename/addMusic/addGenre/addShared/selectQuickMix`) | as above | hold, suspended around input, selection resolved again | Safe for pointers; see known limit |
+| `action` `song.createStationFrom`, `station.change/create/delete/rename/addMusic/addGenre/addShared/selectQuickMix`, `song.bookmark`, `query.history`, `app.settings` | none (refused before dispatch) | n/a | Safe; see known limit |
 | `action` playback, volume, `app.quit`, `app.pandora-disconnect/reconnect` | none dereferenced | no hold (teardown suspends any hold) | Safe |
 
 ### Known limits
 
-- **Interactive actions over WebSocket (C1).** The `action` commands above that map to interactive CLI callbacks prompt on the terminal and wait for input. In Both mode the command worker blocks until the user answers; with stdin closed (daemon) it can block indefinitely. It holds no lock while waiting and connections keep being serviced, but every later command waits, and once 32 are queued clients get the busy error. The web UI uses the dedicated events instead. The protocol is unchanged here by decision.
+- **Interactive actions over WebSocket (C1, resolved).** The `action` commands that map to terminal-prompt CLI callbacks (`song.createStationFrom`, `station.change/create/delete/rename/addMusic/addGenre/addShared/selectQuickMix`, plus bookmark, history and settings) are marked `BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED` in the action table and answered with an `error` event (`web.socket.not_implemented_interactive`); the command worker never runs a handler that waits for terminal input, so it cannot block on stdin or race the CLI for it. Clients use the dedicated events (`station.change`, `station.delete`, ...). The interactive handlers remain reachable from the CLI only, where the lock rules above apply.
 - **One command at a time.** A slow command (a Pandora call: up to `timeout` × `max_retry` per request, 150 s by default on a dead network; an eventcmd script) delays every later command, including cheap ones such as volume or pause. That is by design: commands run in the order received and Pandora calls stay serialized.
 - eventcmd's input is formatted under the caller's hold. The write to the script and the wait for it run with the thread's holds released (`BarUiStartEventCmd` suspends and restores them), so a slow script delays only its own thread. Callers resolve stations/songs again afterwards (`BarUiActEventcmd`).
 - The playback manager contends with in-flight Pandora HTTP at song boundaries: advancing, history trims, drains and the song-start/finish sections take `pianoHttpMutex`, so they wait for a worker or CLI Pandora call that is already running (and the worker waits for theirs). eventcmd scripts run with the holds released, so they do not add to this.
