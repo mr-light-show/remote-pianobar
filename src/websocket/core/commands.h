@@ -55,7 +55,8 @@ void BarWsCommandQueueFree (BarWsCommandQueue_t *q);
 /* Copy len bytes into a new item (the caller may modify or free bytes right
  * after) and append it. The copy is NUL-terminated (the terminator is not
  * counted in len). An empty queue accepts any request up to
- * WS_CMD_MAX_REQUEST_BYTES. NULL q returns CLOSED; NULL bytes with len > 0
+ * WS_CMD_MAX_REQUEST_BYTES; a len above WS_CMD_MAX_BYTES is refused with
+ * FULL, and an unallocatable one with NOMEM, both before allocating. NULL q returns CLOSED; NULL bytes with len > 0
  * returns NOMEM (nothing is queued). */
 BarWsCommandResult_t BarWsCommandQueuePush (BarWsCommandQueue_t *q,
 		BarWsConnId_t requester, const char *bytes, size_t len);

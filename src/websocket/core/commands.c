@@ -105,8 +105,14 @@ BarWsCommandResult_t BarWsCommandQueuePush (BarWsCommandQueue_t *q,
 	if (!q) {
 		return BAR_WS_CMD_CLOSED;
 	}
-	if ((!bytes && len > 0) || len == SIZE_MAX) {
+	/* A length no allocator can satisfy is refused before malloc sees it
+	 * (ASan aborts on such a request instead of returning NULL). */
+	if ((!bytes && len > 0) || len > SIZE_MAX / 2) {
 		return BAR_WS_CMD_NOMEM;
+	}
+	/* Nothing above the whole byte cap can ever fit, even when empty */
+	if (len > WS_CMD_MAX_BYTES) {
+		return BAR_WS_CMD_FULL;
 	}
 	BarWsCommandItem_t *it = calloc (1, sizeof (*it));
 	char *copy = malloc (len + 1);
