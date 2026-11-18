@@ -234,6 +234,7 @@ BarUiActCallback(BarUiActAddMusic) {
 			return;
 		}
 		if (!BarTransformIfShared (app, selStation)) {
+			free (reqData.musicId);
 			return;
 		}
 		reqData.station = selStation;

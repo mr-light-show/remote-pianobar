@@ -3568,6 +3568,41 @@ START_TEST (test_cli_add_music_and_rename_gone_while_typing)
 }
 END_TEST
 
+/* Records like mock_cli_record but fails the shared-station transform */
+static bool
+mock_cli_transform_fails (BarApp_t *app, const PianoRequestType_t type, void *data,
+                          PianoReturn_t *pRet, CURLcode *wRet)
+{
+	if (type == PIANO_REQUEST_TRANSFORM_STATION) {
+		ck_assert_uint_lt (g_cliCount, CLI_MAX_CALLS);
+		g_cliTypes[g_cliCount++] = type;
+		*pRet = PIANO_RET_ERR;
+		*wRet = CURLE_OK;
+		return false;
+	}
+	return mock_cli_record (app, type, data, pRet, wRet);
+}
+
+/* Regression: a failed transform of a shared station stops add music
+ * without sending the seed and without leaking the picked music id */
+START_TEST (test_cli_add_music_shared_transform_fails)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, other;
+	cli_app_setup (&app, &ctx, &keep, &other);
+	keep.isCreator = false;
+	BarUiPianoCallSetTestHook (mock_cli_transform_fails);
+
+	cli_run (&app, BarUiActAddMusic, &keep, NULL, "query\n0\n");
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_SEARCH), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_TRANSFORM_STATION), 1);
+	ck_assert_uint_eq (cli_calls (PIANO_REQUEST_ADD_SEED), 0);
+
+	cli_app_teardown (&app, &ctx);
+}
+END_TEST
+
 /* Regression: the song actions offered after picking a history song were
  * silently refused because the dispatch context lacked
  * BAR_DC_PANDORA_CONNECTED (required since f2c595d). */
@@ -4272,6 +4307,7 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_cli_genre_station_by_category_and_genre);
 	tcase_add_test (tc, test_cli_create_add_and_rename_prompts);
 	tcase_add_test (tc, test_cli_add_music_and_rename_gone_while_typing);
+	tcase_add_test (tc, test_cli_add_music_shared_transform_fails);
 	tcase_add_test (tc, test_cli_history_pick_abort_and_gone);
 	tcase_add_test (tc, test_cli_history_song_actions_run);
 	tcase_add_test (tc, test_ui_act_history_pick_parses_number_like_before);
