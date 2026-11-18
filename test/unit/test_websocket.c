@@ -2193,7 +2193,8 @@ END_TEST
  * call waits until the test opens the gate or the call is interrupted: like
  * curl's progress callback it watches its own flag, registered as the
  * interrupt target for the duration of the call (as BarPianoHttpRequest
- * does). The handler holds pianoHttpMutex meanwhile (song actions do). */
+ * does), and the shutdown flag. The handler holds pianoHttpMutex meanwhile
+ * (song actions do). */
 typedef struct {
 	pthread_mutex_t lock;
 	pthread_cond_t cond;
@@ -2216,7 +2217,8 @@ static bool test_gate_call (BarApp_t * const app, const PianoRequestType_t type,
 	if (test_gate.block && n == 1) {
 		_Atomic sig_atomic_t *prev = BarInterruptGetTarget ();
 		BarInterruptSetTarget (&test_gate.flag);
-		while (!test_gate.open && atomic_load (&test_gate.flag) == 0) {
+		while (!test_gate.open && atomic_load (&test_gate.flag) == 0 &&
+				!BarInterruptShutdownRequested ()) {
 			struct timespec ts;
 			clock_gettime (CLOCK_REALTIME, &ts);
 			ts.tv_nsec += 1000000;
@@ -2458,6 +2460,67 @@ START_TEST (test_shutdown_with_queued_commands_frees_them)
 	const char *reply = TestWsPendingLast (&ctx, BAR_WS_KEY_NONE);
 	ck_assert (strstr (reply, "\"error\"") != NULL);
 	ck_assert (strstr (reply, "song.explain") != NULL);
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* Pandora mock for a handler that makes two requests (renaming a shared
+ * station: transform, then rename). The first returns once shutdown has
+ * begun, i.e. its response arrived just as the owner started to stop the
+ * worker; any later call blocks for 3 s and fails (a failed rename leaves
+ * the fixture's static station names alone). */
+static _Atomic int test_two_calls;
+
+static bool test_two_call (BarApp_t * const app, const PianoRequestType_t type,
+		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	(void) app;
+	(void) type;
+	(void) data;
+	const int n = atomic_fetch_add (&test_two_calls, 1) + 1;
+	for (int i = 0; i < (n == 1 ? 5000 : 3000); i++) {
+		if (n == 1 && BarInterruptShutdownRequested ()) {
+			break;
+		}
+		usleep (1000);
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = n == 1 ? CURLE_OK : CURLE_ABORTED_BY_CALLBACK;
+	return n == 1;
+}
+
+static double test_now_sec (void) {
+	struct timespec ts;
+	clock_gettime (CLOCK_MONOTONIC, &ts);
+	return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+}
+
+/* Shutdown between two requests of one handler: the second is never sent
+ * and the worker joins at once (an interrupt alone would be lost here: no
+ * request is in curl when it is raised) */
+START_TEST (test_shutdown_between_requests_skips_the_next)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	atomic_store (&test_two_calls, 0);
+	BarUiPianoCallSetTestHook (test_two_call);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_receive (&app, 0, "2[\"station.rename\",{\"stationId\":\"station-1\","
+			"\"newName\":\"Renamed\"}]");
+	for (int i = 0; i < 5000 && atomic_load (&test_two_calls) == 0; i++) {
+		usleep (1000);
+	}
+	ck_assert_int_eq (atomic_load (&test_two_calls), 1);
+
+	const double start = test_now_sec ();
+	BarWebsocketWorkerStop (&app);
+	const double elapsed = test_now_sec () - start;
+	ck_assert_int_eq (atomic_load (&test_two_calls), 1); /* rename not sent */
+	ck_assert_msg (elapsed < 1.0, "join took %.2f s", elapsed);
+	ck_assert (!BarInterruptShutdownRequested ()); /* cleared after the join */
 
 	test_teardown_worker (&app, &ctx);
 }
@@ -3016,7 +3079,7 @@ START_TEST (test_shutdown_with_blocked_http_interrupts_and_joins)
 	test_e2e_send (&a, TEST_EXPLAIN);
 	test_e2e_pump_until_calls (cctx, &a, 1);
 
-	/* Destroy interrupts the stuck call through the interrupt target, joins
+	/* Destroy aborts the stuck call through the shutdown flag, joins
 	 * the worker, then the service thread, and frees the transport */
 	BarWebsocketDestroy (&app);
 	ck_assert (test_gate.interrupted);
@@ -3918,6 +3981,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_service_thread_start_failure_does_not_quit);
 	tcase_add_test (tc_worker, test_shutdown_empty_queue);
 	tcase_add_test (tc_worker, test_shutdown_with_queued_commands_frees_them);
+	tcase_add_test (tc_worker, test_shutdown_between_requests_skips_the_next);
 	tcase_add_test (tc_worker, test_shutdown_with_blocked_http_interrupts_and_joins);
 	tcase_add_test (tc_worker, test_app_quit_from_worker_signals_owner_not_self_join);
 	tcase_add_test (tc_worker, test_repeated_start_stop);

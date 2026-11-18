@@ -147,8 +147,9 @@ void BarWebsocketDestroy(BarApp_t *app);
  * restart exists only for tests), so no service thread may be running.
  * Returns false, with nothing started or allocated, on failure. */
 bool BarWebsocketWorkerStart (BarApp_t *app);
-/* Stop admission (queued commands are dropped and freed), interrupt an
- * in-flight Pandora call through the interrupt target and join the worker.
+/* Stop admission (queued commands are dropped and freed), abort the
+ * command's Pandora requests (in flight or not yet started) through the
+ * shutdown flag (BarInterruptSetShutdown) and join the worker.
  * Replies the worker has not delivered yet are abandoned. Lifecycle owner
  * only: from the worker itself (e.g. inside app.quit) it logs and returns. */
 void BarWebsocketWorkerStop (BarApp_t *app);

@@ -188,6 +188,7 @@ static size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
 }
 
 /*	libcurl progress callback. aborts the current request if user pressed ^C
+ *	or shutdown was requested
  */
 int progressCb (void * const data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow) {
@@ -197,7 +198,7 @@ int progressCb (void * const data, curl_off_t dltotal, curl_off_t dlnow,
 	(void) ulnow;
 	const _Atomic sig_atomic_t *flag = data;
 	const sig_atomic_t lint = atomic_load_explicit (flag, memory_order_relaxed);
-	if (lint != 0) {
+	if (lint != 0 || BarInterruptShutdownRequested ()) {
 		return 1;
 	}
 	return 0;
@@ -301,6 +302,11 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 
 	unsigned int retry = 0;
 	do {
+		/* no new attempt (retry, next step of a request) once shutdown began */
+		if (BarInterruptShutdownRequested ()) {
+			httpret = CURLE_ABORTED_BY_CALLBACK;
+			break;
+		}
 		httpret = curl_easy_perform (http);
 		++retry;
 		if (temporaryCurlError (httpret)) {
@@ -400,6 +406,13 @@ void BarUiPianoCallClearTestHook (void) {
  */
 bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	/* once shutdown began no request starts, whatever the interrupt target */
+	if (BarInterruptShutdownRequested ()) {
+		log_write (DEBUG_NETWORK, "Shutting down: Pandora request not sent\n");
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_ABORTED_BY_CALLBACK;
+		return false;
+	}
 	if (g_barUiPianoCallTestHook != NULL) {
 		return g_barUiPianoCallTestHook (app, type, data, pRet, wRet);
 	}

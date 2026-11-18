@@ -40,7 +40,12 @@ THE SOFTWARE.
 #include <stdint.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <time.h>
 #include "../test_tmp.h"
+#include "../../src/interrupt.h"
 
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
@@ -301,6 +306,143 @@ START_TEST (test_ui_piano_call_http_hits_progress_cb)
 }
 END_TEST
 
+/* While shutdown is requested curl's progress callback aborts the request,
+ * whatever the request's own interrupt flag says */
+START_TEST (test_progress_cb_aborts_on_shutdown)
+{
+	_Atomic sig_atomic_t interrupted = 0;
+
+	BarInterruptSetShutdown (true);
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 1);
+	BarInterruptSetShutdown (false);
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 0);
+}
+END_TEST
+
+/* A loopback listener on a kernel-chosen port */
+static int ui_listen_loopback (uint16_t *port) {
+	struct sockaddr_in addr;
+	socklen_t len = sizeof (addr);
+	const int fd = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (fd, 0);
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	ck_assert_int_eq (listen (fd, 8), 0);
+	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
+	*port = ntohs (addr.sin_port);
+	return fd;
+}
+
+/* App for a real login request (partner login, TLS) to 127.0.0.1:port */
+static void ui_http_app_init (BarApp_t *app, PianoRequestDataLogin_t *login,
+		uint16_t port, unsigned int maxRetry) {
+	char portStr[8];
+
+	memset (app, 0, sizeof (*app));
+	memset (login, 0, sizeof (*login));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_BOTH;
+	free (app->settings.rpcHost);
+	free (app->settings.rpcTlsPort);
+	snprintf (portStr, sizeof (portStr), "%u", (unsigned int) port);
+	app->settings.rpcHost = strdup ("127.0.0.1");
+	app->settings.rpcTlsPort = strdup (portStr);
+	app->settings.timeout = 5;
+	app->settings.maxRetry = maxRetry;
+	app->settings.username = strdup ("user");
+	app->settings.password = strdup ("pass");
+	BarStateInit (app);
+	BarUiPianoHttpMutexInit (app);
+	app->http = curl_easy_init ();
+	ck_assert_ptr_nonnull (app->http);
+	ck_assert_int_eq (PianoInit (&app->ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	login->user = app->settings.username;
+	login->password = app->settings.password;
+	BarUiPianoCallClearTestHook ();
+}
+
+static void ui_http_app_free (BarApp_t *app) {
+	curl_easy_cleanup (app->http);
+	app->http = NULL;
+	PianoDestroy (&app->ph);
+	BarUiPianoHttpMutexDestroy (app);
+	BarStateDestroy (app);
+	BarSettingsDestroy (&app->settings);
+}
+
+/* Shutdown requested before the call: no connection is made at all */
+START_TEST (test_ui_piano_call_not_sent_after_shutdown)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t login;
+	PianoReturn_t pRet = PIANO_RET_ERR;
+	CURLcode wRet = CURLE_OK;
+	uint16_t port;
+	const int lfd = ui_listen_loopback (&port);
+
+	ui_http_app_init (&app, &login, port, 1);
+	BarInterruptSetShutdown (true);
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &login, &pRet, &wRet));
+	BarInterruptSetShutdown (false);
+	ck_assert_int_eq (wRet, CURLE_ABORTED_BY_CALLBACK);
+
+	struct pollfd pfd = { .fd = lfd, .events = POLLIN };
+	ck_assert_int_eq (poll (&pfd, 1, 200), 0); /* nobody connected */
+	close (lfd);
+	ui_http_app_free (&app);
+}
+END_TEST
+
+/* Accepts connections and hangs up on them; requests shutdown before
+ * hanging up on the first, so the retry that would follow must not start */
+typedef struct {
+	int lfd;
+	int accepted;
+} UiHangupServer_t;
+
+static void *ui_hangup_server (void *arg) {
+	UiHangupServer_t *srv = arg;
+	struct pollfd pfd = { .fd = srv->lfd, .events = POLLIN };
+	while (poll (&pfd, 1, 1000) > 0) {
+		const int fd = accept (srv->lfd, NULL, NULL);
+		if (fd < 0) {
+			break;
+		}
+		if (++srv->accepted == 1) {
+			BarInterruptSetShutdown (true);
+		}
+		close (fd);
+	}
+	return NULL;
+}
+
+START_TEST (test_ui_piano_call_shutdown_stops_retries)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t login;
+	PianoReturn_t pRet = PIANO_RET_ERR;
+	CURLcode wRet = CURLE_OK;
+	UiHangupServer_t srv = { .accepted = 0 };
+	uint16_t port;
+	pthread_t thread;
+
+	srv.lfd = ui_listen_loopback (&port);
+	ui_http_app_init (&app, &login, port, 5);
+	ck_assert_int_eq (pthread_create (&thread, NULL, ui_hangup_server, &srv), 0);
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &login, &pRet, &wRet));
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	BarInterruptSetShutdown (false);
+
+	ck_assert_int_eq (wRet, CURLE_ABORTED_BY_CALLBACK);
+	ck_assert_int_eq (srv.accepted, 1); /* no retry after the hang-up */
+	close (srv.lfd);
+	ui_http_app_free (&app);
+}
+END_TEST
+
 static void *ui_piano_mutex_probe (void *arg) {
 	BarApp_t *app = arg;
 	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
@@ -524,6 +666,9 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
 	tcase_add_test (tc, test_ui_piano_call_http_hits_progress_cb);
+	tcase_add_test (tc, test_progress_cb_aborts_on_shutdown);
+	tcase_add_test (tc, test_ui_piano_call_not_sent_after_shutdown);
+	tcase_add_test (tc, test_ui_piano_call_shutdown_stops_retries);
 	tcase_add_test (tc, test_ui_piano_hold_suspend_resume);
 	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
 	tcase_add_test (tc, test_ui_select_station_id_returns_copied_id);

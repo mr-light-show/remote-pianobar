@@ -738,11 +738,11 @@ A message that arrives in parts is collected per connection (the buffer is freed
 
 `BarWebsocketDestroy` runs on the lifecycle owner after the other producers stopped (`BarMainLoop` stops the playback manager, which joins the player thread; the CLI runs on the owner itself):
 
-1. Stop the worker: close the command queue (later pushes fail with CLOSED; queued commands are dropped and freed), then `BarInterruptIncrement ()` to interrupt the in-flight Pandora request (during a request the interrupt target is that request's own flag, which curl's progress callback polls, exactly as for SIGINT), then join the worker.
+1. Stop the worker: set the shutdown flag (`BarInterruptSetShutdown (true)`), close the command queue (later pushes fail with CLOSED; queued commands are dropped and freed), join the worker, then clear the flag. While the flag is set no Pandora request starts (`BarUiPianoCall` returns `false` with `CURLE_ABORTED_BY_CALLBACK` before sending, and `BarPianoHttpRequest` makes no further attempt: no retry, no next step of a multi-step request) and curl's progress callback aborts the one in flight. The flag does not depend on the interrupt target (`BarInterruptIncrement` would bump whatever target is current, possibly `player.interrupted` or `doQuit`, and is lost if the worker is not inside curl at that moment), so a shutdown that arrives before the first request or between two requests of one command is not lost. SIGINT, the CLI and the player keep using the interrupt target as before.
 2. Stop and join the service thread.
 3. Destroy the lws context (closes connections), then free the command queue, the per-client queues and the outbox. Replies not yet written are abandoned by design; clients that reconnect resync from one `process` frame.
 
-If `BarWebsocketInit` fails after the worker started (the service thread cannot be created), it closes the queue and joins the idle worker without an interrupt: at startup the interrupt target is `app->doQuit`, so interrupting would quit the player instead of continuing without the web server.
+If `BarWebsocketInit` fails after the worker started (the service thread cannot be created), it closes the queue and joins the idle worker without setting the shutdown flag (nothing is running).
 
 `app.quit` arriving as a command runs on the worker: it sets `doQuit` and stops the player, which the main loop notices as it does for the CLI `q` key. The worker never joins itself; `BarWebsocketWorkerStop` called on the worker logs and returns.
 
@@ -764,7 +764,7 @@ Errors are logged whenever a client, an event or a request is lost, dropped or r
 
 The worker marks the command it runs in the command queue (`BarWsCommandQueueBegin`/`End`; the first 40 bytes, a monotonic start time and a sequence number) and, with `DEBUG_WEBSOCKET` on, wakes the service thread with `lws_cancel_service`. The service thread (`BarWsServiceDiagnostics`) then arms its one `lws_sul` timer for the 10 s check of that sequence number and the 30 s heartbeat; when the check fires it logs only if the same command is still running. Other existing errors stay: an oversize frame or request (`Dropping …`), out of memory, and thread or context creation failures.
 
-Limit: the interrupt reaches a request only while it is in curl. A command that is between Pandora calls, or a target redirected by the playback manager meanwhile, is not interrupted, and the join waits for it. One request can take up to `timeout` × `max_retry` (`BarPianoHttpRequest` retries temporary network errors; 30 s × 5 = 150 s by default), and a handler may issue several requests (re-login, then the call). A service manager's stop timeout shorter than that (systemd's default `TimeoutStopSec` is 90 s) can kill the process during shutdown on a dead network; raise it, or lower `timeout`/`max_retry`, where that matters.
+Limit: the shutdown flag stops Pandora requests only. A command blocked elsewhere (an eventcmd script it waits for, `pianoHttpMutex` held by another thread) is joined when that returns. An in-flight request aborts at curl's next progress callback (curl calls it at least once a second), not after `timeout` × `max_retry`.
 
 ## Command worker: handler pointer audit
 

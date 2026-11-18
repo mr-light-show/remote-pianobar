@@ -922,21 +922,23 @@ bool BarWebsocketWorkerStart (BarApp_t *app) {
 }
 
 /* Close admission and join the worker; `interrupt` also aborts the
- * in-flight Pandora request. Not for an idle worker: at startup the interrupt
- * target is app->doQuit, so an interrupt would quit the player. */
+ * command's Pandora requests. */
 static void BarWsWorkerJoin (BarApp_t *app, bool interrupt) {
 	BarWsContext_t *ctx = app->wsContext;
 	/* Refuse new commands and drop the queued ones, so the worker exits
-	 * after the command in flight. Interrupt that command's Pandora call
-	 * the way SIGINT does: during a request the interrupt target is the
-	 * request's own flag, which curl's progress callback polls. */
-	BarWsCommandQueueClose (ctx->commands);
+	 * after the command in flight. The shutdown flag (not an interrupt,
+	 * which only reaches a request inside curl through the current target)
+	 * aborts that command's request in curl and refuses every later one,
+	 * so the command returns promptly wherever it is. */
 	if (interrupt) {
-		BarInterruptIncrement ();
+		BarInterruptSetShutdown (true);
 	}
+	BarWsCommandQueueClose (ctx->commands);
 	log_write (DEBUG_WEBSOCKET, "Waiting for the command worker...\n");
 	pthread_join (ctx->worker, NULL);
 	ctx->workerStarted = false;
+	/* Nothing left to abort; requests on other threads work again */
+	BarInterruptSetShutdown (false);
 }
 
 void BarWebsocketWorkerStop (BarApp_t *app) {
