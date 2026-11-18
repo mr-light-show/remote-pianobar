@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/playback_manager.h"
 #include "../../src/websocket/core/websocket.h"
+#include "../test_helpers.h"
 
 void BarUiActSkipSong (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
 void BarUiActPandoraDisconnect (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
@@ -472,6 +473,18 @@ START_TEST(test_wait_stale_idle_snapshot_cannot_park_active_player) {
 }
 END_TEST
 
+typedef struct {
+	BarWsOutbox_t *outbox;
+	BarWsPending_t *message;
+} TakeArgs_t;
+
+/* Takes the outbox's queued messages once there are any */
+static bool outbox_took (void *arg) {
+	TakeArgs_t *t = arg;
+	t->message = BarWsOutboxTake (t->outbox);
+	return t->message != NULL;
+}
+
 START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	BarApp_t app = {0};
 	BarWsContext_t ctx = {0};
@@ -504,8 +517,9 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	app.player.pauseStartTime = 0;
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
-	usleep (1200000);
-	BarWsPending_t *message = BarWsOutboxTake (ctx.outbox);
+	TakeArgs_t take = {.outbox = ctx.outbox};
+	ck_assert (wait_until (outbox_took, &take, 3000));
+	BarWsPending_t *message = take.message;
 	ck_assert_ptr_nonnull (message);
 	ck_assert_ptr_null (message->next);
 	ck_assert_int_eq (message->key, BAR_WS_KEY_PROGRESS);
@@ -692,6 +706,10 @@ START_TEST(test_manager_thread_one_loop_iteration) {
 }
 END_TEST
 
+static bool playlist_advanced(void *app) {
+	return BarStateGetPlaylist(app) == NULL;
+}
+
 /* Covers idle PLAYER_DEAD path: BarStateAdvancePlaylist + BarUiHistoryPrepend. */
 START_TEST(test_manager_idle_advances_playlist) {
 	BarApp_t app;
@@ -713,7 +731,7 @@ START_TEST(test_manager_idle_advances_playlist) {
 	pthread_mutex_lock(&app.player.lock);
 	pthread_cond_broadcast(&app.player.cond);
 	pthread_mutex_unlock(&app.player.lock);
-	usleep(100000);
+	ck_assert(wait_until(playlist_advanced, &app, 3000));
 
 	BarPlaybackManagerStop(&app);
 
@@ -726,6 +744,13 @@ START_TEST(test_manager_idle_advances_playlist) {
 }
 END_TEST
 
+static atomic_uint g_playlistOkCalls;
+
+static bool playlist_fetched (void *arg) {
+	(void) arg;
+	return atomic_load (&g_playlistOkCalls) > 0;
+}
+
 static bool
 mock_get_playlist_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
                       PianoReturn_t *pRet, CURLcode *wRet)
@@ -733,6 +758,7 @@ mock_get_playlist_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
 	(void) app;
 	if (type == PIANO_REQUEST_GET_PLAYLIST) {
 		((PianoRequestDataGetPlaylist_t *) data)->retPlaylist = NULL;
+		atomic_fetch_add (&g_playlistOkCalls, 1);
 	}
 	*pRet = PIANO_RET_OK;
 	*wRet = CURLE_OK;
@@ -758,13 +784,14 @@ START_TEST(test_manager_fetches_playlist_when_next_station_set) {
 	pthread_cond_init(&app.player.cond, NULL);
 	app.player.mode = PLAYER_DEAD;
 	BarStateSetNextStation(&app, &st);
+	atomic_store (&g_playlistOkCalls, 0);
 	BarUiPianoCallSetTestHook (mock_get_playlist_ok);
 
 	ck_assert(BarPlaybackManagerStart(&app));
 	pthread_mutex_lock(&app.player.lock);
 	pthread_cond_broadcast(&app.player.cond);
 	pthread_mutex_unlock(&app.player.lock);
-	usleep(150000);
+	ck_assert(wait_until(playlist_fetched, NULL, 3000));
 
 	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
 	BarPlaybackManagerStop(&app);
@@ -902,7 +929,6 @@ START_TEST(test_wait_parked_idle_when_manager_running_and_parked) {
 	app.player.mode = PLAYER_DEAD;
 
 	ck_assert(BarPlaybackManagerStart(&app));
-	usleep(50000);
 	ck_assert(BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_TIMEOUT_MS));
 
 	BarPlaybackManagerStop(&app);
@@ -923,7 +949,6 @@ START_TEST(test_wait_parked_idle_times_out_when_not_parked) {
 	app.player.mode = PLAYER_PLAYING;
 
 	ck_assert(BarPlaybackManagerStart(&app));
-	usleep(50000);
 	ck_assert(!BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_POLL_MS));
 
 	BarPlaybackManagerStop(&app);

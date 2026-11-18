@@ -32,6 +32,7 @@ THE SOFTWARE.
 
 #include "../../src/bar_state.h"
 #include "../test_tmp.h"
+#include "../test_helpers.h"
 #include "../../src/interrupt.h"
 #include "../../src/playback_lifecycle.h"
 #include "../../src/settings.h"
@@ -48,6 +49,13 @@ static int failed_player_create (pthread_t *thread, const pthread_attr_t *attr,
 	return EAGAIN;
 }
 #define pthread_create failed_player_create
+
+/* A stream URL nobody listens on (connections are refused); valid until the
+ * next call */
+static char *refused_url (const char *path) {
+	static char url[64];
+	return test_refused_url (url, sizeof (url), path);
+}
 #define BarPlaybackStartSong BarTestPlaybackStartSong
 #define BarPlaybackFetchPlaylist BarTestPlaybackFetchPlaylist
 #include "../../src/playback_lifecycle.c"
@@ -88,7 +96,7 @@ START_TEST (test_playback_creation_failure_clears_pending_join)
 	BarApp_t app;
 	setup_playback_app (&app);
 	PianoStation_t station = {.id = "creation-failure", .name = "Creation"};
-	PianoSong_t song = {.title = "Creation", .artist = "Fixture", .audioUrl = "http://127.0.0.1:9/tone.mp3"};
+	PianoSong_t song = {.title = "Creation", .artist = "Fixture", .audioUrl = refused_url ("tone.mp3")};
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
 	pthread_t worker = 0;
@@ -160,7 +168,7 @@ static PianoSong_t *alloc_song (const char *title) {
 	song->artist = strdup ("Artist");
 	song->album = strdup ("Album");
 	song->detailUrl = strdup ("");
-	song->audioUrl = strdup ("http://127.0.0.1:9/recovered.mp3");
+	song->audioUrl = strdup (refused_url ("recovered.mp3"));
 	song->length = 1;
 	return song;
 }
@@ -579,7 +587,7 @@ START_TEST (test_playback_start_succeeds_with_http_url)
 	station.name = "HTTP Station";
 	song.title = "HTTP Song";
 	song.artist = "Artist";
-	song.audioUrl = "http://127.0.0.1:9/unreachable.mp3";
+	song.audioUrl = refused_url ("unreachable.mp3");
 	song.fileGain = 1.0;
 	song.length = 30;
 
@@ -615,7 +623,7 @@ START_TEST (test_playback_start_copies_audio_url)
 	setup_playback_app (&app);
 	song.title = "Copy Song";
 	song.artist = "Artist";
-	song.audioUrl = strdup ("http://127.0.0.1:9/unreachable.mp3");
+	song.audioUrl = strdup (refused_url ("unreachable.mp3"));
 	ck_assert_ptr_nonnull (song.audioUrl);
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
@@ -661,7 +669,7 @@ START_TEST (test_playback_start_quickmix_uses_song_station_lookup)
 	song.stationId = mixStation.id;
 	song.title = "Mix Song";
 	song.artist = "Artist";
-	song.audioUrl = "http://127.0.0.1:9/mix.mp3";
+	song.audioUrl = refused_url ("mix.mp3");
 
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
@@ -695,7 +703,7 @@ START_TEST (test_playback_start_song_rearms_auto_recover)
 	station.name = "Rearm Station";
 	song.title = "Rearm Song";
 	song.artist = "Artist";
-	song.audioUrl = "http://127.0.0.1:9/unreachable.mp3";
+	song.audioUrl = refused_url ("unreachable.mp3");
 
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
@@ -726,7 +734,7 @@ START_TEST (test_playback_start_stops_after_terminal_reset_failure)
 {
 	BarApp_t app;
 	PianoSong_t song = {.title = "Terminal Song", .artist = "Artist",
-		.audioUrl = "http://127.0.0.1:9/unreachable.mp3"};
+		.audioUrl = refused_url ("unreachable.mp3")};
 	PianoStation_t station = {.id = "station-terminal", .name = "Terminal Station"};
 	pthread_t playerThread = 0;
 	setup_playback_app (&app);

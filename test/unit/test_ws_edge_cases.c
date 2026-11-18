@@ -29,6 +29,7 @@
 #include "../../src/websocket/protocol/socketio.h"
 #include "../../src/websocket_bridge.h"
 #include "test_ws_capture.h"
+#include "../test_helpers.h"
 
 /* ---- connection table and delivery argument handling ---- */
 
@@ -162,22 +163,6 @@ START_TEST (test_ws_deliver_ignores_null_ctx_message_or_empty)
 END_TEST
 
 /* ---- live server: connect, receive, disconnect ---- */
-
-static int
-free_loopback_port (void)
-{
-	int fd = socket (AF_INET, SOCK_STREAM, 0);
-	ck_assert_int_ge (fd, 0);
-	struct sockaddr_in addr;
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
-	socklen_t len = sizeof (addr);
-	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
-	close (fd);
-	return ntohs (addr.sin_port);
-}
 
 static int
 connect_with_retry (int port)

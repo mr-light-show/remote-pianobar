@@ -31,6 +31,7 @@
 #include "../../src/websocket/core/websocket.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "test_ws_capture.h"
+#include "../test_helpers.h"
 
 #define TEST_CMD "2[\"noop\"]" /* a queued request the worker ignores */
 #define TEST_PING "2[\"ping\"]"
@@ -488,22 +489,6 @@ END_TEST
  * Service loop timer (real service thread)
  * ------------------------------------------------------------------------ */
 
-static int
-free_loopback_port (void)
-{
-	int fd = socket (AF_INET, SOCK_STREAM, 0);
-	ck_assert_int_ge (fd, 0);
-	struct sockaddr_in addr;
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
-	socklen_t len = sizeof (addr);
-	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
-	close (fd);
-	return ntohs (addr.sin_port);
-}
-
 static void
 server_app_init (BarApp_t *app, BarVolumeModeType mode)
 {
@@ -544,17 +529,17 @@ volume_broadcast_pending (BarWsContext_t *ctx)
 	return pending;
 }
 
+static bool
+volume_broadcast_fired (void *ctx)
+{
+	return !volume_broadcast_pending (ctx);
+}
+
 /* Wait (bounded) until the debounced volume broadcast has fired */
 static bool
 wait_volume_broadcast_fired (BarWsContext_t *ctx)
 {
-	for (int i = 0; i < 300; i++) {
-		if (!volume_broadcast_pending (ctx)) {
-			return true;
-		}
-		usleep (10000);
-	}
-	return false;
+	return wait_until (volume_broadcast_fired, ctx, 3000);
 }
 
 /* In system volume mode the timer is capped at the one-second poll, and a
@@ -586,8 +571,29 @@ START_TEST (test_system_volume_mode_timer_still_fires_debounced_volume)
 }
 END_TEST
 
+typedef struct {
+	BarWsContext_t *ctx;
+	uint64_t started; /* the command the loop must be watching */
+} StallWatch_t;
+
+static bool
+stall_watched (void *arg)
+{
+	const StallWatch_t *w = arg;
+	return atomic_load (&w->ctx->stallSeq) == w->started;
+}
+
+static bool
+stall_reported (void *arg)
+{
+	return atomic_load (&((BarWsContext_t *) arg)->stallReports) > 0;
+}
+
 /* With diagnostics on, the otherwise idle service loop arms a timer for the
- * long-running-command check and reports a stuck command when it is due */
+ * long-running-command check and reports a stuck command when it is due.
+ * The report is counted (stallReports) in every build; the log line exists
+ * only where debug logging is compiled in. Without HAVE_DEBUGLOG the
+ * diagnostics are off by design, so nothing may be watched or reported. */
 START_TEST (test_service_loop_reports_stuck_command_when_due)
 {
 	BarApp_t app;
@@ -597,24 +603,31 @@ START_TEST (test_service_loop_reports_stuck_command_when_due)
 	BarWsContext_t *ctx = app.wsContext;
 
 	log_capture_start (DEBUG_WEBSOCKET);
+	const bool diagnostics = log_is_enabled (DEBUG_WEBSOCKET);
 	BarWsCommandQueueBegin (ctx->commands, "2[\"action\",\"stuck.cmd\"]", 5000);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx->commands, &st);
+	StallWatch_t watch = {.ctx = ctx, .started = st.started};
 	lws_cancel_service (ctx->context);  /* the loop notices the running command */
-	usleep (100000);
-	ck_assert (!log_capture_contains ("Command running for"));
+	const bool watched = wait_until (stall_watched, &watch, diagnostics ? 3000 : 100);
+	const unsigned int early = atomic_load (&ctx->stallReports);
 	atomic_store (&g_nowMs, 5000 + 25000);
 	lws_cancel_service (ctx->context);  /* past the stall threshold */
-	for (int i = 0; i < 300 && !log_capture_contains ("Command running for"); i++) {
-		usleep (10000);
-	}
-	const bool reported = log_capture_contains ("stuck.cmd");
+	const bool reported = wait_until (stall_reported, ctx, diagnostics ? 3000 : 100);
+	const unsigned int reports = atomic_load (&ctx->stallReports);
 	BarWsCommandQueueEnd (ctx->commands);
 	server_app_destroy (&app);
-	(void) log_capture_stop ();
+	const char *log = log_capture_stop ();
 	BarWebsocketSetTestClock (NULL);
+
+	ck_assert_uint_eq (early, 0); /* not before the threshold */
+	ck_assert (watched == diagnostics);
+	ck_assert (reported == diagnostics);
+	ck_assert_uint_eq (reports, diagnostics ? 1 : 0);
+	ck_assert (diagnostics == (strstr (log, "Command running for 25 s: "
+			"2[\"action\",\"stuck.cmd\"]") != NULL));
 #ifdef HAVE_DEBUGLOG
-	ck_assert (reported);
-#else
-	(void) reported;
+	ck_assert (diagnostics);
 #endif
 }
 END_TEST

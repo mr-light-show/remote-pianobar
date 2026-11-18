@@ -38,6 +38,7 @@ THE SOFTWARE.
 #include "../../src/settings.h"
 #include "../../src/bar_state.h"
 #include "../../src/websocket/core/websocket.h"
+#include "../test_helpers.h"
 
 START_TEST (test_connection_add_returns_broadcast_id_when_table_full) {
 	char sockets[3];
@@ -86,21 +87,6 @@ START_TEST (test_song_generation_is_zero_without_websocket_context) {
 	ck_assert_uint_eq (BarWebsocketSongGeneration (NULL), 0);
 }
 END_TEST
-
-/* A loopback port that was free a moment ago (the kernel picks it) */
-static int free_loopback_port (void) {
-	int fd = socket (AF_INET, SOCK_STREAM, 0);
-	ck_assert_int_ge (fd, 0);
-	struct sockaddr_in addr;
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
-	socklen_t len = sizeof (addr);
-	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
-	close (fd);
-	return ntohs (addr.sin_port);
-}
 
 typedef struct {
 	struct lws *wsi;

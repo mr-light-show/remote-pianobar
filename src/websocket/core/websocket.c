@@ -744,6 +744,7 @@ long long BarWsServiceDiagnostics (BarWsContext_t *ctx) {
 			log_write (DEBUG_WEBSOCKET, "Command running for %lld s: %s (queue %zu items/%zu bytes)\n",
 			           ran / 1000, cmd.name, cmd.items, cmd.bytes);
 			ctx->stallNextMs = now + BAR_WS_STALL_MS - ran % BAR_WS_STALL_MS;
+			atomic_fetch_add (&ctx->stallReports, 1);
 		}
 		if (ctx->stallNextMs < next) {
 			next = ctx->stallNextMs;

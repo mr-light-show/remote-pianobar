@@ -119,8 +119,11 @@ typedef struct {
 	long long tableFullNextMs;    /* earliest next table-full error */
 	unsigned int tableFullSuppressed;
 	bool tableHigh;               /* reached 75% full, not yet below 50% */
-	uint64_t stallSeq;            /* command the long-running check watches */
+	_Atomic uint64_t stallSeq;    /* command the long-running check watches;
+	                               * atomic so tests may read it */
 	long long stallNextMs;        /* when to check it next */
+	_Atomic unsigned int stallReports; /* long-running-command reports so far;
+	                                    * atomic so any thread may read it */
 	long long heartbeatNextMs;    /* 0: not scheduled */
 	BarWsDiagSnapshot_t lastHeartbeat;
 	/* Socket adapters (NULL = libwebsockets); seams so tests can drive

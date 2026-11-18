@@ -81,6 +81,7 @@ void BarWsCommandQueueClose (BarWsCommandQueue_t *q);
 typedef struct {
 	size_t items;              /* queued, not counting the running command */
 	size_t bytes;
+	size_t waiting;            /* consumers blocked in Pop waiting for an item */
 	uint64_t started;          /* Begin calls so far */
 	bool running;              /* between Begin and End */
 	long long runningSinceMs;  /* nowMs given to Begin */

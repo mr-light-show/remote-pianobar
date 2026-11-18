@@ -47,6 +47,7 @@ THE SOFTWARE.
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include "test_ws_capture.h"
+#include "../test_helpers.h"
 
 /* Wire-compat capture buffer */
 static char g_compatBuf[8192];
@@ -1482,7 +1483,10 @@ START_TEST (test_websocket_init_destroy_emits_debug_lifecycle_logs)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = 18081;
+	app.settings.websocketPort = free_loopback_port ();
+	char started[64];
+	snprintf (started, sizeof (started), "Server started on port %d",
+			app.settings.websocketPort);
 
 	capture_stderr_to_pipe (pipefd, &saved_stderr);
 	log_set_debug_mask (DEBUG_WEBSOCKET);
@@ -1496,7 +1500,7 @@ START_TEST (test_websocket_init_destroy_emits_debug_lifecycle_logs)
 	BarSettingsDestroy (&app.settings);
 
 	ck_assert (n > 0);
-	ck_assert (strstr (buf, "Server started on port 18081") != NULL);
+	ck_assert (strstr (buf, started) != NULL);
 	ck_assert (strstr (buf, "Server stopped") != NULL);
 }
 END_TEST
@@ -1511,7 +1515,7 @@ START_TEST (test_websocket_init_destroy_stops_when_app_quits)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = 18082;
+	app.settings.websocketPort = free_loopback_port ();
 
 	if (!BarWebsocketInit (&app)) {
 		BarSettingsDestroy (&app.settings);
@@ -1558,22 +1562,6 @@ START_TEST (test_websocket_init_fails_cleanly_when_bind_fails)
 	close (holder);
 }
 END_TEST
-
-/* A loopback port that was free a moment ago (the kernel picks it) */
-static int test_free_loopback_port (void) {
-	int fd = socket (AF_INET, SOCK_STREAM, 0);
-	ck_assert_int_ge (fd, 0);
-	struct sockaddr_in addr;
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-	addr.sin_port = 0;
-	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
-	socklen_t len = sizeof (addr);
-	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
-	close (fd);
-	return ntohs (addr.sin_port);
-}
 
 /* Real transport: libwebsockets clients talk to the real server (service
  * thread, writable callbacks, lws_write) over loopback. The test thread is a
@@ -1730,7 +1718,7 @@ START_TEST (test_end_to_end_delivery_order_over_lws)
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = test_free_loopback_port ();
+	app.settings.websocketPort = free_loopback_port ();
 	BarStateInit (&app);
 	pthread_mutex_init (&app.player.lock, NULL);
 	pthread_cond_init (&app.player.cond, NULL);
@@ -1813,7 +1801,7 @@ START_TEST (test_frame_at_limit_is_delivered_to_empty_client)
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = test_free_loopback_port ();
+	app.settings.websocketPort = free_loopback_port ();
 	BarStateInit (&app);
 	pthread_mutex_init (&app.player.lock, NULL);
 	pthread_cond_init (&app.player.cond, NULL);
@@ -2886,7 +2874,7 @@ START_TEST (test_worker_start_failure_rolls_back)
 	BarSettingsInit (&srv.settings);
 	srv.settings.uiMode = BAR_UI_MODE_WEB;
 	srv.settings.websocketHost = strdup ("127.0.0.1");
-	srv.settings.websocketPort = test_free_loopback_port ();
+	srv.settings.websocketPort = free_loopback_port ();
 	BarWebsocketSetTestThreadCreateHook (test_thread_create);
 	for (int failAt = 1; failAt <= 2; failAt++) {
 		test_create_calls = 0;
@@ -2914,7 +2902,7 @@ START_TEST (test_service_thread_start_failure_does_not_quit)
 	BarSettingsInit (&srv.settings);
 	srv.settings.uiMode = BAR_UI_MODE_BOTH;
 	srv.settings.websocketHost = strdup ("127.0.0.1");
-	srv.settings.websocketPort = test_free_loopback_port ();
+	srv.settings.websocketPort = free_loopback_port ();
 	BarInterruptSetTarget (&srv.doQuit);
 	BarWebsocketSetTestThreadCreateHook (test_thread_create);
 	test_create_calls = 0;
@@ -2935,7 +2923,7 @@ static void test_e2e_app_init (BarApp_t *app, bool block) {
 	app->settings.uiMode = BAR_UI_MODE_WEB;
 	app->settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app->settings.websocketHost = strdup ("127.0.0.1");
-	app->settings.websocketPort = test_free_loopback_port ();
+	app->settings.websocketPort = free_loopback_port ();
 	BarStateInit (app);
 	pthread_mutex_init (&app->player.lock, NULL);
 	pthread_cond_init (&app->player.cond, NULL);
@@ -3773,6 +3761,12 @@ static unsigned ws_locks_busy (BarApp_t *app) {
 	return busy;
 }
 
+static bool ws_worker_waiting (void *commands) {
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (commands, &st);
+	return st.waiting == 1;
+}
+
 /* A worker waiting for the next command holds nothing */
 START_TEST (test_idle_worker_waits_for_commands_without_locks)
 {
@@ -3781,12 +3775,15 @@ START_TEST (test_idle_worker_waits_for_commands_without_locks)
 	test_setup_worker (&app, &ctx, false);
 	test_add_client (&ctx, 0);
 	ck_assert (BarWebsocketWorkerStart (&app));
-	usleep (50000); /* blocked in the queue's condition wait */
+	/* blocked in the queue's condition wait (which released the queue lock) */
+	ck_assert_msg (wait_until (ws_worker_waiting, ctx.commands, 3000),
+			"the worker never blocked waiting for a command");
 
 	ck_assert_uint_eq (ws_locks_busy (&app), 0);
 	BarWsCommandQueueStats_t st;
 	BarWsCommandQueueStats (ctx.commands, &st); /* the queue lock is free too */
 	ck_assert (!st.running);
+	ck_assert_uint_eq (st.waiting, 1);
 	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_CMD,
 			strlen (TEST_CMD)), BAR_WS_CMD_OK);
 

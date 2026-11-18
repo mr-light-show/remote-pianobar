@@ -1431,7 +1431,6 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_parked_manager)
 	log_set_debug_mask (DEBUG_UI);
 
 	ck_assert (BarPlaybackManagerStart (&app));
-	usleep (50000);
 	ck_assert (!BarPlaybackManagerWaitParkedIdle (&app, BAR_PLAYER_STOP_POLL_MS));
 	BarPlaybackManagerStop (&app);
 

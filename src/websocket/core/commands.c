@@ -57,6 +57,7 @@ struct BarWsCommandQueue {
 	size_t count;
 	size_t bytes;
 	bool closed;
+	size_t waiting; /* consumers blocked in Pop's wait */
 	BarWsCommandQueueStats_t run; /* running-command fields only */
 };
 
@@ -160,7 +161,9 @@ bool BarWsCommandQueuePop (BarWsCommandQueue_t *q, BarWsConnId_t *requester,
 	}
 	pthread_mutex_lock (&q->lock);
 	while (!q->closed && !q->head) {
+		q->waiting++;
 		pthread_cond_wait (&q->notEmpty, &q->lock);
+		q->waiting--;
 	}
 	if (q->closed) {
 		pthread_mutex_unlock (&q->lock);
@@ -237,5 +240,6 @@ void BarWsCommandQueueStats (BarWsCommandQueue_t *q, BarWsCommandQueueStats_t *o
 	*out = q->run;
 	out->items = q->count;
 	out->bytes = q->bytes;
+	out->waiting = q->waiting;
 	pthread_mutex_unlock (&q->lock);
 }

@@ -48,6 +48,7 @@ THE SOFTWARE.
 #include "../../src/ui.h"
 #include "fixture_http.h"
 #include "../audio_fixture_callback.h"
+#include "../test_helpers.h"
 
 
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
@@ -337,7 +338,7 @@ START_TEST (test_playback_fetch_playlist_with_mock_piano)
 
 	setup_integration_app (&barApp);
 
-	snprintf (g_audio_url, sizeof (g_audio_url), "http://127.0.0.1:9/tone.mp3");
+	test_refused_url (g_audio_url, sizeof (g_audio_url), "tone.mp3");
 
 	memset (&g_station, 0, sizeof (g_station));
 	g_station.id = "station-integration";

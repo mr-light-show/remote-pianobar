@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/settings.h"
 #include "../audio_fixture_callback.h"
+#include "../test_helpers.h"
 /* Pull in main.c static helpers and app types for tests. */
 #define main BarTestMainProgram
 #include "../../src/main.c"
@@ -2989,8 +2990,9 @@ START_TEST (test_player_thread_connection_refused)
 	BarSettings_t settings;
 	player_thread_test_setup (&player, &settings);
 
+	char url[64];
 	const uintptr_t ret = run_player_thread_sync (&player,
-	                                              "http://127.0.0.1:9/refused.mp3");
+	                                              test_refused_url (url, sizeof (url), "refused.mp3"));
 	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
 	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
 
@@ -3047,7 +3049,8 @@ START_TEST (test_player_thread_quit_before_open)
 	player.doQuit = true;
 	pthread_mutex_unlock (&player.lock);
 
-	const uintptr_t ret = run_player_thread_sync (&player, "http://127.0.0.1:9/x.mp3");
+	char url[64];
+	const uintptr_t ret = run_player_thread_sync (&player, test_refused_url (url, sizeof (url), "x.mp3"));
 	ck_assert_int_eq (ret, PLAYER_RET_OK);
 	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
 
