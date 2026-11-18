@@ -376,6 +376,112 @@ END_TEST
 
 /* ---- Socket.IO action routing ---- */
 
+/* Send one masked text frame (any length up to 64 KiB) */
+static void
+send_masked_text (int fd, const char *payload, size_t plen)
+{
+	const unsigned char mask[4] = { 5, 6, 7, 8 };
+	unsigned char *frame = malloc (plen + 16);
+	ck_assert_ptr_nonnull (frame);
+	size_t h = 0;
+	frame[h++] = 0x81;
+	if (plen < 126) {
+		frame[h++] = 0x80 | (unsigned char) plen;
+	} else {
+		frame[h++] = 0x80 | 126;
+		frame[h++] = (unsigned char) (plen >> 8);
+		frame[h++] = (unsigned char) plen;
+	}
+	memcpy (&frame[h], mask, 4);
+	h += 4;
+	for (size_t i = 0; i < plen; i++) {
+		frame[h + i] = (unsigned char) payload[i] ^ mask[i % 4];
+	}
+	size_t sent = 0;
+	while (sent < h + plen) {
+		ssize_t n = write (fd, frame + sent, h + plen - sent);
+		ck_assert_int_gt (n, 0);
+		sent += (size_t) n;
+	}
+	free (frame);
+}
+
+/* Read everything the server sends until it is quiet for `quietMs` */
+static size_t
+drain_until_quiet (int fd, char *buf, size_t cap, int quietMs)
+{
+	size_t have = 0;
+	struct pollfd p = { .fd = fd, .events = POLLIN };
+	while (have < cap - 1 && poll (&p, 1, quietMs) > 0) {
+		ssize_t n = read (fd, buf + have, cap - 1 - have);
+		if (n <= 0) {
+			break;
+		}
+		have += (size_t) n;
+	}
+	buf[have] = '\0';
+	return have;
+}
+
+static size_t
+count_substr (const char *hay, size_t len, const char *needle)
+{
+	size_t n = 0, nl = strlen (needle);
+	for (size_t i = 0; i + nl <= len; i++) {
+		if (memcmp (hay + i, needle, nl) == 0) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/* One 10 KB text frame (bigger than the 4 KiB receive buffer, so lws hands
+ * it over in chunks) is dropped whole. Its first 4 KiB are a valid request
+ * (padded with spaces), so a server that queued the chunks as messages would
+ * answer it; only the small request sent afterwards may be answered. */
+START_TEST (test_ws_oversize_single_frame_is_dropped_not_sliced)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = free_loopback_port ();
+	BarStateInit (&app);
+	ck_assert (BarWebsocketInit (&app));
+	BarWsContext_t *ctx = app.wsContext;
+
+	int fd = connect_with_retry (app.settings.websocketPort);
+	ck_assert_int_ge (fd, 0);
+	const char *req =
+		"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+		"Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: socketio\r\n\r\n";
+	ck_assert_int_eq (write (fd, req, strlen (req)), (ssize_t) strlen (req));
+	ck_assert (wait_for_connections (ctx, 1));
+	static char buf[65536];
+	drain_until_quiet (fd, buf, sizeof (buf), 500); /* handshake + greeting */
+
+	const char *ask = "2[\"query.stations\"]";
+	static char big[10240];
+	memset (big, ' ', sizeof (big));
+	memcpy (big, ask, strlen (ask));
+	send_masked_text (fd, big, sizeof (big));
+	send_masked_text (fd, ask, strlen (ask));
+
+	size_t have = drain_until_quiet (fd, buf, sizeof (buf), 700);
+	/* the connection survived, and only the small request was answered */
+	ck_assert_uint_eq (count_substr (buf, have, "\"stations\""), 1);
+
+	close (fd);
+	ck_assert (wait_for_connections (ctx, 0));
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarWebsocketDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_socketio_action_with_null_name_is_ignored)
 {
 	BarApp_t app;
@@ -595,6 +701,7 @@ ws_edge_cases_suite (void)
 	tcase_add_test (tc, test_ws_send_rejects_missing_app_context_or_message);
 	tcase_add_test (tc, test_ws_deliver_ignores_null_ctx_message_or_empty);
 	tcase_add_test (tc, test_ws_live_client_is_tracked_greeted_and_removed);
+	tcase_add_test (tc, test_ws_oversize_single_frame_is_dropped_not_sliced);
 	tcase_add_test (tc, test_ws_client_refused_when_table_full_then_reconnects);
 	tcase_add_test (tc, test_socketio_action_with_null_name_is_ignored);
 	tcase_add_test (tc, test_socketio_upcoming_without_requester_runs_terminal_callback);
