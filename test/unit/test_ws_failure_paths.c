@@ -32,6 +32,7 @@
 #include "../../src/websocket/protocol/socketio.h"
 #include "test_ws_capture.h"
 
+#define TEST_CMD "2[\"noop\"]" /* a queued request the worker ignores */
 #define TEST_PING "2[\"ping\"]"
 
 /* ------------------------------------------------------------------------
@@ -154,8 +155,8 @@ START_TEST (test_receive_without_app_or_context_is_dropped)
 {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
-	BarWsHandleReceive (NULL, NULL, TEST_PING, strlen (TEST_PING), true);
-	BarWsHandleReceive (&app, NULL, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (NULL, NULL, TEST_CMD, strlen (TEST_CMD), true);
+	BarWsHandleReceive (&app, NULL, TEST_CMD, strlen (TEST_CMD), true);
 	ck_assert_ptr_null (app.wsContext);
 }
 END_TEST
@@ -172,16 +173,16 @@ START_TEST (test_receive_empty_fragment_keeps_partial_message)
 	ck_assert_ptr_nonnull (ctx.commands);
 	void *wsi = &test_ws_cap.sockets[0];
 
-	BarWsHandleReceive (&app, wsi, "2[\"pi", 5, false);
+	BarWsHandleReceive (&app, wsi, "2[\"no", 5, false);
 	BarWsHandleReceive (&app, wsi, "", 0, false);
-	BarWsHandleReceive (&app, wsi, "ng\"]", 4, true);
+	BarWsHandleReceive (&app, wsi, "op\"]", 4, true);
 
 	BarWsConnId_t from = 0;
 	char *bytes = NULL;
 	size_t len = 0;
 	ck_assert (BarWsCommandQueuePop (ctx.commands, &from, &bytes, &len));
-	ck_assert_str_eq (bytes, TEST_PING);
-	ck_assert_uint_eq (len, strlen (TEST_PING));
+	ck_assert_str_eq (bytes, TEST_CMD);
+	ck_assert_uint_eq (len, strlen (TEST_CMD));
 	ck_assert_uint_eq (from, test_ws_cap.ids[0]);
 	free (bytes);
 	BarWsCommandQueueStats_t st;
@@ -191,6 +192,59 @@ START_TEST (test_receive_empty_fragment_keeps_partial_message)
 	BarWsCommandQueueFree (ctx.commands);
 	ctx.commands = NULL;
 	TestWsCaptureDetach (&app);
+	web_app_destroy (&app, &ctx);
+}
+END_TEST
+
+/* The client keepalive is answered at ingress: it is never queued for the
+ * worker and never earns the busy error, even with the queue full */
+START_TEST (test_receive_ping_is_not_queued_and_never_busy)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	web_app_init (&app, &ctx);
+	ck_assert (BarL10nInit (&app.l10n, &app.settings));
+	TestWsCaptureAttach (&app, 1, NULL);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *wsi = &test_ws_cap.sockets[0];
+
+	/* idle queue: nothing queued */
+	BarWsHandleReceive (&app, wsi, TEST_PING, strlen (TEST_PING), true);
+	/* with a payload and in parts */
+	const char *withArg = "2[\"ping\",{}]";
+	BarWsHandleReceive (&app, wsi, withArg, strlen (withArg), true);
+	BarWsHandleReceive (&app, wsi, "2[\"pi", 5, false);
+	BarWsHandleReceive (&app, wsi, "ng\"]", 4, true);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx.commands, &st);
+	ck_assert_uint_eq (st.items, 0);
+
+	/* full queue: a ping is ignored, a real request is still refused */
+	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
+		BarWsHandleReceive (&app, wsi, TEST_CMD, strlen (TEST_CMD), true);
+	}
+	BarWsHandleReceive (&app, wsi, TEST_PING, strlen (TEST_PING), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+	BarWsCommandQueueStats (ctx.commands, &st);
+	ck_assert_uint_eq (st.items, WS_CMD_MAX_ITEMS);
+	BarWsHandleReceive (&app, wsi, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert (strstr (test_ws_cap.frames[0], "busy") != NULL);
+
+	/* a name that only starts like ping is a request */
+	BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL);
+	const char *pingish = "2[\"pinger\"]";
+	BarWsHandleReceive (&app, wsi, pingish, strlen (pingish), true);
+	BarWsCommandQueueStats (ctx.commands, &st);
+	ck_assert_uint_eq (st.items, WS_CMD_MAX_ITEMS);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	BarL10nDestroy (&app.l10n);
 	web_app_destroy (&app, &ctx);
 }
 END_TEST
@@ -232,7 +286,7 @@ START_TEST (test_busy_episode_waits_for_queued_bytes_to_drain)
 	for (int i = 0; i < fits / 2 + 1; i++) {
 		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
 	}
-	BarWsHandleReceive (&app, wsi, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, wsi, TEST_CMD, strlen (TEST_CMD), true);
 	ck_assert (!ctx.cmdRefusing);
 
 	free (big);
@@ -568,6 +622,7 @@ ws_failure_paths_suite (void)
 	tcase_add_test (tc, test_cmd_push_unallocatable_length_is_refused);
 	tcase_add_test (tc, test_receive_without_app_or_context_is_dropped);
 	tcase_add_test (tc, test_receive_empty_fragment_keeps_partial_message);
+	tcase_add_test (tc, test_receive_ping_is_not_queued_and_never_busy);
 	tcase_add_test (tc, test_busy_episode_waits_for_queued_bytes_to_drain);
 	tcase_add_test (tc, test_worker_start_and_stop_reject_missing_context);
 	tcase_add_test (tc, test_worker_second_start_is_refused_and_stop_is_idempotent);

@@ -2117,7 +2117,7 @@ END_TEST
 #define TEST_EXPLAIN "2[\"action\",\"song.explain\"]"
 #define TEST_QUERY   "2[\"query\"]"
 #define TEST_QUIT    "2[\"action\",\"app.quit\"]"
-#define TEST_PING    "2[\"ping\"]"
+#define TEST_CMD     "2[\"noop\"]" /* a queued request the worker ignores */
 
 /* Pandora mock for the worker tests. Every call records its thread and
  * answers EXPLAIN with "why-N" (N = call number). With `block`, the first
@@ -2444,13 +2444,13 @@ START_TEST (test_admission_full_returns_localized_error_to_requester)
 	void *b = &test_ws_cap.sockets[1];
 
 	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
-		BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+		BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
 	}
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
 
 	/* Full: the requester (only) is told, in the localized copy */
-	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert_int_eq (test_ws_cap.frameClient[0], 0);
@@ -2470,7 +2470,7 @@ START_TEST (test_admission_full_returns_localized_error_to_requester)
 	json_object_put (event);
 
 	/* The queue is shared: another client is refused too, and told */
-	BarWsHandleReceive (&app, b, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, b, TEST_CMD, strlen (TEST_CMD), true);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 	ck_assert_int_eq (test_ws_cap.frameClient[1], 1);
@@ -2478,13 +2478,13 @@ START_TEST (test_admission_full_returns_localized_error_to_requester)
 
 	/* Room again after one is taken */
 	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
-	BarWsHandleReceive (&app, b, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, b, TEST_CMD, strlen (TEST_CMD), true);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 
 	/* Closed (shutdown) is not overload: dropped without a reply */
 	BarWsCommandQueueClose (ctx.commands);
-	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 
@@ -2518,7 +2518,7 @@ START_TEST (test_oversize_request_frame_is_dropped_connection_stays_open)
 	BarWsHandleReceive (&app, a, TEST_QUERY, strlen (TEST_QUERY), true);
 	/* The connection stays open and usable: a maximal request still fits */
 	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES, true);
-	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
 	free (big);
 
 	size_t len = 0;
@@ -2527,7 +2527,7 @@ START_TEST (test_oversize_request_frame_is_dropped_connection_stays_open)
 	ck_assert_uint_eq (len, WS_CMD_MAX_REQUEST_BYTES);
 	free (text);
 	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, &text, NULL));
-	ck_assert_str_eq (text, TEST_PING);
+	ck_assert_str_eq (text, TEST_CMD);
 	free (text);
 	ck_assert_int_eq (BarWsCommandQueuePush (ctx.commands, 9, "s", 1), BAR_WS_CMD_OK);
 	BarWsConnId_t sentinel = 0;
@@ -2559,7 +2559,7 @@ START_TEST (test_busy_burst_notifies_once_and_closes_nobody)
 	void *a = &test_ws_cap.sockets[0];
 
 	for (int i = 0; i < 200; i++) {
-		BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+		BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
 	}
 	TestWsCaptureFlush ();
 	for (size_t i = 0; i < ctx.maxConnections; i++) {
@@ -2571,9 +2571,9 @@ START_TEST (test_busy_burst_notifies_once_and_closes_nobody)
 
 	/* Accepted again once there is room; the next refusal is reported */
 	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
-	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
-	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
-	BarWsHandleReceive (&app, a, TEST_PING, strlen (TEST_PING), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 	ck_assert_int_eq (test_ws_cap.frameClient[1], 0);
@@ -2637,8 +2637,8 @@ START_TEST (test_split_message_is_reassembled)
 	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, &len));
 	ck_assert_uint_eq (len, WS_CMD_MAX_REQUEST_BYTES);
 	/* The next message starts afresh */
-	test_receive (&app, 0, TEST_PING);
-	test_expect_command (&ctx, a, TEST_PING);
+	test_receive (&app, 0, TEST_CMD);
+	test_expect_command (&ctx, a, TEST_CMD);
 	test_expect_no_command (&ctx);
 
 	BarWsCommandQueueFree (ctx.commands);
@@ -2666,8 +2666,8 @@ START_TEST (test_split_message_over_limit_is_dropped_with_tail)
 	test_receive_part (&app, 0, "2[\"x\"]", false);
 	test_receive_part (&app, 0, TEST_QUERY, true);
 	free (big);
-	test_receive (&app, 0, TEST_PING);
-	test_expect_command (&ctx, a, TEST_PING);
+	test_receive (&app, 0, TEST_CMD);
+	test_expect_command (&ctx, a, TEST_CMD);
 	test_expect_no_command (&ctx);
 	ck_assert (!test_conn (&ctx, 0)->pendingClose);
 
@@ -2687,11 +2687,11 @@ START_TEST (test_split_messages_do_not_interleave_between_clients)
 	ck_assert_ptr_nonnull (ctx.commands);
 
 	test_receive_part (&app, 0, "2[\"qu", false);
-	test_receive_part (&app, 1, "2[\"pi", false);
+	test_receive_part (&app, 1, "2[\"no", false);
 	test_receive_part (&app, 0, "ery\"]", true);
-	test_receive_part (&app, 1, "ng\"]", true);
+	test_receive_part (&app, 1, "op\"]", true);
 	test_expect_command (&ctx, a, TEST_QUERY);
-	test_expect_command (&ctx, b, TEST_PING);
+	test_expect_command (&ctx, b, TEST_CMD);
 	test_expect_no_command (&ctx);
 
 	BarWsCommandQueueFree (ctx.commands);
@@ -2716,8 +2716,8 @@ START_TEST (test_partial_message_freed_on_close)
 	ck_assert_uint_eq (ctx.connections[0].rxLen, 0);
 	BarWsConnId_t c = test_add_client (&ctx, 2);
 	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[2]);
-	test_receive_part (&app, 2, TEST_PING, true);
-	test_expect_command (&ctx, c, TEST_PING);
+	test_receive_part (&app, 2, TEST_CMD, true);
+	test_expect_command (&ctx, c, TEST_CMD);
 	test_expect_no_command (&ctx);
 
 	BarWsCommandQueueFree (ctx.commands);
@@ -3204,21 +3204,21 @@ START_TEST (test_diag_busy_episode_logged_once)
 	ck_assert_ptr_nonnull (ctx.commands);
 	void *a = &test_ws_cap.sockets[0];
 	void *b = &test_ws_cap.sockets[1];
-	const size_t len = strlen (TEST_PING);
+	const size_t len = strlen (TEST_CMD);
 	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
-		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
 	}
 
 	test_log_start (DEBUG_WEBSOCKET);
-	BarWsHandleReceive (&app, b, TEST_PING, len, true); /* first refusal */
-	BarWsHandleReceive (&app, a, TEST_PING, len, true); /* same episode */
-	BarWsHandleReceive (&app, b, TEST_PING, len, true);
+	BarWsHandleReceive (&app, b, TEST_CMD, len, true); /* first refusal */
+	BarWsHandleReceive (&app, a, TEST_CMD, len, true); /* same episode */
+	BarWsHandleReceive (&app, b, TEST_CMD, len, true);
 	/* Sustained overload: the worker frees one slot at a time, one request
 	 * gets in, the next is refused. Still the same episode. */
 	for (int i = 0; i < 10; i++) {
 		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
-		BarWsHandleReceive (&app, a, TEST_PING, len, true);
-		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
 	}
 	const char *log = test_log_stop ();
 	char want[160];
@@ -3238,7 +3238,7 @@ START_TEST (test_diag_busy_episode_logged_once)
 		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
 	}
 	test_log_start (DEBUG_WEBSOCKET);
-	BarWsHandleReceive (&app, a, TEST_PING, len, true); /* now half full */
+	BarWsHandleReceive (&app, a, TEST_CMD, len, true); /* now half full */
 	log = test_log_stop ();
 #ifdef HAVE_DEBUGLOG
 	ck_assert_msg (strstr (log, "Command queue accepting again after 13 refused requests\n")
@@ -3249,7 +3249,7 @@ START_TEST (test_diag_busy_episode_logged_once)
 	/* A later refusal starts a new episode (debugging off: error only) */
 	test_log_start (0);
 	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
-		BarWsHandleReceive (&app, a, TEST_PING, len, true);
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
 	}
 	log = test_log_stop ();
 	ck_assert_uint_eq (test_count_lines (log, "Command queue full"), 1);
@@ -3258,7 +3258,7 @@ START_TEST (test_diag_busy_episode_logged_once)
 		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
 	}
 	test_log_start (0);
-	BarWsHandleReceive (&app, a, TEST_PING, len, true);
+	BarWsHandleReceive (&app, a, TEST_CMD, len, true);
 	log = test_log_stop ();
 	ck_assert_str_eq (log, ""); /* the recovery line is debug only */
 
@@ -3408,7 +3408,7 @@ START_TEST (test_diag_stall_check_logs_running_command)
 	test_log_start (DEBUG_WEBSOCKET);
 	test_receive (&app, 0, TEST_EXPLAIN);
 	test_gate_wait_calls (1); /* inside the handler */
-	test_receive (&app, 0, TEST_PING); /* queued behind it */
+	test_receive (&app, 0, TEST_CMD); /* queued behind it */
 	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* the check is due */
 	atomic_store (&test_now_ms, TEST_T0 + 9999);
 	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 1);
@@ -3426,7 +3426,7 @@ START_TEST (test_diag_stall_check_logs_running_command)
 	ck_assert_uint_eq (test_count_lines (log, "Command running"), 2);
 	char want[160];
 	snprintf (want, sizeof (want), "Command running for 10 s: %s (queue 1 items/%zu bytes)\n",
-			TEST_EXPLAIN, strlen (TEST_PING));
+			TEST_EXPLAIN, strlen (TEST_CMD));
 	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
 	snprintf (want, sizeof (want), "Command running for 25 s: %s", TEST_EXPLAIN);
 	ck_assert (strstr (log, want) != NULL);
@@ -3652,8 +3652,8 @@ START_TEST (test_idle_worker_waits_for_commands_without_locks)
 	BarWsCommandQueueStats_t st;
 	BarWsCommandQueueStats (ctx.commands, &st); /* the queue lock is free too */
 	ck_assert (!st.running);
-	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_PING,
-			strlen (TEST_PING)), BAR_WS_CMD_OK);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_CMD,
+			strlen (TEST_CMD)), BAR_WS_CMD_OK);
 
 	test_teardown_worker (&app, &ctx);
 }
@@ -3701,8 +3701,8 @@ START_TEST (test_closing_the_queue_does_not_wait_for_the_running_command)
 	test_gate_wait_calls (1);
 
 	BarWsCommandQueueClose (ctx.commands);
-	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_PING,
-			strlen (TEST_PING)), BAR_WS_CMD_CLOSED);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_CMD,
+			strlen (TEST_CMD)), BAR_WS_CMD_CLOSED);
 	BarWsCommandQueueStats_t st;
 	BarWsCommandQueueStats (ctx.commands, &st);
 	ck_assert (st.running);
@@ -3723,8 +3723,8 @@ static void *write_probe_thread (void *arg) {
 	size_t msgs, bytes;
 	BarWsOutboxDepth (ctx->outbox, &msgs, &bytes);
 	BarWsCommandQueueStats (ctx->commands, &st);
-	ck_assert_uint_eq (BarWsCommandQueuePush (ctx->commands, 1, TEST_PING,
-			strlen (TEST_PING)), BAR_WS_CMD_OK);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx->commands, 1, TEST_CMD,
+			strlen (TEST_CMD)), BAR_WS_CMD_OK);
 	char *text = strdup ("2[\"during\"]");
 	ck_assert_ptr_nonnull (text);
 	BarWebsocketSend (g_probeApp, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, text);

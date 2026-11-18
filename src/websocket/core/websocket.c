@@ -227,6 +227,16 @@ static void BarWsConnectionRxReset (BarWsConnection_t *conn) {
 	conn->rxLen = 0;
 }
 
+/* The client keepalive, `2["ping"]` or `2["ping",...]`: it needs no work and
+ * no reply, so it never enters the command queue (a full queue must not turn
+ * a keepalive into a busy error) */
+static bool BarWsIsKeepalive (const char *msg, size_t len) {
+	static const char prefix[] = "2[\"ping\"";
+	const size_t n = sizeof (prefix) - 1;
+	return len > n && memcmp (msg, prefix, n) == 0 &&
+			(msg[n] == ']' || msg[n] == ',');
+}
+
 /* Queue a message received from `wsi` for the command worker (service
  * thread). Nothing runs here, so a slow command never stalls connection
  * servicing. A received message always has a nonzero requester. */
@@ -282,7 +292,7 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
 		in = conn->rxBuf;
 		len = conn->rxLen;
 	}
-	if (len > 0) {
+	if (len > 0 && !BarWsIsKeepalive (in, len)) {
 		BarWsQueueRequest (app, conn, in, len);
 	}
 	BarWsConnectionRxReset (conn);
