@@ -241,6 +241,12 @@ START_TEST (test_receive_ping_is_not_queued_and_never_busy)
 	BarWsCommandQueueStats (ctx.commands, &st);
 	ck_assert_uint_eq (st.items, WS_CMD_MAX_ITEMS);
 
+	/* shorter than the keepalive prefix: a request */
+	BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL);
+	BarWsHandleReceive (&app, wsi, "2[\"a\"]", 6, true);
+	BarWsCommandQueueStats (ctx.commands, &st);
+	ck_assert_uint_eq (st.items, WS_CMD_MAX_ITEMS);
+
 	BarWsCommandQueueFree (ctx.commands);
 	ctx.commands = NULL;
 	TestWsCaptureDetach (&app);
