@@ -420,16 +420,28 @@ BarUiActCallback(BarUiActDeleteStation) {
 		/* The response clears current/next when they point at the deleted
 		 * station (BarStatePianoResponse), so compare before the call. */
 		const bool wasCurrent = selStation == BarStateGetCurrentStation(app);
+		/* DELETE_STATION destroys the station struct, so the eventcmd gets
+		 * a copy of the fields it reports, taken while the hold keeps the
+		 * station alive. */
+		PianoStation_t deleted;
+		memset (&deleted, 0, sizeof (deleted));
+		deleted.isQuickMix = selStation->isQuickMix;
+		deleted.name = selStation->name != NULL ? strdup (selStation->name) : NULL;
+		/* found again by id after the prompt, so it has one */
+		deleted.id = strdup (selStation->id);
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_DELETE_STATION, selStation)) {
-			/* DELETE_STATION destroys the station struct */
-			selStation = NULL;
+			/* selStation is freed now; only the copy is used below */
 			/* Notify WebSocket clients of station list change */
 			BarWsBroadcastStations(app);
 			if (wasCurrent) {
 				drainPlaylist (app);
 			}
 		}
-		BarUiActDefaultEventcmd ("stationdelete");
+		PianoStation_t *eventStation = &deleted;
+		BarUiActEventcmd (app, "stationdelete", &eventStation, &selSong,
+				pRet, wRet);
+		free (deleted.name);
+		free (deleted.id);
 	}
 }
 

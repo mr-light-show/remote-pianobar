@@ -2630,6 +2630,194 @@ START_TEST (test_ui_act_delete_station_gone_after_prompt_skips_call)
 }
 END_TEST
 
+/* --- stationdelete eventcmd gets the deleted station's fields --- */
+
+static unsigned g_deleteFrees;
+
+static void free_heap_station (PianoStation_t *s) {
+	free (s->name);
+	free (s->id);
+	free (s);
+}
+
+/* Like BarStatePianoResponse for DELETE_STATION: unlinks and frees the
+ * station and drops the current-station reference to it */
+static bool
+mock_delete_station_frees (BarApp_t *app, const PianoRequestType_t type,
+                           void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	ck_assert_int_eq (type, PIANO_REQUEST_DELETE_STATION);
+	PianoStation_t *station = data;
+	ck_assert_ptr_nonnull (station);
+	if (BarStateGetCurrentStation (app) == station) {
+		BarStateSetCurrentStation (app, NULL);
+	}
+	pthread_rwlock_wrlock (&app->stateRwlock);
+	app->ph.stations = PianoListDeleteP (app->ph.stations, station);
+	pthread_rwlock_unlock (&app->stateRwlock);
+	free_heap_station (station);
+	g_deleteFrees++;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+static bool
+mock_delete_station_fails (BarApp_t *app, const PianoRequestType_t type,
+                           void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	ck_assert_int_eq (type, PIANO_REQUEST_DELETE_STATION);
+	ck_assert_ptr_nonnull (data);
+	*pRet = PIANO_RET_P_INTERNAL;
+	*wRet = CURLE_OK;
+	return false;
+}
+
+/* Deletes a heap station with an eventcmd that saves its stdin; returns the
+ * captured payload (caller frees) */
+static char *run_delete_capturing_eventcmd (BarApp_t *app,
+		PianoStation_t *station, BarUiPianoCallTestHook_fn hook) {
+	char dir[512], script[600], out[600];
+	int pipefd[2];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "delete_eventcmd"));
+	snprintf (out, sizeof (out), "%s/payload", dir);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	fprintf (f, "#!/bin/sh\n[ \"$1\" = stationdelete ] && cat > '%s'\n", out);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	free (app->settings.eventCmd);
+	app->settings.eventCmd = strdup (script);
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], "y\n");
+	rl_input_from_fd (&app->input, pipefd[0]);
+	g_deleteFrees = 0;
+	BarUiPianoCallSetTestHook (hook);
+	BarUiPianoHold (app);
+	BarUiActDeleteStation (app, station, NULL, 1);
+	BarUiPianoRelease (app);
+	BarUiPianoCallClearTestHook ();
+	close (pipefd[0]);
+
+	f = fopen (out, "r");
+	ck_assert_ptr_nonnull (f);
+	char *payload = calloc (1, 8192);
+	ck_assert_ptr_nonnull (payload);
+	(void) fread (payload, 1, 8191, f);
+	fclose (f);
+	unlink (out);
+	unlink (script);
+	rmdir (dir);
+	return payload;
+}
+
+static PianoStation_t *append_heap_station (BarApp_t *app, const char *id,
+		const char *name) {
+	PianoStation_t *s = calloc (1, sizeof (*s));
+	ck_assert_ptr_nonnull (s);
+	s->id = strdup (id);
+	s->name = strdup (name);
+	s->isCreator = true;
+	app->ph.stations = PianoListAppendP (app->ph.stations, s);
+	return s;
+}
+
+START_TEST (test_ui_act_delete_station_eventcmd_gets_deleted_station)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+	BarStateSetCurrentStation (&app, &keep);
+	PianoStation_t *heap = append_heap_station (&app, "S9", "Gone Station");
+
+	char *payload = run_delete_capturing_eventcmd (&app, heap,
+			mock_delete_station_frees);
+	ck_assert_uint_eq (g_deleteFrees, 1);
+	ck_assert_msg (strstr (payload, "stationName=Gone Station\n") != NULL,
+			"payload: %s", payload);
+	ck_assert (strstr (payload, "pRet=1\n") != NULL);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), &keep);
+	free (payload);
+
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_ui_act_delete_current_station_eventcmd_gets_deleted_station)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+	PianoStation_t *heap = append_heap_station (&app, "S9", "Playing Now");
+	BarStateSetCurrentStation (&app, heap);
+
+	char *payload = run_delete_capturing_eventcmd (&app, heap,
+			mock_delete_station_frees);
+	ck_assert_uint_eq (g_deleteFrees, 1);
+	ck_assert_msg (strstr (payload, "stationName=Playing Now\n") != NULL,
+			"payload: %s", payload);
+	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
+	free (payload);
+
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* A failed delete frees nothing; the eventcmd still names the station */
+START_TEST (test_ui_act_delete_station_failed_eventcmd_gets_station)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+	BarStateSetCurrentStation (&app, &keep);
+	PianoStation_t *heap = append_heap_station (&app, "S9", "Still Here");
+
+	char *payload = run_delete_capturing_eventcmd (&app, heap,
+			mock_delete_station_fails);
+	ck_assert_uint_eq (g_deleteFrees, 0);
+	ck_assert_msg (strstr (payload, "stationName=Still Here\n") != NULL,
+			"payload: %s", payload);
+	ck_assert (strstr (payload, "pRet=1\n") == NULL);
+	ck_assert_ptr_eq (PianoFindStationById (app.ph.stations, "S9"), heap);
+	free (payload);
+
+	app.ph.stations = PianoListDeleteP (app.ph.stations, heap);
+	free_heap_station (heap);
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
+/* A station without a name is copied as such (no eventcmd set) */
+START_TEST (test_ui_act_delete_station_copies_missing_name)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	PianoStation_t keep, doomed;
+	int pipefd[2];
+	delete_wait_app_setup (&app, &ctx, &keep, &doomed);
+	doomed.name = NULL;
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], "y\n");
+	rl_input_from_fd (&app.input, pipefd[0]);
+	BarUiPianoCallSetTestHook (mock_delete_station_fails);
+	BarUiPianoHold (&app);
+	BarUiActDeleteStation (&app, &doomed, NULL, 1);
+	BarUiPianoRelease (&app);
+	BarUiPianoCallClearTestHook ();
+	close (pipefd[0]);
+	ck_assert_ptr_eq (PianoListNextP (app.ph.stations), &doomed);
+
+	delete_wait_app_teardown (&app, &ctx);
+}
+END_TEST
+
 /* --- eventcmd waits without the hold; the selection is resolved again --- */
 
 typedef struct {
@@ -4071,6 +4259,10 @@ ui_act_suite (void)
 	tcase_add_test (tc, test_ui_act_delete_station_confirmed);
 	tcase_add_test (tc, test_ui_act_delete_station_releases_hold_during_prompt);
 	tcase_add_test (tc, test_ui_act_delete_station_gone_after_prompt_skips_call);
+	tcase_add_test (tc, test_ui_act_delete_station_eventcmd_gets_deleted_station);
+	tcase_add_test (tc, test_ui_act_delete_current_station_eventcmd_gets_deleted_station);
+	tcase_add_test (tc, test_ui_act_delete_station_failed_eventcmd_gets_station);
+	tcase_add_test (tc, test_ui_act_delete_station_copies_missing_name);
 	tcase_add_test (tc, test_ui_act_manage_station_gone_after_eventcmd_stops);
 	tcase_add_test (tc, test_cli_select_station_by_index_sets_next);
 	tcase_add_test (tc, test_cli_select_station_gone_while_choosing);
