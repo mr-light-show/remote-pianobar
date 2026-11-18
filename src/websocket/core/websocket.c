@@ -142,7 +142,8 @@ static int BarWsLwsWriteFrame (void *wsi, unsigned char *buf, size_t len) {
 }
 
 /* Per-slot recipient rule: a live slot whose ID matches `dest` (or any live
- * slot for broadcast). A reused slot carries a new ID, so never matches. */
+ * slot for broadcast). A reused slot carries a new ID, so never matches.
+ * Caller holds connMutex. */
 static bool BarWsSlotMatches (const BarWsConnection_t *conn, BarWsConnId_t dest) {
 	return conn->wsi != NULL &&
 			(dest == BAR_WS_DEST_BROADCAST || conn->id == dest);
@@ -802,10 +803,16 @@ void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
 	log_write(dbgFlag, "Broadcasting to %zu clients (%zu bytes): %.*s%s\n",
 	           (size_t) ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 	
-	/* Iterate through all connected clients */
+	/* Iterate through all connected clients. Each slot is read under
+	 * connMutex (this may run off the service thread, see BarWebsocketSend);
+	 * the write happens after releasing it, as lws_write may call back into
+	 * the table on the service thread. */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
-		if (BarWsSlotMatches (&ctx->connections[i], dest)) {
-			void *wsi = ctx->connections[i].wsi;
+		pthread_mutex_lock (&ctx->connMutex);
+		void *wsi = BarWsSlotMatches (&ctx->connections[i], dest) ?
+				ctx->connections[i].wsi : NULL;
+		pthread_mutex_unlock (&ctx->connMutex);
+		if (wsi != NULL) {
 			
 			log_write(dbgFlag, "Sending to client %zu (wsi=%p)\n", i, wsi);
 			

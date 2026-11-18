@@ -367,6 +367,95 @@ START_TEST (test_send_broadcast_reaches_all_clients)
 }
 END_TEST
 
+/* Writer for the cross-thread tests: counts frames, safe on any thread */
+static _Atomic size_t test_atomic_written;
+
+static int test_count_frame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	(void) buf;
+	atomic_fetch_add (&test_atomic_written, 1);
+	return (int) len;
+}
+
+static void *test_broadcast_now_thread (void *arg) {
+	BarApp_t *app = arg;
+	BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BUCKET_NONE,
+			strdup ("2[\"now\"]"));
+	return NULL;
+}
+
+/* An unbucketed broadcast runs on the caller's thread (not the service
+ * thread): it resolves its recipients under connMutex, so it waits while
+ * the service thread is changing the table */
+START_TEST (test_send_broadcast_now_waits_for_connection_table)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	pthread_t thread;
+	test_setup_clients (&app, &ctx);
+	ctx.writeFrame = test_count_frame;
+	atomic_store (&test_atomic_written, 0);
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
+
+	pthread_mutex_lock (&ctx.connMutex); /* the service thread mid-update */
+	ck_assert_int_eq (pthread_create (&thread, NULL, test_broadcast_now_thread,
+			&app), 0);
+	usleep (100000);
+	ck_assert_uint_eq (atomic_load (&test_atomic_written), 0);
+	pthread_mutex_unlock (&ctx.connMutex);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	ck_assert_uint_eq (atomic_load (&test_atomic_written), 1);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	_Atomic bool stop;
+} TestBroadcastLoop_t;
+
+static void *test_broadcast_loop_thread (void *arg) {
+	TestBroadcastLoop_t *loop = arg;
+	while (!atomic_load (&loop->stop)) {
+		BarWebsocketSend (loop->app, BAR_WS_DEST_BROADCAST, BUCKET_NONE,
+				strdup ("2[\"now\"]"));
+	}
+	return NULL;
+}
+
+/* Unbucketed broadcasts from another thread while this (service) thread
+ * adds and removes clients: ThreadSanitizer reports any unlocked read of
+ * the table; frames only ever go to tracked fake sockets */
+START_TEST (test_send_broadcast_now_races_table_updates)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	pthread_t thread;
+	TestBroadcastLoop_t loop = { .app = &app, .stop = false };
+	test_setup_clients (&app, &ctx);
+	ctx.writeFrame = test_count_frame;
+	atomic_store (&test_atomic_written, 0);
+
+	ck_assert_int_eq (pthread_create (&thread, NULL, test_broadcast_loop_thread,
+			&loop), 0);
+	for (int round = 0; round < 2000; round++) {
+		char *wsi = &test_fake_sockets[round % TEST_MAX_CLIENTS];
+		ck_assert_uint_ne (BarWsConnectionAdd (&ctx, wsi, "socketio"), 0);
+		BarWsConnectionRemove (&ctx, wsi);
+	}
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
+	const size_t before = atomic_load (&test_atomic_written);
+	while (atomic_load (&test_atomic_written) == before) {
+		usleep (1000); /* a broadcast reaches the client that stays */
+	}
+	atomic_store (&loop.stop, true);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
 START_TEST (test_send_to_id_reaches_only_that_client)
 {
 	BarApp_t app;
@@ -1291,6 +1380,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
 	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
 	tcase_add_test (tc_core, test_send_broadcast_reaches_all_clients);
+	tcase_add_test (tc_core, test_send_broadcast_now_waits_for_connection_table);
+	tcase_add_test (tc_core, test_send_broadcast_now_races_table_updates);
 	tcase_add_test (tc_core, test_send_to_id_reaches_only_that_client);
 	tcase_add_test (tc_core, test_send_to_reused_slot_does_not_reach_new_client);
 	tcase_add_test (tc_core, test_send_targeted_and_broadcast_do_not_replace_each_other);

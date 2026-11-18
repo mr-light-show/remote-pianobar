@@ -101,17 +101,21 @@ typedef struct {
 	time_t lastVolumePollTime;    /* Last poll timestamp (seconds) */
 	
 	/* Connections: the service thread mutates the table under connMutex.
-	 * BarWebsocketSend resolves destination IDs under connMutex; the
-	 * immediate-broadcast path (BarWsDeliver/BarWsSlotMatches) also runs on
-	 * non-service threads and reads conn->wsi/conn->id without it. Sockets
-	 * are written on the service thread. */
+	 * Every other read takes connMutex too: BarWebsocketSend resolving a
+	 * destination ID, and BarWsDeliver resolving each slot (it is released
+	 * before the frame is written). Known gap until the outbox replaces it:
+	 * an unbucketed broadcast (BUCKET_NONE) is delivered on the caller's
+	 * thread, so lws_write runs off the service thread (CLI reconnect,
+	 * playback-manager auto-recovery error events) and the wsi it resolved
+	 * can be closed by the service thread before the write. */
 	BarWsConnection_t *connections;
 	_Atomic size_t numConnections; /* Written under connMutex; atomic so
 	                                * any thread may read it lock-free */
 	size_t maxConnections;
 	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
 	/* Guards the connection table: the service thread mutates it, producers
-	 * resolve destination IDs against it in BarWebsocketSend. */
+	 * resolve destination IDs against it in BarWebsocketSend and recipients
+	 * in BarWsDeliver. Never held across a socket write. */
 	pthread_mutex_t connMutex;
 	/* Frame writer (NULL = lws_write); a seam so tests can observe delivery */
 	int (*writeFrame) (void *wsi, unsigned char *buf, size_t len);
@@ -148,7 +152,9 @@ bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest,
                        BarWsBucketType_t bucket, char *message);
 
 /* Write `message` to every client (BAR_WS_DEST_BROADCAST) or only the client
- * whose connection ID is `dest`. Service thread only. This is the single
+ * whose connection ID is `dest`. Meant for the service thread, but reached on
+ * the caller's thread by unbucketed broadcasts (see the connection table);
+ * reads the table under connMutex, writes without it. This is the single
  * delivery routine. */
 void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
                    BarWsConnId_t dest);
