@@ -425,13 +425,15 @@ test-clean:
 	${SILENTECHO} " CLEAN  tests"
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
 
-# Run tests with memory leak detection using AddressSanitizer
+# Run tests with AddressSanitizer (memory errors, leaks) and UndefinedBehaviorSanitizer.
 # Full clean required so all code linked into the test binary is built with ASan (cf. test-coverage).
+# -fno-sanitize-recover=undefined makes any UB finding abort the run with a non-zero exit.
+SANITIZE_FLAGS:=-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 test-asan: clean clean-test-asan
-	${SILENTECHO} "   TEST  Building with AddressSanitizer..."
-	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} -fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="${LDFLAGS} -fsanitize=address"
-	${SILENTECHO} "   TEST  Running test suite with memory leak detection..."
-	${SILENTCMD}./${TEST_BIN}
+	${SILENTECHO} "   TEST  Building with AddressSanitizer + UndefinedBehaviorSanitizer..."
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${SANITIZE_FLAGS} -g" LDFLAGS="${LDFLAGS} ${SANITIZE_FLAGS}"
+	${SILENTECHO} "   TEST  Running test suite with memory and undefined-behavior checks..."
+	${SILENTCMD}UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" ./${TEST_BIN}
 
 clean-test-asan:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}

@@ -303,6 +303,13 @@ static bool deviceSetStartedReserved (player_t *player, bool started, const char
 	return transitioned;
 }
 
+/* PLAYER_AUDIO_FAILED does not imply a sound node exists: setup can fail
+ * before ma_sound_init succeeds. Stopping or uninitializing a never-initialized
+ * ma_sound dereferences its NULL engine pointer (UBSan: null member access). */
+static bool soundLiveLocked (const player_t *player) {
+	return player->audioState != PLAYER_AUDIO_NONE && player->soundInitialized;
+}
+
 static bool stopSoundReserved (player_t *player, bool live, const char *operation) {
 	/* Device stop joins its callback. Publish a persistent source predicate
 	 * before that join, including rollback before any decoder has started. */
@@ -835,7 +842,7 @@ bool BarPlayerDestroy(player_t * const p) {
 	pthread_mutex_unlock (&p->lock);
 	if (joinPending) { BarPlayerFatalShutdown (p, "destroy before player join"); return false; }
 	if (!audioReserve (p, AUDIO_TEARDOWN, "destroy")) { return false; }
-	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (p);
 	pthread_mutex_unlock (&p->lock);
 	if (!cleanupSoundReserved (p, live, "destroy")) {
 		audioTerminal (p, "destroy");
@@ -861,7 +868,7 @@ bool BarPlayerDestroy(player_t * const p) {
 
 bool BarPlayerReset(player_t * const p) {
 	if (p == NULL || !audioReserve (p, AUDIO_TEARDOWN, "reset")) { return false; }
-	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (p);
 	const uint64_t epoch = p->controlEpoch;
 	pthread_mutex_unlock (&p->lock);
 	if (!cleanupSoundReserved (p, live, "reset")) {
@@ -1378,7 +1385,7 @@ static void audioTerminal (player_t *player, const char *operation) {
 
 bool BarPlayerStopAudio (player_t *player) {
 	if (player == NULL || !audioReserve (player, AUDIO_TEARDOWN, "stop")) { return false; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	pthread_mutex_unlock (&player->lock);
 	if (!stopSoundReserved (player, live, "stop")) {
 		audioTerminal (player, "stop");
@@ -1513,7 +1520,7 @@ void BarPlayerRequestStop (player_t *player) {
 	pthread_cond_broadcast (&player->audioCond);
 	pthread_mutex_unlock (&player->lock);
 	if (!audioReserve (player, AUDIO_TEARDOWN, "request stop")) { return; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	player->doPause = false;
 	player->pauseStartTime = 0;
 	pthread_cond_broadcast (&player->cond);
@@ -1658,7 +1665,7 @@ cleanup:
 
 static bool cleanupSound (player_t *player) {
 	if (!audioReserve (player, AUDIO_TEARDOWN, "cleanup")) { return false; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	pthread_mutex_unlock (&player->lock);
 	if (!cleanupSoundReserved (player, live, "cleanup")) {
 		audioTerminal (player, "cleanup");
