@@ -331,16 +331,20 @@ START_TEST (test_ws_client_refused_when_table_full_then_reconnects)
 	ck_assert (BarWebsocketInit (&app));
 	BarWsContext_t *ctx = app.wsContext;
 
-	/* Occupy every slot with a placeholder socket */
-	char fake[64];
+	/* Occupy every slot with a real client: the connection table belongs to
+	 * the running service thread, so the test must not edit it directly */
+	char buf[8192];
+	int clients[64];
+	ck_assert_uint_le (ctx->maxConnections, sizeof (clients) / sizeof (clients[0]));
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
-		ck_assert_uint_ne (BarWsConnectionAdd (ctx, &fake[i], "socketio"),
-				BAR_WS_DEST_BROADCAST);
+		clients[i] = connect_with_retry (app.settings.websocketPort);
+		ck_assert_int_ge (clients[i], 0);
+		send_ws_upgrade (clients[i]);
+		ck_assert (!read_until_needle_or_eof (clients[i], "process", buf, sizeof (buf)));
 	}
-	ck_assert_uint_eq (live_connections (ctx), ctx->maxConnections);
+	ck_assert (wait_for_connections (ctx, ctx->maxConnections));
 
 	/* The extra client is closed instead of lingering untracked */
-	char buf[8192];
 	int fd = connect_with_retry (app.settings.websocketPort);
 	ck_assert_int_ge (fd, 0);
 	send_ws_upgrade (fd);
@@ -350,7 +354,8 @@ START_TEST (test_ws_client_refused_when_table_full_then_reconnects)
 	ck_assert_uint_eq (live_connections (ctx), ctx->maxConnections);
 
 	/* Once a slot frees up, a reconnect is tracked and greeted */
-	BarWsConnectionRemove (ctx, &fake[0]);
+	close (clients[0]);
+	ck_assert (wait_for_connections (ctx, ctx->maxConnections - 1));
 	fd = connect_with_retry (app.settings.websocketPort);
 	ck_assert_int_ge (fd, 0);
 	send_ws_upgrade (fd);
@@ -358,6 +363,9 @@ START_TEST (test_ws_client_refused_when_table_full_then_reconnects)
 	ck_assert (wait_for_connections (ctx, ctx->maxConnections));
 	close (fd);
 	ck_assert (wait_for_connections (ctx, ctx->maxConnections - 1));
+	for (size_t i = 1; i < ctx->maxConnections; i++) {
+		close (clients[i]);
+	}
 
 	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
 	BarWebsocketDestroy (&app);
