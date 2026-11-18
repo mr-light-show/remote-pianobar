@@ -121,6 +121,7 @@ struct player {
 	int requestedVolume;
 	bool synchronizationInitialized, audioNoDevice, dataSourceInitialized;
 	bool audioTerminalFailure;
+	bool audioNullBackend; /* test-only: engine device runs on miniaudio's null backend */
 	bool threadJoinPending; /* lock: set before pthread_create, cleared only after join */
 
 	/* Private decoder state and audio objects. Audio objects require the
@@ -138,6 +139,8 @@ struct player {
 
 	/* miniaudio - high-level engine and sound */
 	ma_engine engine;
+	ma_context nullContext; /* test-only null-backend context, outlives engine */
+	bool nullContextInitialized;
 	ma_sound sound;
 	ffmpeg_data_source_t dataSource;
 	bool engineInitialized;
@@ -183,6 +186,10 @@ void BarPlayerSetAudioFatalTestHook (BarPlayerAudioFatalHook hook);
  * Install test hooks before creating workers. */
 typedef bool (*BarPlayerJoinTestHook) (pthread_t thread, void **retval, unsigned int timeoutSeconds);
 void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook);
+/* Test-only: open the next lifetime engine on miniaudio's null backend (a real
+ * device thread without hardware). PIANOBAR_TEST_NULL_AUDIO=1 does the same.
+ * Either takes precedence over PIANOBAR_TEST_NO_DEVICE. Set before BarPlayerInit. */
+void BarPlayerSetNullAudioTestBackend (bool enabled);
 bool BarPlayerJoinThreadWithTimeout (player_t *player, pthread_t thread, void **retval, unsigned int timeoutSeconds);
 /* Leaves all shared resources intact, even when a test fatal hook returns. */
 void BarPlayerFatalShutdown (player_t *player, const char *operation);

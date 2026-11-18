@@ -96,6 +96,11 @@ enum { BAR_AUDIO_WAIT_TIMEOUT_SECONDS = 1 };
 typedef enum { AUDIO_NORMAL, AUDIO_TEARDOWN, AUDIO_OBSERVATION, AUDIO_PLAYBACK_CONTROL } AudioPolicy;
 static BarPlayerAudioFatalHook audioFatalHook;
 static BarPlayerJoinTestHook joinTestHook;
+static bool nullAudioTestBackend;
+
+void BarPlayerSetNullAudioTestBackend (bool enabled) {
+	nullAudioTestBackend = enabled;
+}
 
 void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook) {
 	joinTestHook = hook;
@@ -818,7 +823,22 @@ void BarPlayerInit(player_t * const p, BarSettings_t * const settings) {
 	} else {
 		engineConfig.noDevice = MA_FALSE;
 	}
-	ma_result result = ma_engine_init(&engineConfig, &p->engine);
+	ma_result result = MA_SUCCESS;
+	if (nullAudioTestBackend || getenv ("PIANOBAR_TEST_NULL_AUDIO") != NULL) {
+		/* Overrides no-device: a real device thread and data callback without
+		 * hardware. Never falls back to a hardware backend; a failure leaves
+		 * the engine uninitialized. A reinit reuses the lifetime context. */
+		const ma_backend backends[] = { ma_backend_null };
+		if (!p->nullContextInitialized) {
+			result = ma_context_init (backends, 1, NULL, &p->nullContext);
+			p->nullContextInitialized = result == MA_SUCCESS;
+		}
+		p->audioNullBackend = p->nullContextInitialized;
+		p->audioNoDevice = false;
+		engineConfig.pContext = &p->nullContext;
+		engineConfig.noDevice = MA_FALSE;
+	}
+	if (result == MA_SUCCESS) { result = ma_engine_init(&engineConfig, &p->engine); }
 	if (result != MA_SUCCESS) {
 		log_write(LOG_ERROR, "Failed to initialize audio engine: %d\n", result);
 		p->engineInitialized = false;
@@ -849,6 +869,10 @@ bool BarPlayerDestroy(player_t * const p) {
 		return false;
 	}
 	if (p->engineInitialized) { ma_engine_uninit (&p->engine); }
+	if (p->nullContextInitialized) {
+		ma_context_uninit (&p->nullContext);
+		p->nullContextInitialized = false;
+	}
 	pthread_mutex_lock (&p->lock);
 	p->soundInitialized = false;
 	p->engineInitialized = false;

@@ -118,6 +118,29 @@ Requirements:
 - Headless CI uses `PIANOBAR_TEST_NO_DEVICE=1` (miniaudio `noDevice`); without it, audio tests skip if the engine cannot init
 - `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
 
+#### Null audio backend (real device thread, no hardware)
+
+`PIANOBAR_TEST_NO_DEVICE=1` replaces the device with test-driven engine reads, so
+the device thread, the decoder/device handoff and their locks never run. The
+`null_audio_device` test case instead opens the lifetime engine on miniaudio's
+**null backend** (`ma_backend_null`): a real device thread pulls the data callback
+in real time without audio hardware. It covers natural song end, pause/resume,
+volume changes, skip mid-song, concurrent controls, repeated start/stop and
+engine init/destroy, and reruns the device-aware integration tests on that device.
+
+- Tests select it with `BarPlayerSetNullAudioTestBackend (true)` (a checked fixture,
+  so it is set in the forked test process before `BarPlayerInit`); this takes
+  precedence over `PIANOBAR_TEST_NO_DEVICE`. Setting `PIANOBAR_TEST_NULL_AUDIO=1`
+  does the same for a whole run.
+- It never falls back to a hardware backend. If the null backend is unavailable
+  the engine stays uninitialized and each test prints
+  `SKIP <test>: miniaudio null audio backend unavailable in this build`.
+- Each test that ran prints `null-audio: <test> ran on the null device backend`.
+- Requires `PIANOBAR_INTEGRATION=1`; it runs in CI and in `make test-ci-local`.
+  Run it alone with
+  `CK_RUN_SUITE=playback_integration CK_RUN_CASE=null_audio_device PIANOBAR_INTEGRATION=1 ./pianobar_test`.
+- Production default is unchanged.
+
 Production code exposes `BarUiPianoCallSetTestHook()` / `BarUiPianoCallClearTestHook()`
 so playlist fetch can be mocked without network access.
 
