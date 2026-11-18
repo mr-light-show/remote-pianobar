@@ -35,7 +35,7 @@ This guide covers setting up your development environment for contributing to Re
 - libjson-c
 - libgcrypt
 - libcurl
-- libwebsockets (2.4+)
+- libwebsockets (4.0+)
 
 ---
 
@@ -151,7 +151,7 @@ The Makefile defaults to **ISO C17** (`-std=c17`) by appending it to **`CFLAGS`*
 git clone https://github.com/yourusername/pianobar.git
 cd pianobar
 
-# Build without WebSocket support
+# Build Remote Pianobar
 make clean
 make
 
@@ -168,7 +168,7 @@ make clean
 # Remove all build AND coverage artifacts (*.gcda, *.gcno, *.gcov) in one step
 make distclean
 
-# Build Remote Pianobar with debug symbols (WebSocket enabled by default)
+# Build Remote Pianobar with debug symbols
 make CFLAGS="-g -O0"
 
 # The binary will be created as ./pianobar
@@ -403,7 +403,7 @@ kill $(cat /tmp/pianobar.pid)
 **Terminal 1:** Run Remote Pianobar
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
 make CFLAGS="-g -O0"
 
@@ -565,7 +565,7 @@ pianobar/
 ### Debugging C Code with GDB
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
 make CFLAGS="-g -O0"
 
@@ -583,7 +583,7 @@ gdb ./pianobar
 ### Debugging C Code with LLDB (macOS)
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
 make CFLAGS="-g -O0"
 

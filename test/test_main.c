@@ -37,11 +37,6 @@ void BarMainGetPlaylist(BarApp_t *app) {
 	(void)app;
 }
 
-void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
-	(void)app;
-	(void)playerThread;
-}
-
 /* Test suite declarations */
 Suite *settings_suite(void);
 Suite *player_suite(void);

@@ -374,46 +374,6 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 }
 
 
-/*	player is done, clean up
- */
-static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
-	void *threadRet;
-
-	BarUiStartEventCmd (&app->settings, "songfinish", BarStateGetCurrentStation(app),
-			BarStateGetPlaylist(app), &app->player, BarStateGetStationList(app), 
-			PIANO_RET_OK, CURLE_OK);
-
-	BarWsBroadcastSongStop(app);
-
-	/* Wait for player thread with timeout to prevent infinite hang */
-	bool threadExited = BarPlayerJoinThreadWithTimeout (&app->player, *playerThread, &threadRet, 10);
-
-	if (!threadExited) {
-		BarPlayerFatalShutdown (&app->player, "CLI player thread final join");
-		atomic_store (&app->doQuit, 1);
-		return;
-	}
-
-	if (threadRet == (void *) PLAYER_RET_OK) {
-		app->playerErrors = 0;
-	} else if (threadRet == (void *) PLAYER_RET_STALE_URLS) {
-		BarStateDrainPlaylist(app);
-		app->playerErrors = 0;
-	} else if (threadRet == (void *) PLAYER_RET_SOFTFAIL) {
-		++app->playerErrors;
-		if (app->playerErrors >= app->settings.maxRetry) {
-			/* don't continue playback if thread reports too many error */
-			BarStateSetNextStation(app, NULL);
-		}
-	} else {
-		BarStateSetNextStation(app, NULL);
-	}
-
-	BarInterruptSetTarget (&app->doQuit);
-
-	BarPlayerSetMode (&app->player, PLAYER_DEAD);
-}
-
 /*	print song duration
  */
 static void BarMainPrintTime (BarApp_t *app) {

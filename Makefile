@@ -131,6 +131,11 @@ else ifeq (${OS},Linux)
 endif
 
 # WebSocket library flags
+# Fail early only for goals that compile or link; clean/lint/codegen need no libwebsockets.
+ifeq ($(filter-out clean distclean locale-codegen lint lint-test test-ci-local uninstall,$(or $(MAKECMDGOALS),pianobar)),)
+else ifneq ($(shell $(PKG_CONFIG) --exists libwebsockets openssl && echo yes),yes)
+$(error libwebsockets (4.0+) and openssl development files not found; install them, see DEVELOPMENT.md)
+endif
 LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
 LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
 
@@ -292,7 +297,7 @@ uninstall:
 TEST_DIR:=test
 TEST_BIN:=pianobar_test
 
-# Base tests (no WebSocket objects required)
+# Base tests (linked with websocket_bridge.o via BASE_TEST_LINK_OBJ)
 BASE_TEST_SRC:=\
 		${TEST_DIR}/test_main.c \
 		${TEST_DIR}/unit/test_l10n.c \
