@@ -100,10 +100,14 @@ typedef struct {
 	int lastPolledVolume;         /* Last known system volume (-1 = unknown) */
 	time_t lastVolumePollTime;    /* Last poll timestamp (seconds) */
 	
-	/* Connections: the service thread mutates; producers only read IDs under
-	 * connMutex (BarWebsocketSend). Sockets are used on the service thread. */
+	/* Connections: the service thread mutates the table under connMutex.
+	 * BarWebsocketSend resolves destination IDs under connMutex; the
+	 * immediate-broadcast path (BarWsDeliver/BarWsSlotMatches) also runs on
+	 * non-service threads and reads conn->wsi/conn->id without it. Sockets
+	 * are written on the service thread. */
 	BarWsConnection_t *connections;
-	size_t numConnections;
+	_Atomic size_t numConnections; /* Written under connMutex; atomic so
+	                                * any thread may read it lock-free */
 	size_t maxConnections;
 	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
 	/* Guards the connection table: the service thread mutates it, producers

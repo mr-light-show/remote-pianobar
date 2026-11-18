@@ -215,7 +215,7 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
 		BarWsConnection_t *conn = &ctx->connections[i];
 		if (conn->wsi == wsi) {
 			log_write(DEBUG_WEBSOCKET, "Client removed (id %llu, total %zu)\n",
-			           (unsigned long long) conn->id, ctx->numConnections - 1);
+			           (unsigned long long) conn->id, (size_t) ctx->numConnections - 1);
 			conn->id = 0;
 			conn->wsi = NULL;
 			conn->pendingClose = false;
@@ -800,7 +800,7 @@ void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
 	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
 
 	log_write(dbgFlag, "Broadcasting to %zu clients (%zu bytes): %.*s%s\n",
-	           ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
+	           (size_t) ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 	
 	/* Iterate through all connected clients */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
@@ -865,7 +865,7 @@ void BarWebsocketDisconnectAllClients(BarApp_t *app) {
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
 	log_write(DEBUG_WEBSOCKET, "Disconnecting all clients (%zu connected)\n", 
-	           ctx->numConnections);
+	           (size_t) ctx->numConnections);
 	
 	/* Close each connected client */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {

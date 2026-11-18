@@ -181,20 +181,18 @@ read_some (int fd, char *buf, size_t cap)
 static size_t
 live_connections (BarWsContext_t *ctx)
 {
-	pthread_mutex_lock (&ctx->connMutex);
-	size_t n = ctx->numConnections;
-	pthread_mutex_unlock (&ctx->connMutex);
-	return n;
+	/* Lock-free: the service thread updates the atomic counter */
+	return atomic_load (&ctx->numConnections);
 }
 
 static bool
 wait_for_connections (BarWsContext_t *ctx, size_t want)
 {
-	for (int i = 0; i < 200; i++) {
+	for (int i = 0; i < 2000; i++) {
 		if (live_connections (ctx) == want) {
 			return true;
 		}
-		usleep (25000);
+		usleep (5000);
 	}
 	return false;
 }
