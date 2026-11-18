@@ -169,6 +169,60 @@ START_TEST (test_message_cap_overflow_returns_overflow) {
 }
 END_TEST
 
+/* Move everything one Take delivered into the queue, as BarWsServiceOutbox
+ * does; returns false if the queue overflowed (the client would be closed). */
+static bool take_into_queue (BarWsOutbox_t *o, BarWsClientQueue_t *q) {
+	BarWsPending_t *list = BarWsOutboxTake (o);
+	bool ok = true;
+	for (const BarWsPending_t *p = list; p; p = p->next) {
+		if (BarWsClientQueueAppend (q, p->frame, p->key, p->generation) != BAR_WS_Q_OK) {
+			ok = false;
+			break;
+		}
+	}
+	BarWsPendingFree (list);
+	return ok;
+}
+
+/* A healthy client that has not yet written anything must absorb a maximal
+ * Take, and a second one behind it (frames drain one per writable callback) */
+START_TEST (test_client_queue_absorbs_maximal_ingress_take_by_count) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	for (int round = 0; round < 2; round++) {
+		for (size_t i = 0; i < WS_INGRESS_MAX_MSGS; i++) {
+			ck_assert (BarWsOutboxPush (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+					strdup ("2[\"m\"]"), 6));
+		}
+		ck_assert (take_into_queue (o, &q));
+	}
+	ck_assert_uint_eq (q.count, 2 * WS_INGRESS_MAX_MSGS);
+	BarWsClientQueueClear (&q);
+	BarWsOutboxFree (o);
+}
+END_TEST
+
+START_TEST (test_client_queue_absorbs_maximal_ingress_take_by_bytes) {
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	for (int round = 0; round < 2; round++) {
+		for (size_t i = 0; i < WS_INGRESS_MAX_BYTES / WS_FRAME_MAX_BYTES; i++) {
+			char *big = malloc (WS_FRAME_MAX_BYTES);
+			ck_assert_ptr_nonnull (big);
+			memset (big, 'x', WS_FRAME_MAX_BYTES);
+			ck_assert (BarWsOutboxPush (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+					big, WS_FRAME_MAX_BYTES));
+		}
+		ck_assert (take_into_queue (o, &q));
+	}
+	ck_assert_uint_eq (q.bytes, 2 * (size_t) WS_INGRESS_MAX_BYTES);
+	BarWsClientQueueClear (&q);
+	BarWsOutboxFree (o);
+}
+END_TEST
+
 START_TEST (test_keyed_appends_coalesce_instead_of_growing) {
 	BarWsClientQueue_t q;
 	BarWsClientQueueInit (&q);
@@ -285,7 +339,8 @@ START_TEST (test_replace_over_byte_cap_rejected_original_intact) {
 	BarWsClientQueue_t q;
 	BarWsClientQueueInit (&q);
 	BarWsFrame_t *big = frame_of_size (WS_FRAME_MAX_BYTES, 'x');
-	for (int i = 0; i < 3; i++) {
+	const size_t nbig = WS_CLIENT_MAX_BYTES / WS_FRAME_MAX_BYTES - 1;
+	for (size_t i = 0; i < nbig; i++) {
 		ck_assert_int_eq (BarWsClientQueueAppend (&q, big, BAR_WS_KEY_NONE, 0), BAR_WS_Q_OK);
 	}
 	BarWsFrame_t *mid = frame_of_size (40 * 1024, 'm');
@@ -295,10 +350,10 @@ START_TEST (test_replace_over_byte_cap_rejected_original_intact) {
 	/* replacing the 1-byte progress with a max frame would exceed the cap */
 	ck_assert_int_eq (BarWsClientQueueAppend (&q, big, BAR_WS_KEY_PROGRESS, 2), BAR_WS_Q_OVERFLOW);
 	ck_assert_uint_eq (q.bytes, before);
-	ck_assert_uint_eq (q.count, 5);
+	ck_assert_uint_eq (q.count, nbig + 2);
 	BarWsFrameUnref (big);
 	BarWsFrameUnref (mid);
-	for (int i = 0; i < 4; i++) {
+	for (size_t i = 0; i < nbig + 1; i++) {
 		BarWsFrame_t *f = BarWsClientQueuePop (&q, 1);
 		ck_assert_ptr_nonnull (f);
 		BarWsFrameUnref (f);
@@ -791,6 +846,8 @@ Suite *ws_outbox_suite (void) {
 	tcase_add_test (tc, test_progress_with_old_generation_dropped_on_pop);
 	tcase_add_test (tc, test_byte_cap_overflow_returns_overflow);
 	tcase_add_test (tc, test_message_cap_overflow_returns_overflow);
+	tcase_add_test (tc, test_client_queue_absorbs_maximal_ingress_take_by_count);
+	tcase_add_test (tc, test_client_queue_absorbs_maximal_ingress_take_by_bytes);
 	tcase_add_test (tc, test_keyed_appends_coalesce_instead_of_growing);
 	tcase_add_test (tc, test_empty_queue_accepts_one_max_size_full_state_frame);
 	tcase_add_test (tc, test_oversize_frame_rejected);

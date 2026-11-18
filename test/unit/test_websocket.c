@@ -283,8 +283,8 @@ END_TEST
 static char test_fake_sockets[TEST_MAX_CLIENTS];
 
 /* Records which fake sockets a delivery wrote to, and what. */
-static void *test_written_wsi[80];
-static char test_written_msg[80][64];
+static void *test_written_wsi[(WS_CLIENT_MAX_MSGS + 16)];
+static char test_written_msg[(WS_CLIENT_MAX_MSGS + 16)][64];
 static size_t test_written_count;
 static size_t test_writable_requests[TEST_MAX_CLIENTS];
 static bool test_in_writable;     /* set only around BarWsHandleWritable */
@@ -293,7 +293,7 @@ static size_t test_last_written_len;
 
 static int test_write_frame (void *wsi, unsigned char *buf, size_t len) {
 	ck_assert_msg (test_in_writable, "socket write outside the writable callback");
-	ck_assert_uint_lt (test_written_count, 80);
+	ck_assert_uint_lt (test_written_count, (WS_CLIENT_MAX_MSGS + 16));
 	test_written_wsi[test_written_count] = wsi;
 	snprintf (test_written_msg[test_written_count], 64, "%.*s", (int) len, buf);
 	test_written_count++;
@@ -880,6 +880,9 @@ START_TEST (test_overflow_closes_only_that_client)
 
 	for (int i = 0; i < WS_CLIENT_MAX_MSGS; i++) {
 		ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+		if ((i + 1) % WS_INGRESS_MAX_MSGS == 0) {
+			test_drain_client (&ctx, 1); /* the ingress holds fewer frames */
+		}
 	}
 	test_drain_client (&ctx, 1);
 	ck_assert_uint_eq (test_pending_count (&ctx, 0), WS_CLIENT_MAX_MSGS);

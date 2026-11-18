@@ -49,13 +49,18 @@
  * with 40 categories x 30 genres (generous; 28-char names, 20-char IDs) is
  * ~93.5 KB; `searchResults` with 100 artists + 100 songs is ~21.6 KB.
  * Frame max >= 2x the largest measured frame; an empty client queue and an
- * empty ingress each accept one frame up to it; per-client and ingress byte
- * caps are 4x the frame max. A larger frame is refused and logged, never
- * silently dropped. Message counts stay small to bound memory on a Pi 3. */
+ * empty ingress each accept one frame up to it; the ingress byte cap is 4x
+ * the frame max. A larger frame is refused and logged, never silently
+ * dropped. Frames are refcounted and shared between client queues, so a
+ * client queue costs only its entries. Each client queue holds twice the
+ * ingress limits: one maximal Take (all frames are appended before any is
+ * written, one frame per writable callback) plus the previous Take still
+ * draining must never close a healthy client. Message counts stay small to
+ * bound memory on a Pi 3. */
 #define WS_FRAME_MAX_BYTES           (256 * 1024)  /* Largest single frame accepted */
-#define WS_CLIENT_MAX_BYTES          (1024 * 1024) /* Pending bytes per client queue */
-#define WS_CLIENT_MAX_MSGS           64            /* Pending frames per client queue */
 #define WS_INGRESS_MAX_BYTES         (1024 * 1024) /* Pending bytes in ingress queue */
 #define WS_INGRESS_MAX_MSGS          128           /* Pending frames in ingress queue */
+#define WS_CLIENT_MAX_BYTES          (2 * WS_INGRESS_MAX_BYTES) /* Pending bytes per client queue */
+#define WS_CLIENT_MAX_MSGS           (2 * WS_INGRESS_MAX_MSGS)  /* Pending frames per client queue */
 
 #endif /* BAR_CONSTANTS_H */
