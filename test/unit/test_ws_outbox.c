@@ -335,6 +335,27 @@ START_TEST (test_replace_with_smaller_frame_updates_bytes) {
 }
 END_TEST
 
+/* A progress sample of the previous song pushed late must not overwrite the
+ * queued sample of the new song */
+START_TEST (test_late_older_generation_progress_does_not_replace_newer) {
+	BarWsClientQueue_t q;
+	BarWsClientQueueInit (&q);
+	ck_assert_int_eq (append_text (&q, "p2", BAR_WS_KEY_PROGRESS, 2), BAR_WS_Q_OK);
+	ck_assert_int_eq (append_text (&q, "p1", BAR_WS_KEY_PROGRESS, 1), BAR_WS_Q_OK);
+	ck_assert_uint_eq (q.count, 1);
+	ck_assert_uint_eq (q.bytes, 2);
+	expect_pop (&q, 2, "p2");
+	expect_pop (&q, 2, NULL);
+	/* same or newer generation still replaces */
+	ck_assert_int_eq (append_text (&q, "a", BAR_WS_KEY_PROGRESS, 2), BAR_WS_Q_OK);
+	ck_assert_int_eq (append_text (&q, "b", BAR_WS_KEY_PROGRESS, 2), BAR_WS_Q_OK);
+	ck_assert_int_eq (append_text (&q, "c", BAR_WS_KEY_PROGRESS, 3), BAR_WS_Q_OK);
+	ck_assert_uint_eq (q.count, 1);
+	expect_pop (&q, 3, "c");
+	BarWsClientQueueClear (&q);
+}
+END_TEST
+
 START_TEST (test_replace_over_byte_cap_rejected_original_intact) {
 	BarWsClientQueue_t q;
 	BarWsClientQueueInit (&q);
@@ -848,6 +869,7 @@ Suite *ws_outbox_suite (void) {
 	tcase_add_test (tc, test_message_cap_overflow_returns_overflow);
 	tcase_add_test (tc, test_client_queue_absorbs_maximal_ingress_take_by_count);
 	tcase_add_test (tc, test_client_queue_absorbs_maximal_ingress_take_by_bytes);
+	tcase_add_test (tc, test_late_older_generation_progress_does_not_replace_newer);
 	tcase_add_test (tc, test_keyed_appends_coalesce_instead_of_growing);
 	tcase_add_test (tc, test_empty_queue_accepts_one_max_size_full_state_frame);
 	tcase_add_test (tc, test_oversize_frame_rejected);

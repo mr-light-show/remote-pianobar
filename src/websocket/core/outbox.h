@@ -68,7 +68,9 @@ void BarWsClientQueueInit (BarWsClientQueue_t *q);
 void BarWsClientQueueClear (BarWsClientQueue_t *q);
 /* Queue f (takes its own reference). OVERFLOW if the queue is non-empty and
  * the message or byte cap would be exceeded, or on allocation failure; an
- * empty queue always accepts one frame. */
+ * empty queue always accepts one frame. A PROGRESS frame whose generation
+ * is lower than the queued PROGRESS it would replace is discarded (OK, the
+ * queued newer sample stays). */
 BarWsQResult_t BarWsClientQueueAppend (BarWsClientQueue_t *q, BarWsFrame_t *f,
 		BarWsKey_t key, uint32_t generation);
 /* Remove and return the oldest entry, discarding progress entries whose

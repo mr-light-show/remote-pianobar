@@ -124,6 +124,10 @@ BarWsQResult_t BarWsClientQueueAppend (BarWsClientQueue_t *q, BarWsFrame_t *f,
 		BarWsKey_t key, uint32_t generation) {
 	BarWsQueueEntry_t *old = (key != BAR_WS_KEY_NONE)
 			? BarWsQueueFindReplaceable (q, key) : NULL;
+	if (old && key == BAR_WS_KEY_PROGRESS && generation < old->generation) {
+		/* Late sample of a previous song: keep the queued newer one */
+		return BAR_WS_Q_OK;
+	}
 	size_t newBytes = q->bytes - (old ? old->frame->len : 0) + f->len;
 
 	/* An empty queue always accepts one frame so a full-state resync fits */
