@@ -217,16 +217,17 @@ bool BarWsSettingsIsWebActive(const BarSettings_t *s) {
 	       (s->uiMode == BAR_UI_MODE_WEB || s->uiMode == BAR_UI_MODE_BOTH);
 }
 
-/* Playback manager lifecycle */
+/* Playback manager lifecycle: runs in every mode (cli included); it is the
+ * only thing that fetches and plays songs in WebSocket builds. */
 bool BarWsStartPlaybackManager(BarApp_t *app) {
-	if (app && app->settings.uiMode != BAR_UI_MODE_CLI) {
+	if (app) {
 		return BarPlaybackManagerStart(app);
 	}
 	return true;
 }
 
 void BarWsStopPlaybackManager(BarApp_t *app) {
-	if (app && app->settings.uiMode != BAR_UI_MODE_CLI) {
+	if (app) {
 		BarPlaybackManagerStop(app);
 	}
 }

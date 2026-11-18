@@ -1740,7 +1740,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	/* Execute action directly by ID in WebSocket thread
 	 * 
 	 * THREAD SAFETY: This call may trigger state lock acquisition via:
-	 * - BarStateGet* / BarStateSet* use stateRwlock in web and both (BarStateUsesRwlock)
+	 * - BarStateGet* / BarStateSet* use stateRwlock (BarStateUsesRwlock)
 	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
 	 * - BarUiPianoCall (Pandora HTTP) serializes on app->pianoHttpMutex
 	 * 

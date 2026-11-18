@@ -70,7 +70,7 @@ typedef struct {
 	/* Threading */
 	pthread_t thread;             /* WebSocket service thread */
 	_Atomic bool threadRunning;   /* Thread lifecycle flag */
-	/* stateRwlock is in BarApp_t (web/both via BarStateUsesRwlock); player->lock for transport here */
+	/* stateRwlock is in BarApp_t (BarStateUsesRwlock); player->lock for transport here */
 	
 	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
 	BarWsBucket_t buckets[BUCKET_COUNT];

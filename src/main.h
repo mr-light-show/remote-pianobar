@@ -59,7 +59,7 @@ typedef struct {
 	#ifdef WEBSOCKET_ENABLED
 	void *wsContext;  /* BarWsContext_t */
 	pthread_t playbackThread;  /* Playback manager thread */
-	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: web/both getters/setters (not cli); see BarStateUsesRwlock */
+	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: state getters/setters (all ui_modes); see BarStateUsesRwlock */
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
 	#endif
 	BarL10nContext_t l10n;

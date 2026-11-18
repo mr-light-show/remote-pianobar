@@ -27,10 +27,11 @@ THE SOFTWARE.
 #include <piano.h>
 #include <stdbool.h>
 
-/* True when playlist/station pointers are shared across threads (web and both; not cli). */
+/* True when playlist/station pointers are shared across threads: every ui_mode
+ * in WebSocket builds (the playback manager thread runs in cli, web and both). */
 static inline bool BarStateUsesRwlock(const BarApp_t *app) {
 #ifdef WEBSOCKET_ENABLED
-	return app != NULL && app->settings.uiMode != BAR_UI_MODE_CLI;
+	return app != NULL;
 #else
 	(void)app;
 	return false;

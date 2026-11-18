@@ -34,8 +34,8 @@ THE SOFTWARE.
 #include <pthread.h>
 
 /*	State rwlock: read for getters, write for setters.
- *	Held unconditionally in all modes that involve concurrent WebSocket threads
- *	(BAR_UI_MODE_BOTH and BAR_UI_MODE_WEB).
+ *	Held in every ui_mode of WebSocket builds: the playback manager thread
+ *	shares these pointers with the CLI and/or WebSocket threads.
  *	LOCK HIERARCHY: This is Lock #1 in the hierarchy
  *	Must be acquired BEFORE player.lock if both are needed
  *	PROTECTS: Pointer fields playlist, curStation, nextStation, ph list heads
@@ -45,18 +45,7 @@ THE SOFTWARE.
  *	See src/THREAD_SAFETY.md for complete documentation
  */
 static bool state_needs_lock (const BarApp_t *app) {
-#ifdef WEBSOCKET_ENABLED
-	if (app->settings.uiMode == BAR_UI_MODE_BOTH) {
-		return true;
-	}
-	if (app->settings.uiMode == BAR_UI_MODE_WEB) {
-		return true;
-	}
-	return false;
-#else
-	(void) app;
-	return false;
-#endif
+	return BarStateUsesRwlock (app);
 }
 
 void BarStateSignalPlaybackManager(BarApp_t *app)
@@ -142,7 +131,7 @@ static void state_rwlock_unlock_internal(const BarApp_t *app, const char *operat
 	     state_rwlock_unlock_internal(app, op_name, fmt, ##__VA_ARGS__), \
 	     _lock_held = 1)
 
-/*	Initialize state rwlock (any mode with concurrent WebSocket threads)
+/*	Initialize state rwlock (every ui_mode in WebSocket builds)
  */
 void BarStateInit(BarApp_t *app) {
 	assert(app != NULL);
@@ -156,7 +145,7 @@ void BarStateInit(BarApp_t *app) {
 #endif
 }
 
-/*	Destroy state rwlock (any mode with concurrent WebSocket threads)
+/*	Destroy state rwlock (every ui_mode in WebSocket builds)
  */
 void BarStateDestroy(BarApp_t *app) {
 	assert(app != NULL);

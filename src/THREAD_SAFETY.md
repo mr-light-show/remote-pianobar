@@ -18,7 +18,7 @@ This document describes the threading model, lock hierarchy, and safe coding pat
 
 Pianobar supports three `ui_mode` values (WebSocket builds):
 
-- **CLI-only** (`BAR_UI_MODE_CLI`): Terminal input only; WebSocket server and playback manager **do not** start. No `stateRwlock` (single-threaded access to playlist/station pointers from main).
+- **CLI-only** (`BAR_UI_MODE_CLI`): Terminal input on main + **playback manager thread** (same as Both, minus the WebSocket server; no listening port). Shared state via `stateRwlock`.
 - **Web** (`BAR_UI_MODE_WEB`): Daemon; main thread sleeps; **WebSocket thread** + **playback manager thread** share state via `stateRwlock`.
 - **Both** (`BAR_UI_MODE_BOTH`): Foreground CLI + WebSocket + playback manager (three threads touching shared playlist/station pointers).
 
@@ -57,7 +57,7 @@ Pianobar uses **several synchronization primitives**:
 | Lock | Purpose | Scope | File |
 |------|---------|-------|------|
 | `app->pianoHttpMutex` | **Recursive** mutex: serializes all of [`BarUiPianoCall`](ui.c) (shared `CURL *`, `PianoRequest`/`PianoResponse` on `app->ph`) so only one thread performs Pandora HTTP at a time | Always (after init in `main`) | [`main.h`](main.h), [`ui.c`](ui.c) |
-| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | `BAR_UI_MODE_WEB` and `BAR_UI_MODE_BOTH` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
+| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | Every `ui_mode` in WebSocket builds (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
@@ -269,16 +269,15 @@ must not call Pandora RPC helpers while already holding `stateRwlock`.
 
 ### Conditional Locking
 
-`app->stateRwlock` is **always** held by `BarStateSet*` functions in any mode
-that has concurrent WebSocket threads (`BAR_UI_MODE_BOTH` and `BAR_UI_MODE_WEB`).
+`app->stateRwlock` is **always** held by `BarStateSet*` functions in every
+`ui_mode` of WebSocket builds (the playback manager thread runs in all of them).
 Callers must not hold a read lock when calling any `BarStateSet*` function.
-In CLI-only mode, the lock operations are no-ops (optimized away).
+In non-WebSocket builds (`NOWEBSOCKET=1`), the lock operations are no-ops.
 
 ```c
-/* Internal helper in bar_state.c — active for BOTH and WEB modes */
-static bool state_needs_lock(const BarApp_t *app) {
-    return app->settings.uiMode == BAR_UI_MODE_BOTH ||
-           app->settings.uiMode == BAR_UI_MODE_WEB;
+/* Internal helper in bar_state.c — active in every ui_mode (WebSocket builds) */
+static bool state_needs_lock (const BarApp_t *app) {
+	return BarStateUsesRwlock (app);
 }
 ```
 
