@@ -60,6 +60,10 @@
 #define WS_FRAME_MAX_BYTES           (256 * 1024)  /* Largest single frame accepted */
 #define WS_INGRESS_MAX_BYTES         (1024 * 1024) /* Pending bytes in ingress queue */
 #define WS_INGRESS_MAX_MSGS          128           /* Pending frames in ingress queue */
+/* The service thread drains the ingress itself once it holds this much, so
+ * requests it handles can never fill it (see BarWsServiceOutbox) */
+#define WS_INGRESS_HIGH_WATER_BYTES  (WS_INGRESS_MAX_BYTES / 2)
+#define WS_INGRESS_HIGH_WATER_MSGS   (WS_INGRESS_MAX_MSGS / 2)
 #define WS_CLIENT_MAX_BYTES          (2 * WS_INGRESS_MAX_BYTES) /* Pending bytes per client queue */
 #define WS_CLIENT_MAX_MSGS           (2 * WS_INGRESS_MAX_MSGS)  /* Pending frames per client queue */
 

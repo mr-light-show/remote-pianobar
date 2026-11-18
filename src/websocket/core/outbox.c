@@ -470,3 +470,14 @@ uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o) {
 	pthread_mutex_unlock (&o->lock);
 	return gen;
 }
+
+bool BarWsOutboxAtHighWater (BarWsOutbox_t *o) {
+	if (!o) {
+		return false;
+	}
+	pthread_mutex_lock (&o->lock);
+	bool high = o->count >= WS_INGRESS_HIGH_WATER_MSGS ||
+			o->bytes >= WS_INGRESS_HIGH_WATER_BYTES;
+	pthread_mutex_unlock (&o->lock);
+	return high;
+}

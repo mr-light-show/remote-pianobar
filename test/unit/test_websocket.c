@@ -912,6 +912,59 @@ START_TEST (test_overflow_closes_only_that_client)
 }
 END_TEST
 
+/* One client flooding requests without reading must neither overflow the
+ * ingress nor disconnect a well-behaved client: the service thread drains
+ * the ingress while handling the flood, so only the flooder's own queue
+ * fills and only it is closed. */
+START_TEST (test_flooding_client_does_not_disconnect_others)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0); /* flooder, never reads */
+	test_add_client (&ctx, 1);
+
+	for (int i = 0; i < 4 * WS_CLIENT_MAX_MSGS; i++) {
+		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11);
+	}
+	BarWsConnection_t *flooder = test_conn (&ctx, 0);
+	ck_assert (flooder->pendingClose);
+	ck_assert_str_eq (flooder->closeReason, "Client event queue full");
+	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
+	test_drain_all (&ctx);
+	ck_assert (!test_conn (&ctx, 1)->pendingClose);
+	ck_assert_uint_eq (test_written_count, 0); /* nothing was meant for it */
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* Several clients requesting state in the same service round (a legitimate
+ * burst, e.g. a reconnect wave) overflow nothing and close nobody. */
+START_TEST (test_request_burst_from_many_clients_overflows_nothing)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+		test_add_client (&ctx, c);
+	}
+	for (int i = 0; i < 30; i++) {
+		for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+			BarWsHandleReceive (&app, &test_fake_sockets[c], "2[\"query\"]", 11);
+		}
+	}
+	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
+	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+		ck_assert (!test_conn (&ctx, c)->pendingClose);
+	}
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, (size_t) 30 * 2 * TEST_MAX_CLIENTS);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
 START_TEST (test_ingress_full_closes_all_clients)
 {
 	BarApp_t app;
@@ -2128,6 +2181,8 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_core, test_close_frees_pending);
 	tcase_add_test (tc_core, test_blocked_client_does_not_delay_writable_client);
 	tcase_add_test (tc_core, test_overflow_closes_only_that_client);
+	tcase_add_test (tc_core, test_flooding_client_does_not_disconnect_others);
+	tcase_add_test (tc_core, test_request_burst_from_many_clients_overflows_nothing);
 	tcase_add_test (tc_core, test_ingress_full_closes_all_clients);
 	tcase_add_test (tc_core, test_oversize_frame_is_rejected_without_closing_clients);
 	tcase_add_test (tc_core, test_large_stations_reply_does_not_close_clients);

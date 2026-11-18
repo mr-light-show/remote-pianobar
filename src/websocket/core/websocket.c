@@ -140,6 +140,8 @@ static void BarWsConnectionClose (const BarWsContext_t *ctx, BarWsConnection_t *
 	BarWsRequestWritable (ctx, conn->wsi);
 }
 
+static void BarWsDrainIfHighWater (BarWsContext_t *ctx);
+
 /* Dispatch a frame received from `wsi` (service thread). A received message
  * always has a nonzero requester. */
 void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len) {
@@ -159,6 +161,7 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len) {
 		message[len] = '\0';
 		BarWebsocketHandleMessage (app, message, len, "socketio", conn->id);
 		free (message);
+		BarWsDrainIfHighWater (app->wsContext);
 	}
 }
 
@@ -184,11 +187,25 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
  *    deliver it.
  *  - Ingress full (a push refused for room or memory): an event is lost and its recipients
  *    are not known cheaply, so every client is closed with a bounded reason;
- *    each reconnects and resyncs from one full-state frame.
+ *    each reconnects and resyncs from one full-state frame. This is the last
+ *    resort: the work a client can trigger (replies to its requests, the
+ *    state sent on connect) runs on the service thread, which drains the
+ *    ingress whenever it reaches half capacity (BarWsDrainIfHighWater), so
+ *    one flooding client only fills its own queue and is closed alone.
+ *    Only producer threads outside the service thread can still fill it.
  *  - A client's pending queue full (BAR_WS_Q_OVERFLOW): that client is not
  *    reading fast enough; only it is closed, the others are unaffected. */
 #define BAR_WS_CLOSE_INGRESS_FULL "Server event queue full"
 #define BAR_WS_CLOSE_CLIENT_FULL "Client event queue full"
+
+/* Service thread, called after handling input that pushes events (a received
+ * message, a new connection's state): move the ingress into client queues
+ * once it is half full, so a burst of requests cannot overflow it. */
+static void BarWsDrainIfHighWater (BarWsContext_t *ctx) {
+	if (ctx->outbox && BarWsOutboxAtHighWater (ctx->outbox)) {
+		BarWsServiceOutbox (ctx);
+	}
+}
 
 void BarWsServiceOutbox (BarWsContext_t *ctx) {
 	if (!ctx || !ctx->outbox) {
@@ -327,6 +344,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 
 			/* Send current state to the new client only */
 			BarSocketIoEmitProcessTo (app, id);
+			BarWsDrainIfHighWater (ctx);
 		}
 		break;
 	}

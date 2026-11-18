@@ -356,6 +356,31 @@ START_TEST (test_late_older_generation_progress_does_not_replace_newer) {
 }
 END_TEST
 
+START_TEST (test_outbox_high_water_by_count_and_bytes) {
+	ck_assert (!BarWsOutboxAtHighWater (NULL));
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	ck_assert (!BarWsOutboxAtHighWater (o));
+	for (size_t i = 0; i < WS_INGRESS_HIGH_WATER_MSGS - 1; i++) {
+		ck_assert (BarWsOutboxPush (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, strdup ("m"), 1));
+	}
+	ck_assert (!BarWsOutboxAtHighWater (o));
+	ck_assert (BarWsOutboxPush (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, strdup ("m"), 1));
+	ck_assert (BarWsOutboxAtHighWater (o));
+	BarWsPendingFree (BarWsOutboxTake (o));
+	ck_assert (!BarWsOutboxAtHighWater (o));
+	for (size_t i = 0; i < WS_INGRESS_HIGH_WATER_BYTES / WS_FRAME_MAX_BYTES; i++) {
+		char *big = malloc (WS_FRAME_MAX_BYTES);
+		ck_assert_ptr_nonnull (big);
+		memset (big, 'x', WS_FRAME_MAX_BYTES);
+		ck_assert (!BarWsOutboxAtHighWater (o));
+		ck_assert (BarWsOutboxPush (o, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+				big, WS_FRAME_MAX_BYTES));
+	}
+	ck_assert (BarWsOutboxAtHighWater (o));
+	BarWsOutboxFree (o);
+}
+END_TEST
+
 START_TEST (test_replace_over_byte_cap_rejected_original_intact) {
 	BarWsClientQueue_t q;
 	BarWsClientQueueInit (&q);
@@ -870,6 +895,7 @@ Suite *ws_outbox_suite (void) {
 	tcase_add_test (tc, test_client_queue_absorbs_maximal_ingress_take_by_count);
 	tcase_add_test (tc, test_client_queue_absorbs_maximal_ingress_take_by_bytes);
 	tcase_add_test (tc, test_late_older_generation_progress_does_not_replace_newer);
+	tcase_add_test (tc, test_outbox_high_water_by_count_and_bytes);
 	tcase_add_test (tc, test_keyed_appends_coalesce_instead_of_growing);
 	tcase_add_test (tc, test_empty_queue_accepts_one_max_size_full_state_frame);
 	tcase_add_test (tc, test_oversize_frame_rejected);

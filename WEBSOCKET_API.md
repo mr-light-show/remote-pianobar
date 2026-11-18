@@ -155,6 +155,18 @@ session failure, so a recovered session emits no `pandora.disconnected` at all â
 clients only see it when recovery was skipped or failed and a manual
 `app.pandora-reconnect` is required.
 
+**Delivery limits and slow clients:** events go through a bounded ingress
+queue (128 frames / 1 MiB) and a bounded queue per client (256 frames /
+2 MiB, i.e. two full ingress batches, so a healthy client is never closed by
+one batch). A client whose queue is full is closed alone with the reason
+`Client event queue full`. The server drains the ingress whenever it is half
+full while handling client messages, so one client flooding requests cannot
+overflow it; if it overflows anyway (producer threads outpacing delivery),
+every client is closed with `Server event queue full` and resyncs on
+reconnect. A frame over 256 KiB is refused and logged; no client is closed.
+For `progress`, a late sample of the previous song never replaces a queued
+sample of the current song.
+
 **Breaking change rule:** any field rename, type change (e.g. `volume` payload
 from integer to object), or event name rename is a **breaking change** for all
 consumers. Add a compatibility assertion test before renaming anything.

@@ -110,7 +110,8 @@ void BarWebsocketDestroy(BarApp_t *app);
  * reused slot, whose new client has a new ID) receives nothing.
  * Returns false for a NULL app/context/message, for a frame longer than
  * WS_FRAME_MAX_BYTES (logged, nobody is closed), or when the ingress is full;
- * a full ingress makes the service thread close every client so it resyncs
+ * a full ingress (only reachable from producer threads; the service thread
+ * drains it at half capacity) makes the service thread close every client so it resyncs
  * (see BarWsServiceOutbox).
  */
 bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,

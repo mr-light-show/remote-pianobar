@@ -106,6 +106,7 @@ static int FiMutexInit (pthread_mutex_t *m, const pthread_mutexattr_t *attr) {
 #define BarWsOutboxTake FiBarWsOutboxTake
 #define BarWsOutboxTakeOverflow FiBarWsOutboxTakeOverflow
 #define BarWsOutboxGeneration FiBarWsOutboxGeneration
+#define BarWsOutboxAtHighWater FiBarWsOutboxAtHighWater
 
 #include "../../src/websocket/core/outbox.c"
 

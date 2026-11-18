@@ -137,3 +137,6 @@ void BarWsPendingFree (BarWsPending_t *list);
  * was lost, so clients must resync). Clears the flag. */
 bool BarWsOutboxTakeOverflow (BarWsOutbox_t *o);
 uint32_t BarWsOutboxGeneration (BarWsOutbox_t *o);
+/* True once the ingress holds WS_INGRESS_HIGH_WATER_MSGS frames or
+ * WS_INGRESS_HIGH_WATER_BYTES bytes: the service thread should drain it now */
+bool BarWsOutboxAtHighWater (BarWsOutbox_t *o);
