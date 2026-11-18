@@ -245,7 +245,7 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
 	if (!app || !app->wsContext) {
 		return;
 	}
-	const BarWsContext_t *ctx = app->wsContext;
+	BarWsContext_t *ctx = app->wsContext;
 	BarWsConnection_t *conn = BarWsConnectionFind (ctx, wsi);
 	if (conn == NULL) {
 		/* Untracked (table was full): its replies would have no recipient */
@@ -331,11 +331,13 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi) {
  *  - Ingress full (a push refused for room or memory): an event is lost and its recipients
  *    are not known cheaply, so every client is closed with a bounded reason;
  *    each reconnects and resyncs from one full-state frame. This is the last
- *    resort: the work a client can trigger (replies to its requests, the
- *    state sent on connect) runs on the service thread, which drains the
- *    ingress whenever it reaches half capacity (BarWsDrainIfHighWater), so
- *    one flooding client only fills its own queue and is closed alone.
- *    Only producer threads outside the service thread can still fill it.
+ *    resort: the service thread drains the ingress whenever it reaches half
+ *    capacity (BarWsDrainIfHighWater) after the input it handles (a request,
+ *    whose busy reply it may push; the state sent on connect), and the
+ *    replies to requests come from the command worker, which holds at most
+ *    WS_CMD_MAX_ITEMS of them and wakes the service thread on every push. So
+ *    one flooding client is told busy or fills its own queue and is closed
+ *    alone. Only producers outpacing a woken service thread can still fill it.
  *  - A client's pending queue full (BAR_WS_Q_OVERFLOW): that client is not
  *    reading fast enough; only it is closed, the others are unaffected. */
 #define BAR_WS_CLOSE_INGRESS_FULL "Server event queue full"
@@ -488,12 +490,13 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 			
 			BarWsConnId_t id = BarWsConnectionAdd (ctx, wsi,
 					lws_get_protocol (wsi)->name);
-			if (id != BAR_WS_CONN_NONE) {
-				log_write(DEBUG_WEBSOCKET, "Client tracked (id %llu, total %zu)\n",
-				           (unsigned long long) id, ctx->numConnections);
-
-				/* Send current state to the new client only */
-				BarSocketIoEmitProcessTo (app, id);
+			if (id == 0) {
+				/* Untracked clients would have every frame dropped: refuse
+				 * the connection so the client can reconnect later */
+				log_write (LOG_ERROR,
+						"Connection table full (%zu); refusing client\n",
+						ctx->maxConnections);
+				return -1;
 			}
 			log_write(DEBUG_WEBSOCKET, "Client tracked (id %llu, total %zu)\n",
 			           (unsigned long long) id, (size_t) ctx->numConnections);

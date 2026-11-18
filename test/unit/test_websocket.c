@@ -842,55 +842,124 @@ START_TEST (test_overflow_closes_only_that_client)
 }
 END_TEST
 
+/* The command worker's step, run synchronously by the test: pop the next
+ * queued request and run it, as BarWsWorkerThread does; false when none is
+ * queued. Its replies go to the ingress; the service thread moves them on. */
+static bool test_run_one_command (BarApp_t *app, BarWsContext_t *ctx) {
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx->commands, &st);
+	if (st.items == 0) {
+		return false; /* Pop would wait for a request */
+	}
+	BarWsConnId_t requester = 0;
+	char *text = NULL;
+	if (!BarWsCommandQueuePop (ctx->commands, &requester, &text, NULL)) {
+		return false;
+	}
+	BarSocketIoHandleMessage (app, text, requester);
+	free (text);
+	return true;
+}
+
 /* One client flooding requests without reading must neither overflow the
- * ingress nor disconnect a well-behaved client: the service thread drains
- * the ingress while handling the flood, so only the flooder's own queue
- * fills and only it is closed. */
+ * ingress nor disconnect a well-behaved client. Requests now run on the
+ * command worker, so the flood meets two bounds, in this order:
+ *  1. A burst faster than the worker fills the shared command queue
+ *     (WS_CMD_MAX_ITEMS); the rest is refused and the flooder is told busy
+ *     once. Nobody is closed and nothing overflows.
+ *  2. While the worker keeps up, every request runs and its replies land in
+ *     the flooder's own queue; the service thread drains the ingress at high
+ *     water on each receive, so only that queue fills and only the flooder
+ *     is closed. */
 START_TEST (test_flooding_client_does_not_disconnect_others)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
 	test_add_client (&ctx, 0); /* flooder, never reads */
 	test_add_client (&ctx, 1);
-
-	for (int i = 0; i < 4 * WS_CLIENT_MAX_MSGS; i++) {
-		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11);
-	}
 	BarWsConnection_t *flooder = test_conn (&ctx, 0);
+
+	/* 1: the worker is busy elsewhere while a whole burst is parsed */
+	for (int i = 0; i < 4 * WS_CMD_MAX_ITEMS; i++) {
+		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11, true);
+	}
+	BarWsServiceOutbox (&ctx);
+	ck_assert (!flooder->pendingClose);
+	ck_assert_uint_eq (test_pending_count (&ctx, 0), 1); /* busy, once */
+	ck_assert_uint_eq (test_pending_count (&ctx, 1), 0);
+	ck_assert (!test_conn (&ctx, 1)->pendingClose);
+
+	/* 2: the worker runs one request per received one */
+	int sent = 0;
+	while (!flooder->pendingClose && sent < 4 * WS_CLIENT_MAX_MSGS) {
+		ck_assert (test_run_one_command (&app, &ctx));
+		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11, true);
+		sent++;
+	}
 	ck_assert (flooder->pendingClose);
 	ck_assert_str_eq (flooder->closeReason, "Client event queue full");
+	/* It filled at two replies per request after the busy reply */
+	ck_assert_int_eq (sent, (WS_CLIENT_MAX_MSGS - 1) / 2 + 1);
 	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
+	while (test_run_one_command (&app, &ctx)) {
+	}
 	test_drain_all (&ctx);
+	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
 	ck_assert (!test_conn (&ctx, 1)->pendingClose);
 	ck_assert_uint_eq (test_written_count, 0); /* nothing was meant for it */
 
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
 	test_teardown_clients (&app, &ctx);
 }
 END_TEST
 
-/* Several clients requesting state in the same service round (a legitimate
- * burst, e.g. a reconnect wave) overflow nothing and close nobody. */
+/* Several clients requesting state at once (a legitimate burst, e.g. a
+ * reconnect wave) overflow nothing and close nobody, and every reply is
+ * delivered. Each round fills the command queue exactly (no busy reply),
+ * then the worker runs it dry, pushing two replies per request without the
+ * service thread in between; the next round's receives drain the ingress. */
 START_TEST (test_request_burst_from_many_clients_overflows_nothing)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
 	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
 		test_add_client (&ctx, c);
 	}
-	for (int i = 0; i < 30; i++) {
-		for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
-			BarWsHandleReceive (&app, &test_fake_sockets[c], "2[\"query\"]", 11);
+	const int perRound = WS_CMD_MAX_ITEMS / TEST_MAX_CLIENTS;
+	const int rounds = 4;
+	for (int r = 0; r < rounds; r++) {
+		for (int i = 0; i < perRound; i++) {
+			for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+				BarWsHandleReceive (&app, &test_fake_sockets[c], "2[\"query\"]", 11,
+						true);
+			}
 		}
+		int ran = 0;
+		while (test_run_one_command (&app, &ctx)) {
+			ran++;
+		}
+		ck_assert_int_eq (ran, perRound * TEST_MAX_CLIENTS); /* none refused */
 	}
 	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
 	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
 		ck_assert (!test_conn (&ctx, c)->pendingClose);
 	}
 	test_drain_all (&ctx);
-	ck_assert_uint_eq (test_written_count, (size_t) 30 * 2 * TEST_MAX_CLIENTS);
+	ck_assert_uint_eq (test_written_count,
+			(size_t) rounds * perRound * 2 * TEST_MAX_CLIENTS);
+	for (size_t i = 0; i < test_written_count; i++) {
+		ck_assert (strstr (test_written_msg[i], "busy") == NULL);
+	}
 
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
 	test_teardown_clients (&app, &ctx);
 }
 END_TEST
@@ -3169,6 +3238,9 @@ START_TEST (test_diag_client_overflow_logs_its_pending)
 	BarWsConnId_t fast = test_add_client (&ctx, 1);
 	for (int i = 0; i < WS_CLIENT_MAX_MSGS; i++) {
 		ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+		if ((i + 1) % WS_INGRESS_MAX_MSGS == 0) {
+			test_drain_client (&ctx, 1); /* the ingress holds fewer frames */
+		}
 	}
 	test_drain_client (&ctx, 1);
 	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"last\"]"));
