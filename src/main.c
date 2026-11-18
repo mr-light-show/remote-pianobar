@@ -317,7 +317,7 @@ static bool BarMainGetStations (BarApp_t *app) {
 	if (ret) {
 		BarUpdateStationDisplayNames(app);
 		/* Broadcast to WebSocket clients: early connections may have received
-		 * an empty unicast from query before getStationList completed. */
+		 * an empty station list from query before getStationList completed. */
 		BarWsBroadcastStations(app);
 	}
 	
