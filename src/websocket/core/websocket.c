@@ -266,13 +266,19 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 			
 			BarWsConnId_t id = BarWsConnectionAdd (ctx, wsi,
 					lws_get_protocol (wsi)->name);
-			if (id != 0) {
-				log_write(DEBUG_WEBSOCKET, "Client tracked (id %llu, total %zu)\n",
-				           (unsigned long long) id, ctx->numConnections);
-
-				/* Send current state to the new client only */
-				BarSocketIoEmitProcessTo (app, id);
+			if (id == 0) {
+				/* Untracked clients would have every frame dropped: refuse
+				 * the connection so the client can reconnect later */
+				log_write (LOG_ERROR,
+						"Connection table full (%zu); refusing client\n",
+						ctx->maxConnections);
+				return -1;
 			}
+			log_write(DEBUG_WEBSOCKET, "Client tracked (id %llu, total %zu)\n",
+			           (unsigned long long) id, (size_t) ctx->numConnections);
+
+			/* Send current state to the new client only */
+			BarSocketIoEmitProcessTo (app, id);
 		}
 		break;
 	}

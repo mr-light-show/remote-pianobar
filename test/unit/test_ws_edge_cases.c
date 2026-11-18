@@ -259,6 +259,83 @@ START_TEST (test_ws_live_client_is_tracked_greeted_and_removed)
 }
 END_TEST
 
+static void
+send_ws_upgrade (int fd)
+{
+	const char *req =
+		"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+		"Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: socketio\r\n\r\n";
+	ck_assert_int_eq (write (fd, req, strlen (req)), (ssize_t) strlen (req));
+}
+
+/* Read until EOF/reset or `needle` appears; true if the peer closed first.
+ * A silent peer (socket left open) fails the test. */
+static bool
+read_until_needle_or_eof (int fd, const char *needle, char *buf, size_t cap)
+{
+	size_t have = 0;
+	buf[0] = '\0';
+	while (strstr (buf, needle) == NULL && have < cap - 1) {
+		struct pollfd p = { .fd = fd, .events = POLLIN };
+		ck_assert_msg (poll (&p, 1, 3000) > 0, "peer neither closed nor sent");
+		ssize_t n = read (fd, buf + have, cap - 1 - have);
+		if (n <= 0) {
+			return true;
+		}
+		have += (size_t) n;
+		buf[have] = '\0';
+	}
+	return false;
+}
+
+START_TEST (test_ws_client_refused_when_table_full_then_reconnects)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = free_loopback_port ();
+	BarStateInit (&app);
+	ck_assert (BarWebsocketInit (&app));
+	BarWsContext_t *ctx = app.wsContext;
+
+	/* Occupy every slot with a placeholder socket */
+	char fake[64];
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		ck_assert_uint_ne (BarWsConnectionAdd (ctx, &fake[i], "socketio"),
+				BAR_WS_DEST_BROADCAST);
+	}
+	ck_assert_uint_eq (live_connections (ctx), ctx->maxConnections);
+
+	/* The extra client is closed instead of lingering untracked */
+	char buf[8192];
+	int fd = connect_with_retry (app.settings.websocketPort);
+	ck_assert_int_ge (fd, 0);
+	send_ws_upgrade (fd);
+	ck_assert (read_until_needle_or_eof (fd, "process", buf, sizeof (buf)));
+	ck_assert_ptr_null (strstr (buf, "process"));
+	close (fd);
+	ck_assert_uint_eq (live_connections (ctx), ctx->maxConnections);
+
+	/* Once a slot frees up, a reconnect is tracked and greeted */
+	BarWsConnectionRemove (ctx, &fake[0]);
+	fd = connect_with_retry (app.settings.websocketPort);
+	ck_assert_int_ge (fd, 0);
+	send_ws_upgrade (fd);
+	ck_assert (!read_until_needle_or_eof (fd, "process", buf, sizeof (buf)));
+	ck_assert (wait_for_connections (ctx, ctx->maxConnections));
+	close (fd);
+	ck_assert (wait_for_connections (ctx, ctx->maxConnections - 1));
+
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarWebsocketDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 /* ---- Socket.IO action routing ---- */
 
 START_TEST (test_socketio_action_with_null_name_is_ignored)
@@ -473,6 +550,7 @@ ws_edge_cases_suite (void)
 	tcase_add_test (tc, test_ws_send_rejects_missing_app_context_or_message);
 	tcase_add_test (tc, test_ws_deliver_ignores_null_ctx_message_or_empty);
 	tcase_add_test (tc, test_ws_live_client_is_tracked_greeted_and_removed);
+	tcase_add_test (tc, test_ws_client_refused_when_table_full_then_reconnects);
 	tcase_add_test (tc, test_socketio_action_with_null_name_is_ignored);
 	tcase_add_test (tc, test_socketio_upcoming_without_requester_runs_terminal_callback);
 	tcase_add_test (tc, test_socketio_object_action_and_command_forms_dispatch);
