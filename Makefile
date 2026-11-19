@@ -369,6 +369,12 @@ test-integration: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running integration tests..."
 	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
 
+# Web UI Playwright E2E against the real pianobar binary and a local fake
+# Pandora API (no account, network or sound card needed)
+test-e2e-fake: pianobar
+	${SILENTECHO} "   TEST  Running web UI E2E against fake Pandora..."
+	${SILENTCMD}chmod +x scripts/e2e-fake.sh && PIANOBAR_BIN=./pianobar ./scripts/e2e-fake.sh
+
 # Reproduce GitHub Actions c-tests in Docker (headless Ubuntu, no sound card)
 test-ci-local:
 	${SILENTECHO} "   TEST  Running CI-local Docker repro..."
@@ -451,4 +457,4 @@ test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-e2e-fake test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen

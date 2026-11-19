@@ -56,6 +56,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | **Pre-push CI parity** (after `Makefile` / `test/**` changes) | `make test-ci-local` or `make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` |
 | C coverage (CI-style) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` (requires `lcov`) |
 | Docker CI repro | `make test-ci-local` |
+| Web UI E2E against real pianobar + fake Pandora (no account) | `make test-e2e-fake` |
 | C static analysis | `make lint` / `make lint-test` |
 | AddressSanitizer + UBSan tests | `make test-asan` |
 | ThreadSanitizer tests | `make test-tsan` |

@@ -40,6 +40,20 @@ Outputs to `../dist/webui/` - these files are served by pianobar's HTTP server.
 
 ## Testing
 
+### E2E (Playwright)
+
+```bash
+# Without a Pandora account: real pianobar + local fake Pandora (from the repo root)
+make test-e2e-fake
+
+# Against a pianobar you started yourself (default http://localhost:8080)
+cd webui
+PIANOBAR_RUNNING=1 npm run test:e2e
+PIANOBAR_RUNNING=1 PIANOBAR_URL=http://127.0.0.1:9001 npm run test:e2e
+```
+
+See [../TESTING.md](../TESTING.md#e2e-without-a-pandora-account-fake-pandora) for details.
+
 ### 1. Start Remote Pianobar
 
 Make sure your `~/.config/pianobar/config` includes:
