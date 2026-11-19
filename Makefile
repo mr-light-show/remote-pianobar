@@ -438,9 +438,17 @@ test-asan: clean clean-test-asan
 clean-test-asan:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
 
+# Run tests with ThreadSanitizer. Known third-party races are listed in test/tsan.supp.
+TSAN_FLAGS:=-fsanitize=thread -fno-omit-frame-pointer
+test-tsan: clean clean-test-asan
+	${SILENTECHO} "   TEST  Building with ThreadSanitizer..."
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${TSAN_FLAGS} -O1 -g" LDFLAGS="${LDFLAGS} ${TSAN_FLAGS}"
+	${SILENTECHO} "   TEST  Running test suite with data-race checks..."
+	${SILENTCMD}TSAN_OPTIONS="suppressions=test/tsan.supp:exitcode=66" ./${TEST_BIN}
+
 # Run tests with valgrind (Linux only, optional)
 test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind minimal all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen

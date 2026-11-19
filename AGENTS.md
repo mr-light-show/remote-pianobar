@@ -58,6 +58,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Docker CI repro | `make test-ci-local` |
 | C static analysis | `make lint` / `make lint-test` |
 | AddressSanitizer + UBSan tests | `make test-asan` |
+| ThreadSanitizer tests | `make test-tsan` |
 | Web UI unit tests | `cd webui && npm ci && npm test -- --run` |
 | Web UI coverage | `cd webui && npm test -- --run --coverage` |
 | Unified build + test | `./build.sh --test` |

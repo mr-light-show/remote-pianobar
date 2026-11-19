@@ -49,6 +49,7 @@ This will:
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
 - `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors, leaks, UB aborts the run)
+- `make test-tsan` - Run tests with ThreadSanitizer (known miniaudio races are suppressed in `test/tsan.supp`)
 - `make test-valgrind` - Run tests with valgrind (Linux only)
 
 ### Cleaning Test Files
@@ -157,6 +158,7 @@ Codecov patch coverage reflects **only what CI uploads** — it does **not** mer
 | `make test` | Unit tests only (no integration) | No | Fast dev loop; lower coverage than CI |
 | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` | Same tests as CI except no `--coverage` | No | Pre-push CI parity when `Makefile` / `test/**` changed |
 | `make test-asan` | ASan + UBSan rebuild + unit tests | No | Memory and undefined-behavior checking |
+| `make test-tsan` | TSan rebuild + unit tests | No | Data races; suppressions in `test/tsan.supp` |
 | `cd webui && npm test -- --run --coverage` | Vitest | Yes (`web-tests` flag) | Separate upload; combined with `c-tests` for default patch gate |
 
 **Implication:** production lines exercised only when integration env vars are set, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
