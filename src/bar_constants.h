@@ -42,4 +42,29 @@
 #define BAR_JOIN_THREAD_ITERATIONS   100  /* Main: wait iterations for player thread exit (100 * 100ms = 10s) */
 #define BAR_STATION_ID_MAX           50   /* Max length for station ID string buffer */
 
+/* --- WebSocket outbound queues ---
+ * Measured payloads: for a 200-station library with realistic song data the
+ * largest `process` frame is ~0.7 KB and the `stations` frame ~26.5 KB
+ * (roughly 130 bytes per station, so ~100 KB at ~800 stations). `genres`
+ * with 40 categories x 30 genres (generous; 28-char names, 20-char IDs) is
+ * ~93.5 KB; `searchResults` with 100 artists + 100 songs is ~21.6 KB.
+ * Frame max >= 2x the largest measured frame; an empty client queue and an
+ * empty ingress each accept one frame up to it; the ingress byte cap is 4x
+ * the frame max. A larger frame is refused and logged, never silently
+ * dropped. Frames are refcounted and shared between client queues, so a
+ * client queue costs only its entries. Each client queue holds twice the
+ * ingress limits: one maximal Take (all frames are appended before any is
+ * written, one frame per writable callback) plus the previous Take still
+ * draining must never close a healthy client. Message counts stay small to
+ * bound memory on a Pi 3. */
+#define WS_FRAME_MAX_BYTES           (256 * 1024)  /* Largest single frame accepted */
+#define WS_INGRESS_MAX_BYTES         (1024 * 1024) /* Pending bytes in ingress queue */
+#define WS_INGRESS_MAX_MSGS          128           /* Pending frames in ingress queue */
+/* The service thread drains the ingress itself once it holds this much, so
+ * requests it handles can never fill it (see BarWsServiceOutbox) */
+#define WS_INGRESS_HIGH_WATER_BYTES  (WS_INGRESS_MAX_BYTES / 2)
+#define WS_INGRESS_HIGH_WATER_MSGS   (WS_INGRESS_MAX_MSGS / 2)
+#define WS_CLIENT_MAX_BYTES          (2 * WS_INGRESS_MAX_BYTES) /* Pending bytes per client queue */
+#define WS_CLIENT_MAX_MSGS           (2 * WS_INGRESS_MAX_MSGS)  /* Pending frames per client queue */
+
 #endif /* BAR_CONSTANTS_H */
