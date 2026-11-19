@@ -329,33 +329,27 @@ static bool BarMainGetStations (BarApp_t *app) {
 	return ret;
 }
 
-/*	get initial station from autostart setting or user input
+/*	queue the autostart station (active account, else global setting)
+ *	Never prompts: the web UI or the 's' key picks a station when none is
+ *	queued, so startup cannot block on a terminal in any UI mode. An empty
+ *	value disables autostart.
  */
 static void BarMainGetInitialStation (BarApp_t *app) {
-	/* try to get autostart station */
-	if (app->settings.autostartStation != NULL) {
-		PianoStation_t *station = BarStateFindStationById(app,
-				app->settings.autostartStation);
-		BarStateSetNextStation(app, station);
-		if (station == NULL) {
-			BarUiMsg (&app->settings, MSG_ERR, "%s",
-					BarL10nGet (&app->l10n, "cli.autostart_not_found"));
-		}
-	}
-	
-	/* In web-only mode, don't prompt for station - let the web UI handle it */
-	if (BarIsWebOnlyMode(app) && BarStateGetNextStation(app) == NULL) {
-		BarUiMsg (&app->settings, MSG_INFO, "%s",
-				BarL10nGet (&app->l10n, "cli.wait_station_web"));
+	const BarAccount_t *acct = BarSettingsGetActiveAccount (&app->settings);
+	/* global autostart_station is copied into the primary account at load */
+	const char *id = acct != NULL ? acct->autostartStation :
+			app->settings.autostartStation;
+	if (id == NULL || id[0] == '\0') {
 		return;
 	}
-	
-	/* no autostart? ask the user */
-	if (BarStateGetNextStation(app) == NULL) {
-		PianoStation_t *station = BarUiSelectStation (app, BarStateGetStationList(app),
-				BarL10nGet (&app->l10n, "cli.select_station"), NULL, app->settings.autoselect);
-		BarStateSetNextStation(app, station);
+
+	PianoStation_t *station = BarStateFindStationById (app, id);
+	if (station == NULL) {
+		BarUiMsg (&app->settings, MSG_ERR, "%s",
+				BarL10nGet (&app->l10n, "cli.autostart_not_found"));
+		return;
 	}
+	BarStateSetNextStation (app, station);
 }
 
 /*	wait for user input
@@ -437,6 +431,10 @@ static void BarMainLoop (BarApp_t *app) {
 	if (!BarMainGetStations (app)) {
 		return;
 	}
+
+	/* Queue the autostart station before the playback manager starts so its
+	 * first pass already sees it. */
+	BarMainGetInitialStation (app);
 
 	if (!BarWsStartPlaybackManager(app)) {
 		return;

@@ -11,8 +11,6 @@ cli:
   session_auto_recover: "Pandora session error; reconnecting to resume playback... "
   session_auto_recover_failed: "Automatic reconnect failed.\n"
   no_tracks_left: "No tracks left.\n"
-  wait_station_web: "Waiting for station selection via web interface...\n"
-  select_station: "Select station: "
   password_helper: "Requesting password from external helper... "
   password_ok: "Ok.\n"
   password_exit_status: "Error: Exit status %i.\n"
