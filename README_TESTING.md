@@ -46,6 +46,7 @@ This will:
 
 - `make test` - Run unit tests only
 - `make test-integration` - Run integration tests (sets `PIANOBAR_INTEGRATION=1`)
+- `make test-e2e-fake` - Run the web UI Playwright E2E suite against the real `pianobar` binary and a local fake Pandora API (no account; needs Python 3, openssl, Node and Playwright's Chromium); see [TESTING.md](TESTING.md#e2e-without-a-pandora-account-fake-pandora)
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
 - `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors, leaks, UB aborts the run)
@@ -164,6 +165,7 @@ Codecov patch coverage reflects **only what CI uploads** — it does **not** mer
 | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` | Same tests as CI except no `--coverage` | No | Pre-push CI parity when `Makefile` / `test/**` changed |
 | `make test-asan` | ASan + UBSan rebuild + unit tests | No | Memory and undefined-behavior checking |
 | `make test-tsan` | TSan rebuild + unit tests | No | Data races; suppressions in `test/tsan.supp` |
+| `make test-e2e-fake` | Playwright E2E (Chromium) against real `pianobar` + `test/e2e-fake-pandora/fake_pandora.py` | No | Not part of `make test-all`; exercises the web UI end to end, no coverage data |
 | `cd webui && npm test -- --run --coverage` | Vitest | Yes (`web-tests` flag) | Separate upload; combined with `c-tests` for default patch gate |
 
 **Implication:** production lines exercised only when integration env vars are set, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.

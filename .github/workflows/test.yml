@@ -66,3 +66,35 @@ jobs:
           directory: webui/coverage
           flags: web-tests
           fail_ci_if_error: false
+
+  # Web UI E2E against the real pianobar binary and a local fake Pandora API
+  # (no account needed; see TESTING.md, "E2E without a Pandora account").
+  # Pinned: ubuntu-latest is now a release Playwright cannot install browser
+  # dependencies for (`playwright install --with-deps` fails there).
+  e2e-fake:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
+            libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
+            libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
+            libblas-dev liblapack-dev openssl python3
+
+      - name: Install Playwright Chromium
+        run: cd webui && npm ci && npx playwright install --with-deps chromium
+
+      - name: E2E against fake Pandora
+        env:
+          CI: "1"
+        run: make test-e2e-fake

@@ -50,7 +50,8 @@ test.describe('WebSocket Connection', () => {
 const requiresPianobar = () => !process.env.PIANOBAR_RUNNING;
 
 test.describe('WebSocket Connection with Server', () => {
-  test.skip(requiresPianobar, 'connects to pianobar server', async ({ page }) => {
+  test('connects to pianobar server', async ({ page }) => {
+    test.skip(!process.env.PIANOBAR_RUNNING, 'requires a running pianobar');
     // Run with: PIANOBAR_RUNNING=1 npm run test:e2e
     await page.goto('/');
 

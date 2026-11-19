@@ -316,9 +316,15 @@ npx playwright test test/e2e/connection.spec.ts
 
 # Run tests with pianobar server running
 PIANOBAR_RUNNING=1 npm run test:e2e
+
+# ... on a URL other than http://localhost:8080
+PIANOBAR_RUNNING=1 PIANOBAR_URL=http://127.0.0.1:9001 npm run test:e2e
+
+# From the repo root: real pianobar + local fake Pandora, no account needed
+make test-e2e-fake
 ```
 
-**Note:** Most E2E tests require a running pianobar instance with Remote API enabled. Tests without this requirement run by default; others are skipped.
+**Note:** Specs that need a running pianobar instance with Remote API enabled are gated on `PIANOBAR_RUNNING`. `make test-e2e-fake` starts the instance for you; see [TESTING.md](TESTING.md#e2e-without-a-pandora-account-fake-pandora).
 
 ### Running All Tests
 
