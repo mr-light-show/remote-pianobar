@@ -321,8 +321,11 @@ static bool BarMainGetStations (BarApp_t *app) {
 		BarWsBroadcastStations(app);
 	}
 	
+	/* eventcmd walks the station list: keep it alive (pianoHttpMutex) */
+	BarUiPianoHold (app);
 	BarUiStartEventCmd (&app->settings, "usergetstations", NULL, NULL, &app->player,
 			BarStateGetStationList(app), pRet, wRet);
+	BarUiPianoRelease (app);
 	return ret;
 }
 
@@ -368,8 +371,18 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 		} else {
 			context |= BAR_DC_PANDORA_DISCONNECTED;
 		}
+		/* Resolve the selection inside pianoHttpMutex for actions that use
+		 * it; songs and stations are only freed while it is held */
+		const bool hold = BarUiDispatchHoldsPianoLock (
+				BarUiDispatchKeyToId (app, buf[0]));
+		if (hold) {
+			BarUiPianoHold (app);
+		}
 		BarUiDispatch (app, buf[0], BarStateGetCurrentStation(app), 
 				BarStateGetPlaylist(app), true, context);
+		if (hold) {
+			BarUiPianoRelease (app);
+		}
 	}
 }
 
@@ -874,7 +887,10 @@ int main (int argc, char **argv) {
 		close (app.input.fds[1]);
 	}
 
-	/* Stop the WebSocket service thread before shared app state is torn down. */
+	/* Stop the WebSocket command worker, then the service thread, before
+	 * shared app state is torn down. The other producers are gone by now:
+	 * BarMainLoop stopped the playback manager (and its player thread), and
+	 * the CLI runs on this thread. */
 	BarWsDestroy(&app);
 
 	/* write statefile */

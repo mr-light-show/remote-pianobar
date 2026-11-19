@@ -8,7 +8,6 @@
 /* --- WebSocket --- */
 #define WEBSOCKET_PING_TIMEOUT_SEC    25   /* Send PING after this many seconds idle */
 #define WEBSOCKET_HANGUP_TIMEOUT_SEC  60   /* Hang up if no valid PING response within this */
-#define WEBSOCKET_POLL_MS             50   /* lws_service() poll interval (ms) */
 #define LWS_RX_BUFFER_SIZE            4096 /* Per-protocol receive buffer size (libwebsockets) */
 #define WEBSOCKET_FILEPATH_MAX        512  /* Max filepath length for webui / static files */
 #define LOG_MESSAGE_TRUNCATE_LEN      100  /* Truncate long messages in log output to this many chars */
@@ -66,5 +65,19 @@
 #define WS_INGRESS_HIGH_WATER_MSGS   (WS_INGRESS_MAX_MSGS / 2)
 #define WS_CLIENT_MAX_BYTES          (2 * WS_INGRESS_MAX_BYTES) /* Pending bytes per client queue */
 #define WS_CLIENT_MAX_MSGS           (2 * WS_INGRESS_MAX_MSGS)  /* Pending frames per client queue */
+
+/* --- WebSocket command queue (receive callbacks -> command worker) ---
+ * Commands are small JSON messages, typically < 1 KiB. A message may arrive
+ * in parts; the receive path collects them per connection up to
+ * WS_CMD_MAX_REQUEST_BYTES (4 KiB, the size of one lws receive buffer) and
+ * drops anything longer, so that is the largest request the queue ever
+ * sees. The byte cap is 16x that, so an empty queue always accepts one
+ * maximal request. 32 items bounds how far a stalled
+ * Pandora call can back up (a client sends a handful of controls per second;
+ * more means the client is misbehaving) and keeps worst-case memory at
+ * ~64 KiB on a Pi 3. */
+#define WS_CMD_MAX_REQUEST_BYTES     LWS_RX_BUFFER_SIZE /* Largest request (one message, any fragmentation) */
+#define WS_CMD_MAX_ITEMS             32                 /* Pending commands in the worker queue */
+#define WS_CMD_MAX_BYTES             (64 * 1024)        /* Pending request bytes in the worker queue */
 
 #endif /* BAR_CONSTANTS_H */

@@ -262,6 +262,10 @@ make test
 ./pianobar_test --verbose
 ```
 
+#### Static analysis
+
+`make lint` runs cppcheck and is strict: a suppression that matches nothing fails the run, so stale ones are caught on current cppcheck. cppcheck older than 2.18 (for example Ubuntu 24.04's apt package) reports many existing suppressions as unmatched; run `make lint CPPCHECK_LENIENT=1` there.
+
 ### TypeScript/JavaScript Unit Tests
 
 The web UI uses Vitest for unit testing.
@@ -517,8 +521,9 @@ pianobar/
 │   ├── libpiano/            # Pandora API client
 │   └── websocket/           # WebSocket implementation
 │       ├── core/            # WebSocket server core
-│       │   ├── websocket.c  # Main WebSocket logic
-│       │   └── queue.c      # Message queue
+│       │   ├── websocket.c  # Transport, connections, command worker
+│       │   ├── outbox.c     # Outbound event queues (per client)
+│       │   └── commands.c   # Inbound command queue
 │       ├── http/            # HTTP static file server
 │       │   └── http_server.c
 │       ├── protocol/        # Socket.IO protocol

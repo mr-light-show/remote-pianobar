@@ -71,9 +71,8 @@ void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
 	BarSocketIoEmitExplanationTo(app, requester, explanation);
 }
 
-void BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester,
-                         PianoSong_t *songs, int count) {
-	BarSocketIoEmitUpcomingTo(app, requester, songs, count);
+bool BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester, int count) {
+	return BarSocketIoEmitUpcomingTo(app, requester, count);
 }
 
 void BarWsBroadcastSongStart(BarApp_t *app) {
@@ -167,12 +166,6 @@ void BarWsBroadcastStations(BarApp_t *app) {
 		char *msg = BarSocketIoFormatEventMessage ("stations", data);
 		json_object_put (data);
 		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_STATIONS, msg);
-	}
-}
-
-void BarWsDisconnectAllClients(BarApp_t *app) {
-	if (app && app->wsContext) {
-		BarWebsocketDisconnectAllClients(app);
 	}
 }
 

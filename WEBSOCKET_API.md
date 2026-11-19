@@ -5,6 +5,7 @@ This document provides a complete reference for the pianobar-websockets Socket.I
 ## Table of Contents
 
 1. [Connection](#connection)
+   - [Delivery, limits and overload](#delivery-limits-and-overload)
 2. [Message Format](#message-format)
 3. [Server-to-Client Events](#server-to-client-events)
 4. [Client-to-Server Events](#client-to-server-events)
@@ -53,10 +54,27 @@ ws.onerror = (error) => {
 ### Connection Lifecycle
 
 1. Client opens WebSocket connection with `socketio` subprotocol
-2. On successful connection, client should send `query` event to request current state
-3. Server responds with `process` event (full state) and `stations` event (station list)
+2. On connection the server sends a `process` event (full state) to that client
+3. Client should send a `query` event; the server answers that client with `process` and `stations` (station list)
 4. Server broadcasts events as state changes occur
 5. Client can send commands at any time while connected
+
+### Delivery, limits and overload
+
+**Server to client.** Each client has its own queue, delivered in order; a slow client never delays the others.
+
+- Unsent `progress`, `volume` and `stations` events are replaced by a newer event of the same kind unless another event lies between them. No other event is coalesced, and query replies are never reordered.
+- `progress` sampled for a previous song is dropped once the next song's `start` is queued.
+- A single frame over 256 KiB is refused and logged, not delivered; no connection is closed.
+- A client that falls behind (64 frames or 1 MiB unsent) is closed with code **1008** "Client event queue full". If the server's shared event queue overflows, every client is closed with code **1011** "Server event queue full". Clients should reconnect; the server sends `process` on connect, and a `query` brings back `stations`.
+
+**Client to server.** Commands from all clients run **one at a time, in the order the server received them**. Connections, keepalive pings (consumed on arrival: never queued, never answered with the busy error) and server events keep flowing while a command runs, but a slow command delays every later command, including cheap ones such as volume or pause. This is by design. One Pandora request can take up to `timeout` × `max_retry` (the player retries temporary network errors; 30 s × 5 = 150 s by default on a dead network), and a command may make several.
+
+- A command is one message of at most 4096 bytes; it may arrive in any number of fragments or TCP segments. A longer message is dropped whole and logged; the connection stays open.
+- Up to 32 commands (64 KiB) can wait. When that is full the command is refused and only its sender receives
+  `2["error",{"operation":"command","message":"The player is busy. Try again in a moment."}]`
+  (the message is localized), once until one of its commands is accepted again; later refused commands are dropped silently. Send it again later.
+- When the server shuts down, waiting commands are discarded and replies not yet sent are abandoned.
 
 ---
 
@@ -1125,7 +1143,7 @@ ws.send('2["action",{"action":"volume.set","volume":75}]');
 | `song.tired` | Mark song as "tired" | Song won't play for a while |
 | `song.explain` | Get recommendation explanation | Server sends `song.explanation` event |
 | `song.info` | Get detailed song info | (Currently same as explain) |
-| `song.createStationFrom` | Create station from song | Opens station creation flow |
+| `song.createStationFrom` | Create station from song | Not available through `action` (needs terminal input); use the `station.createFrom` event. See [Not Implemented](#not-implemented) |
 
 **Examples:**
 
@@ -1622,12 +1640,15 @@ The following features are defined in the action mappings but are **not implemen
 | `song.bookmark` | Pandora discontinued the bookmark feature in August 2022 |
 | `query.history` | Not yet implemented |
 | `app.settings` | Settings changes don't persist and are only temporary session changes |
+| `song.createStationFrom`, `station.change`, `station.create`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.selectQuickMix` (as `action` commands) | These map to terminal-prompt handlers, which the command worker never runs. Use the dedicated events of the same name (`station.change`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.createFrom`, `station.setQuickMix`) (create a station with `music.search` followed by `station.createFrom`) |
 
 Attempting to use these actions now emits an `error` event instead of silently doing nothing:
 
 ```json
 ["error", {"operation": "query.history", "message": "Song history is not available through the remote API yet."}]
 ```
+
+The terminal-prompt actions reply with `web.socket.not_implemented_interactive` ("This action asks for input on the player terminal and is not available through the generic action command.").
 
 Unknown action names (not in the mapping table at all) receive no response.
 

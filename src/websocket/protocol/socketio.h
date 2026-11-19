@@ -26,7 +26,7 @@ THE SOFTWARE.
 #include <stddef.h>
 #include <stdbool.h>
 
-#include "../core/queue.h"
+#include "../core/conn_id.h"
 
 /* Note: main.h must be included before this header to get BarApp_t definition */
 
@@ -60,24 +60,18 @@ void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
                       struct json_object *data);
 
 /* Payload builders — each returns a new json_object reference; caller must json_object_put(). */
-struct json_object *BarSocketIoBuildStartPayload    (BarApp_t *app);
-struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app);
+struct json_object *BarSocketIoBuildStartPayload    (const BarApp_t *app);
+struct json_object *BarSocketIoBuildStationsPayload (const BarApp_t *app);
 struct json_object *BarSocketIoBuildProcessPayload  (BarApp_t *app);
 
-/* Emit 'start' event (song started) */
-void BarSocketIoEmitStart(BarApp_t *app);
+/* Song start/stop, progress and play state are broadcast only through the
+ * bridge (BarWsBroadcastSongStart/Stop/Progress/PlayState*), which applies
+ * the song generation, progress tag and play-state watermark. */
 
-/* Emit 'stop' event (song stopped) */
-void BarSocketIoEmitStop(BarApp_t *app);
-
-/* Emit 'volume' event (volume should be 0-100 percentage) */
+/* Broadcast 'volume' (0-100 percentage), keyed: an unsent one is replaced */
 void BarSocketIoEmitVolume(BarApp_t *app, int volume);
 
-/* Emit 'progress' event */
-void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
-                              unsigned int duration);
-
-/* Emit 'stations' event (station list) */
+/* Broadcast 'stations' (station list), keyed: an unsent one is replaced */
 void BarSocketIoEmitStations(BarApp_t *app);
 
 /* Emit 'process' event (full state) to all clients, or to `dest` only */
@@ -96,11 +90,9 @@ void BarSocketIoEmitErrorTo (BarApp_t *app, BarWsConnId_t dest, const char *oper
 /* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", or "connection_lost") */
 void BarSocketIoEmitPandoraDisconnected (BarApp_t *app, const char *reason);
 
-/* Emit 'playState' event (paused/resumed state) */
-void BarSocketIoEmitPlayState(BarApp_t *app);
-
-/* Emit 'query.upcoming.result' event (upcoming songs list) to `dest` */
-void BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, struct PianoSong *first, int max);
+/* Emit 'query.upcoming.result' event (up to `max` queued songs, copied under
+ * the state lock) to `dest`; false when nothing is queued */
+bool BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, int max);
 
 /* Handle 'action' event from client `requester` */
 void BarSocketIoHandleAction (BarApp_t *app, const char *action, struct json_object *data,
@@ -133,7 +125,6 @@ void BarSocketIoHandleAddShared(BarApp_t *app, struct json_object *data);
 
 /* Handle music search and emit results */
 void BarSocketIoHandleSearchMusic(BarApp_t *app, struct json_object *data);
-void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searchResult);
 
 /* Handle 'station.addMusic' with musicId and stationId */
 void BarSocketIoHandleAddMusic(BarApp_t *app, struct json_object *data);
@@ -143,14 +134,12 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, struct json_object *data);
 
 /* Handle 'station.getModes' - fetch available modes for a station */
 void BarSocketIoHandleGetStationModes(BarApp_t *app, struct json_object *data);
-void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData);
 
 /* Handle 'station.setMode' - set station mode */
 void BarSocketIoHandleSetStationMode(BarApp_t *app, struct json_object *data);
 
 /* Handle 'station.getInfo' - fetch station info for seed/feedback management */
 void BarSocketIoHandleGetStationInfo(BarApp_t *app, struct json_object *data);
-void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData);
 
 /* Handle 'station.deleteSeed' and 'station.deleteFeedback' */
 void BarSocketIoHandleDeleteSeed(BarApp_t *app, struct json_object *data);

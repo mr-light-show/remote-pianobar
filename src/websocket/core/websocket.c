@@ -27,6 +27,7 @@ THE SOFTWARE.
 
 #include "../../main.h"
 #include "../../log.h"
+#include "../../interrupt.h"
 #include "../../system_volume.h"
 #include "websocket.h"
 #include "websocket_lws_log.h"
@@ -52,6 +53,7 @@ static const lws_retry_bo_t keepalive_policy = {
 
 /* Forward declarations */
 static void* BarWebsocketThread(void *arg);
+static long long BarWsNowMs (void);
 
 /*	Outbound delivery
  *
@@ -93,8 +95,8 @@ static void BarWsWake (const BarWsContext_t *ctx) {
 }
 
 /* Add a client to the connection table (service thread) and assign its
- * ID. IDs come from a monotonic counter and are never reused. Returns 0
- * if the table is full. */
+ * ID. IDs come from a monotonic counter and are never reused. Returns
+ * BAR_WS_CONN_NONE if the table is full. */
 BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
                                   const char *protocol) {
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
@@ -104,13 +106,38 @@ BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
 			conn->wsi = wsi;
 			conn->pendingClose = false;
 			conn->closeReason = NULL;
+			conn->rxBuf = NULL;
+			conn->rxLen = 0;
+			conn->rxDropping = false;
+			conn->busyNotified = false;
 			BarWsClientQueueInit (&conn->pending);
 			snprintf (conn->protocol, sizeof (conn->protocol), "%s", protocol);
 			ctx->numConnections++;
+			if (!ctx->tableHigh && ctx->numConnections * 4 >= ctx->maxConnections * 3) {
+				ctx->tableHigh = true;
+				log_write (DEBUG_WEBSOCKET, "Connection table 75%% full (%zu/%zu in use)\n",
+				           ctx->numConnections, ctx->maxConnections);
+			}
 			return conn->id;
 		}
 	}
-	return BAR_WS_DEST_BROADCAST;
+	/* The client stays connected but gets nothing: at most one error a second */
+	const long long now = BarWsNowMs ();
+	if (now < ctx->tableFullNextMs) {
+		ctx->tableFullSuppressed++;
+	} else {
+		char more[48] = "";
+		if (ctx->tableFullSuppressed > 0) {
+			snprintf (more, sizeof (more), " (%u more since the last report)",
+			          ctx->tableFullSuppressed);
+		}
+		log_write (LOG_ERROR, "Connection table full (%zu/%zu in use): a new client is "
+		           "connected but untracked%s\n", ctx->numConnections,
+		           ctx->maxConnections, more);
+		ctx->tableFullNextMs = now + 1000;
+		ctx->tableFullSuppressed = 0;
+	}
+	return BAR_WS_CONN_NONE;
 }
 
 /* Tracked connection for `wsi`, or NULL */
@@ -142,30 +169,138 @@ static void BarWsConnectionClose (const BarWsContext_t *ctx, BarWsConnection_t *
 
 static void BarWsDrainIfHighWater (BarWsContext_t *ctx);
 
-/* Dispatch a frame received from `wsi` (service thread). A received message
- * always has a nonzero requester. */
-void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len) {
-	if (!app || !app->wsContext || !in || len == 0) {
+/* Hand one whole request to the command worker */
+static void BarWsQueueRequest (BarApp_t *app, BarWsConnection_t *conn,
+                               const void *bytes, size_t len) {
+	BarWsContext_t *ctx = app->wsContext;
+	switch (BarWsCommandQueuePush (ctx->commands, conn->id, bytes, len)) {
+		case BAR_WS_CMD_OK:
+			conn->busyNotified = false;
+			/* The episode ends once the queue has drained to half; ending it
+			 * at the first accepted push would log an error per pop under
+			 * sustained overload */
+			if (ctx->cmdRefusing) {
+				BarWsCommandQueueStats_t st;
+				BarWsCommandQueueStats (ctx->commands, &st);
+				if (st.items <= WS_CMD_MAX_ITEMS / 2 && st.bytes <= WS_CMD_MAX_BYTES / 2) {
+					ctx->cmdRefusing = false;
+					log_write (DEBUG_WEBSOCKET, "Command queue accepting again after %zu "
+					           "refused requests\n", ctx->cmdRefused);
+				}
+			}
+			break;
+		case BAR_WS_CMD_FULL:
+			/* One error per overload episode, not per refused request */
+			if (!ctx->cmdRefusing) {
+				BarWsCommandQueueStats_t st;
+				BarWsCommandQueueStats (ctx->commands, &st);
+				log_write (LOG_ERROR, "Command queue full (%zu/%d items, %zu/%d bytes); "
+				           "refusing requests, first from client %llu\n", st.items,
+				           WS_CMD_MAX_ITEMS, st.bytes, WS_CMD_MAX_BYTES,
+				           (unsigned long long) conn->id);
+				ctx->cmdRefusing = true;
+				ctx->cmdRefused = 0;
+			}
+			ctx->cmdRefused++;
+			/* Once per overload: a burst must not flood the shared ingress */
+			if (!conn->busyNotified) {
+				conn->busyNotified = true;
+				BarSocketIoEmitErrorTo (app, conn->id, "command",
+						BarL10nGet (&app->l10n, "web.socket.busy"));
+			}
+			break;
+		case BAR_WS_CMD_CLOSED:
+			/* Shutting down (or no worker): not an overload, no reply */
+			log_write (DEBUG_WEBSOCKET, "Command queue closed; dropping a request\n");
+			break;
+		case BAR_WS_CMD_NOMEM:
+			log_write (LOG_ERROR, "Out of memory queueing a request from client %llu\n",
+			           (unsigned long long) conn->id);
+			break;
+	}
+}
+
+/* Forget a partly received message */
+static void BarWsConnectionRxReset (BarWsConnection_t *conn) {
+	free (conn->rxBuf);
+	conn->rxBuf = NULL;
+	conn->rxLen = 0;
+}
+
+/* The client keepalive, `2["ping"]` or `2["ping",...]`: it needs no work and
+ * no reply, so it never enters the command queue (a full queue must not turn
+ * a keepalive into a busy error) */
+static bool BarWsIsKeepalive (const char *msg, size_t len) {
+	static const char prefix[] = "2[\"ping\"";
+	const size_t n = sizeof (prefix) - 1;
+	return len > n && memcmp (msg, prefix, n) == 0 &&
+			(msg[n] == ']' || msg[n] == ',');
+}
+
+/* Queue a message received from `wsi` for the command worker (service
+ * thread). Nothing runs here, so a slow command never stalls connection
+ * servicing. A received message always has a nonzero requester. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
+                         bool final) {
+	if (!app || !app->wsContext) {
 		return;
 	}
-	const BarWsConnection_t *conn = BarWsConnectionFind (app->wsContext, wsi);
+	BarWsContext_t *ctx = app->wsContext;
+	BarWsConnection_t *conn = BarWsConnectionFind (ctx, wsi);
 	if (conn == NULL) {
 		/* Untracked (table was full): its replies would have no recipient */
 		log_write (DEBUG_WEBSOCKET, "Dropping message from untracked client (wsi=%p)\n",
 		           wsi);
 		return;
 	}
-	char *message = malloc (len + 1);
-	if (message) {
-		memcpy (message, in, len);
-		message[len] = '\0';
-		BarWebsocketHandleMessage (app, message, len, "socketio", conn->id);
-		free (message);
-		BarWsDrainIfHighWater (app->wsContext);
+	if (!in) {
+		len = 0;
 	}
+	/* The rest of a message already found too long */
+	if (conn->rxDropping) {
+		conn->rxDropping = !final;
+		return;
+	}
+	/* A message can arrive in parts (TCP segments, the lws receive buffer,
+	 * WebSocket fragments). Collect them up to WS_CMD_MAX_REQUEST_BYTES; a
+	 * longer message is dropped whole, its tail included, and the connection
+	 * stays open. */
+	if (conn->rxLen + len > WS_CMD_MAX_REQUEST_BYTES) {
+		log_write (LOG_ERROR, "Dropping request from client %llu: longer than %d bytes\n",
+		           (unsigned long long) conn->id, WS_CMD_MAX_REQUEST_BYTES);
+		BarWsConnectionRxReset (conn);
+		conn->rxDropping = !final;
+		return;
+	}
+	if (!final || conn->rxLen > 0) {
+		if (conn->rxBuf == NULL) {
+			conn->rxBuf = malloc (WS_CMD_MAX_REQUEST_BYTES);
+			if (conn->rxBuf == NULL) {
+				log_write (LOG_ERROR, "Out of memory receiving from client %llu\n",
+				           (unsigned long long) conn->id);
+				conn->rxDropping = !final;
+				return;
+			}
+		}
+		if (len > 0) {
+			memcpy (conn->rxBuf + conn->rxLen, in, len);
+		}
+		conn->rxLen += len;
+		if (!final) {
+			return;
+		}
+		in = conn->rxBuf;
+		len = conn->rxLen;
+	}
+	if (len > 0 && !BarWsIsKeepalive (in, len)) {
+		BarWsQueueRequest (app, conn, in, len);
+	}
+	BarWsConnectionRxReset (conn);
+	/* A busy reply is produced here, on the service thread */
+	BarWsDrainIfHighWater (ctx);
 }
 
-void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
+void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi) {
 	BarWsConnection_t *conn = BarWsConnectionFind (ctx, wsi);
 	if (conn == NULL) {
 		return;
@@ -173,12 +308,20 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
 	log_write(DEBUG_WEBSOCKET, "Client removed (id %llu, total %zu)\n",
 	           (unsigned long long) conn->id, (size_t) ctx->numConnections - 1);
 	BarWsClientQueueClear (&conn->pending);
+	BarWsConnectionRxReset (conn);
 	conn->id = 0;
 	conn->wsi = NULL;
 	conn->pendingClose = false;
 	conn->closeReason = NULL;
 	conn->protocol[0] = '\0';
 	ctx->numConnections--;
+	/* Hysteresis: cleared only below half, so a table hovering at 75%
+	 * logs once */
+	if (ctx->tableHigh && ctx->numConnections * 2 < ctx->maxConnections) {
+		ctx->tableHigh = false;
+		log_write (DEBUG_WEBSOCKET, "Connection table below 50%% full again (%zu/%zu in use)\n",
+		           ctx->numConnections, ctx->maxConnections);
+	}
 }
 
 /* Overflow policies. Events are never silently dropped:
@@ -188,11 +331,13 @@ void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
  *  - Ingress full (a push refused for room or memory): an event is lost and its recipients
  *    are not known cheaply, so every client is closed with a bounded reason;
  *    each reconnects and resyncs from one full-state frame. This is the last
- *    resort: the work a client can trigger (replies to its requests, the
- *    state sent on connect) runs on the service thread, which drains the
- *    ingress whenever it reaches half capacity (BarWsDrainIfHighWater), so
- *    one flooding client only fills its own queue and is closed alone.
- *    Only producer threads outside the service thread can still fill it.
+ *    resort: the service thread drains the ingress whenever it reaches half
+ *    capacity (BarWsDrainIfHighWater) after the input it handles (a request,
+ *    whose busy reply it may push; the state sent on connect), and the
+ *    replies to requests come from the command worker, which holds at most
+ *    WS_CMD_MAX_ITEMS of them and wakes the service thread on every push. So
+ *    one flooding client is told busy or fills its own queue and is closed
+ *    alone. Only producers outpacing a woken service thread can still fill it.
  *  - A client's pending queue full (BAR_WS_Q_OVERFLOW): that client is not
  *    reading fast enough; only it is closed, the others are unaffected. */
 #define BAR_WS_CLOSE_INGRESS_FULL "Server event queue full"
@@ -212,10 +357,16 @@ void BarWsServiceOutbox (BarWsContext_t *ctx) {
 		return;
 	}
 	bool overflowed = BarWsOutboxTakeOverflow (ctx->outbox);
+	size_t msgs = 0, bytes = 0;
+	if (overflowed) {
+		BarWsOutboxDepth (ctx->outbox, &msgs, &bytes); /* what Take drops */
+	}
 	BarWsPending_t *list = BarWsOutboxTake (ctx->outbox);
 
 	if (overflowed) {
-		log_write (LOG_ERROR, "Outbound event queue overflowed; closing all clients so they resync\n");
+		log_write (LOG_ERROR, "Outbound event queue overflowed (%zu/%d messages, %zu/%d bytes "
+		           "queued); closing all clients so they resync\n", msgs,
+		           WS_INGRESS_MAX_MSGS, bytes, WS_INGRESS_MAX_BYTES);
 		for (size_t i = 0; i < ctx->maxConnections; i++) {
 			if (ctx->connections[i].wsi != NULL) {
 				BarWsConnectionClose (ctx, &ctx->connections[i],
@@ -236,6 +387,11 @@ void BarWsServiceOutbox (BarWsContext_t *ctx) {
 			}
 			if (BarWsClientQueueAppend (&conn->pending, p->frame, p->key,
 					p->generation) != BAR_WS_Q_OK) {
+				log_write (LOG_ERROR, "Client %llu event queue full (%zu/%d messages, %zu/%d "
+				           "bytes pending, %zu-byte event refused); closing it\n",
+				           (unsigned long long) conn->id, conn->pending.count,
+				           WS_CLIENT_MAX_MSGS, conn->pending.bytes, WS_CLIENT_MAX_BYTES,
+				           BarWsFrameLen (p->frame));
 				BarWsConnectionClose (ctx, conn, LWS_CLOSE_STATUS_POLICY_VIOLATION,
 				                      BAR_WS_CLOSE_CLIENT_FULL);
 			}
@@ -273,7 +429,10 @@ int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi) {
 	           (unsigned long long) conn->id, len, (int) LOG_MESSAGE_TRUNCATE_LEN,
 	           text, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
-	/* The frame keeps LWS_PRE bytes in front of its payload for lws_write */
+	/* The frame keeps LWS_PRE bytes in front of its payload for lws_write,
+	 * which writes the frame header there. A broadcast frame is shared, so
+	 * this is safe only because every write happens on the service thread,
+	 * one at a time, and no WebSocket extension (compression) is enabled. */
 	int written = (ctx->writeFrame ? ctx->writeFrame : BarWsLwsWriteFrame)
 			(wsi, BarWsFrameData (frame), len);
 	BarWsFrameUnref (frame);
@@ -362,8 +521,8 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 	}
 			
 		case LWS_CALLBACK_RECEIVE:
-			/* Received message from client */
-			BarWsHandleReceive (app, wsi, in, len);
+			/* Received message from client: queue it for the worker */
+			BarWsHandleReceive (app, wsi, in, len, lws_is_final_fragment (wsi) != 0);
 			break;
 			
 		case LWS_CALLBACK_SERVER_WRITEABLE:
@@ -517,6 +676,122 @@ static void BarWsPollSystemVolume(BarWsContext_t *ctx, BarApp_t *app) {
 	}
 }
 
+/*	Diagnostics (DEBUG_WEBSOCKET): a command still running after
+ * BAR_WS_STALL_MS, then every further BAR_WS_STALL_MS, and a status line
+ * every BAR_WS_HEARTBEAT_MS unless everything is idle and unchanged. The
+ * worker wakes this thread when it starts a command, so the check is armed
+ * on the shared timer below; with debugging off nothing is armed. */
+#define BAR_WS_STALL_MS 10000
+#define BAR_WS_HEARTBEAT_MS 30000
+
+static void BarWsHeartbeat (BarWsContext_t *ctx, const BarWsCommandQueueStats_t *cmd,
+                            long long now) {
+	BarWsDiagSnapshot_t s;
+	memset (&s, 0, sizeof (s));
+	BarWsOutboxDepth (ctx->outbox, &s.ingressMsgs, &s.ingressBytes);
+	s.cmdItems = cmd->items;
+	s.cmdBytes = cmd->bytes;
+	s.cmdRunning = cmd->running;
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		const BarWsConnection_t *conn = &ctx->connections[i];
+		if (conn->wsi != NULL && conn->pending.count > 0 &&
+				(s.worstId == 0 || conn->pending.bytes > s.worstBytes)) {
+			s.worstId = conn->id;
+			s.worstMsgs = conn->pending.count;
+			s.worstBytes = conn->pending.bytes;
+		}
+	}
+	const bool idle = s.ingressMsgs == 0 && s.cmdItems == 0 && !s.cmdRunning &&
+			s.worstMsgs == 0;
+	if (idle && memcmp (&s, &ctx->lastHeartbeat, sizeof (s)) == 0) {
+		return;
+	}
+	memcpy (&ctx->lastHeartbeat, &s, sizeof (s));
+	char worker[96] = "idle";
+	if (cmd->running) {
+		snprintf (worker, sizeof (worker), "running %s for %lld s", cmd->name,
+		          (now - cmd->runningSinceMs) / 1000);
+	}
+	log_write (DEBUG_WEBSOCKET, "Status: connections %zu/%zu, ingress %zu msgs/%zu bytes, "
+	           "commands %zu items/%zu bytes, worker %s, worst pending %zu msgs/%zu bytes "
+	           "(client %llu)\n", ctx->numConnections, ctx->maxConnections, s.ingressMsgs,
+	           s.ingressBytes, s.cmdItems, s.cmdBytes, worker, s.worstMsgs, s.worstBytes,
+	           (unsigned long long) s.worstId);
+}
+
+long long BarWsServiceDiagnostics (BarWsContext_t *ctx) {
+	if (!log_is_enabled (DEBUG_WEBSOCKET)) {
+		ctx->heartbeatNextMs = 0;
+		return -1;
+	}
+	const long long now = BarWsNowMs ();
+	BarWsCommandQueueStats_t cmd;
+	BarWsCommandQueueStats (ctx->commands, &cmd);
+	if (ctx->heartbeatNextMs == 0) {
+		ctx->heartbeatNextMs = now + BAR_WS_HEARTBEAT_MS;
+	} else if (now >= ctx->heartbeatNextMs) {
+		BarWsHeartbeat (ctx, &cmd, now);
+		ctx->heartbeatNextMs = now + BAR_WS_HEARTBEAT_MS;
+	}
+	long long next = ctx->heartbeatNextMs;
+	if (cmd.running) {
+		if (cmd.started != ctx->stallSeq) {
+			ctx->stallSeq = cmd.started;
+			ctx->stallNextMs = cmd.runningSinceMs + BAR_WS_STALL_MS;
+		}
+		if (now >= ctx->stallNextMs) {
+			const long long ran = now - cmd.runningSinceMs;
+			log_write (DEBUG_WEBSOCKET, "Command running for %lld s: %s (queue %zu items/%zu bytes)\n",
+			           ran / 1000, cmd.name, cmd.items, cmd.bytes);
+			ctx->stallNextMs = now + BAR_WS_STALL_MS - ran % BAR_WS_STALL_MS;
+			atomic_fetch_add (&ctx->stallReports, 1);
+		}
+		if (ctx->stallNextMs < next) {
+			next = ctx->stallNextMs;
+		}
+	}
+	return next - now;
+}
+
+/* The timer only has to end lws_service(): the loop below does the work */
+static void BarWsTimerWake (lws_sorted_usec_list_t *sul) {
+	(void) sul;
+}
+
+/* Arm the service-loop timer for the next due work: the debounced volume
+ * deadline, in system volume mode the 1 s poll, and the diagnostics due in
+ * diagMs (-1: none). Nothing is armed when idle, so the thread sleeps until
+ * a socket event or a producer's wake.
+ * Service thread only (lws_sul is not thread-safe). */
+static void BarWsArmTimer (BarWsContext_t *ctx, const BarApp_t *app,
+                           long long diagMs) {
+	long long delayMs = -1;
+
+	pthread_mutex_lock (&ctx->volumeBroadcastMutex);
+	if (ctx->delayedVolumeBroadcast.pending) {
+		struct timespec ts;
+		clock_gettime (CLOCK_MONOTONIC, &ts);
+		const long long nowMs = (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+		delayMs = (long long) ctx->delayedVolumeBroadcast.scheduleTime - nowMs;
+		if (delayMs < 0) {
+			delayMs = 0;
+		}
+	}
+	pthread_mutex_unlock (&ctx->volumeBroadcastMutex);
+	if (app->settings.volumeMode == BAR_VOLUME_MODE_SYSTEM &&
+			(delayMs < 0 || delayMs > 1000)) {
+		delayMs = 1000;
+	}
+	if (diagMs >= 0 && (delayMs < 0 || diagMs < delayMs)) {
+		delayMs = diagMs;
+	}
+	if (delayMs >= 0) {
+		lws_sul_schedule ((struct lws_context *) ctx->context, 0,
+				(lws_sorted_usec_list_t *) ctx->timer, BarWsTimerWake,
+				(lws_usec_t) delayMs * LWS_US_PER_MS);
+	}
+}
+
 /* WebSocket service thread - runs lws_service() loop */
 static void* BarWebsocketThread(void *arg) {
 	BarApp_t *app = (BarApp_t *)arg;
@@ -530,9 +805,10 @@ static void* BarWebsocketThread(void *arg) {
 	
 	while (atomic_load_explicit (&ctx->threadRunning, memory_order_relaxed) && !atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
 		/* Returns after socket activity, a producer's lws_cancel_service()
-		 * wakeup, or WEBSOCKET_POLL_MS (keeps the volume timers below ticking) */
+		 * wakeup or the timer armed below. Its timeout argument is ignored
+		 * (libwebsockets >= 3.2). */
 		if (ctx->context) {
-			lws_service(ctx->context, WEBSOCKET_POLL_MS);
+			lws_service(ctx->context, 0);
 		}
 		
 		/* Process delayed volume broadcast (debouncing) */
@@ -544,6 +820,8 @@ static void* BarWebsocketThread(void *arg) {
 		/* Deliver what producers (and the callbacks above) queued */
 		BarWsServiceOutbox (ctx);
 		
+		BarWsArmTimer (ctx, app, BarWsServiceDiagnostics (ctx));
+		
 		/* NOTE: Progress broadcasting now handled by playback_manager thread
 		 * This ensures timing is independent of WebSocket servicing delays
 		 */
@@ -551,6 +829,160 @@ static void* BarWebsocketThread(void *arg) {
 	
 	log_write(DEBUG_WEBSOCKET, "Thread stopped\n");
 	return NULL;
+}
+
+static BarWsThreadCreate_fn g_threadCreateHook = NULL;
+
+void BarWebsocketSetTestThreadCreateHook (BarWsThreadCreate_fn hook) {
+	g_threadCreateHook = hook;
+}
+
+static BarWsClock_fn g_clockHook = NULL;
+
+void BarWebsocketSetTestClock (BarWsClock_fn clock) {
+	g_clockHook = clock;
+}
+
+/* Monotonic milliseconds for the diagnostics */
+static long long BarWsNowMs (void) {
+	if (g_clockHook != NULL) {
+		return g_clockHook ();
+	}
+	struct timespec ts;
+	clock_gettime (CLOCK_MONOTONIC, &ts);
+	return (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int BarWsThreadCreate (pthread_t *thread, void *(*fn) (void *), void *arg) {
+	if (g_threadCreateHook != NULL) {
+		return g_threadCreateHook (thread, fn, arg);
+	}
+	return pthread_create (thread, NULL, fn, arg);
+}
+
+/*	Command worker
+ *
+ * The one thread that runs application commands, in the order they were
+ * received. Handlers keep their own locking (pianoHttpMutex for Pandora and
+ * borrowed stations/songs, stateRwlock, player.lock; see THREAD_SAFETY.md)
+ * and reply through BarWebsocketSend, which never blocks on a client. Only
+ * the request bytes and the requester ID cross from the service thread.
+ */
+static void *BarWsWorkerThread (void *arg) {
+	BarApp_t *app = arg;
+	const BarWsContext_t *ctx = app->wsContext;
+	BarWsCommandQueue_t *commands = ctx->commands;
+	BarWsConnId_t requester;
+	char *text;
+
+	log_write (DEBUG_WEBSOCKET, "Command worker started\n");
+	while (BarWsCommandQueuePop (commands, &requester, &text, NULL)) {
+		/* Marked for the service thread's long-running check, which is
+		 * armed when it wakes (only while it would log) */
+		const long long start = BarWsNowMs ();
+		BarWsCommandQueueBegin (commands, text, start);
+		if (log_is_enabled (DEBUG_WEBSOCKET)) {
+			BarWsWake (ctx);
+		}
+		BarSocketIoHandleMessage (app, text, requester);
+		BarWsCommandQueueEnd (commands);
+		const long long ran = BarWsNowMs () - start;
+		if (ran >= BAR_WS_STALL_MS) {
+			log_write (DEBUG_WEBSOCKET, "Command finished after %lld s: %.40s\n",
+			           ran / 1000, text);
+		}
+		free (text);
+	}
+	log_write (DEBUG_WEBSOCKET, "Command worker stopped\n");
+	return NULL;
+}
+
+bool BarWebsocketWorkerStart (BarApp_t *app) {
+	if (!app || !app->wsContext) {
+		return false;
+	}
+	BarWsContext_t *ctx = app->wsContext;
+	if (ctx->workerStarted) {
+		return false;
+	}
+	/* Closed by an earlier Stop; no service thread pushes to it now */
+	BarWsCommandQueueFree (ctx->commands);
+	ctx->commands = BarWsCommandQueueNew ();
+	if (!ctx->commands) {
+		log_write (LOG_ERROR, "Failed to allocate the command queue\n");
+		return false;
+	}
+	if (BarWsThreadCreate (&ctx->worker, BarWsWorkerThread, app) != 0) {
+		log_write (LOG_ERROR, "Failed to create the command worker\n");
+		BarWsCommandQueueFree (ctx->commands);
+		ctx->commands = NULL;
+		return false;
+	}
+	ctx->workerStarted = true;
+	return true;
+}
+
+/* Close admission and join the worker; `interrupt` also aborts the
+ * command's Pandora requests. */
+static void BarWsWorkerJoin (BarApp_t *app, bool interrupt) {
+	BarWsContext_t *ctx = app->wsContext;
+	/* Refuse new commands and drop the queued ones, so the worker exits
+	 * after the command in flight. The shutdown flag (not an interrupt,
+	 * which only reaches a request inside curl through the current target)
+	 * aborts that command's request in curl and refuses every later one,
+	 * so the command returns promptly wherever it is. */
+	if (interrupt) {
+		BarInterruptSetShutdown (true);
+	}
+	BarWsCommandQueueClose (ctx->commands);
+	log_write (DEBUG_WEBSOCKET, "Waiting for the command worker...\n");
+	pthread_join (ctx->worker, NULL);
+	ctx->workerStarted = false;
+	/* Nothing left to abort; requests on other threads work again */
+	BarInterruptSetShutdown (false);
+}
+
+void BarWebsocketWorkerStop (BarApp_t *app) {
+	if (!app || !app->wsContext) {
+		return;
+	}
+	BarWsContext_t *ctx = app->wsContext;
+	if (!ctx->workerStarted) {
+		return;
+	}
+	if (pthread_equal (pthread_self (), ctx->worker)) {
+		/* e.g. a command asking to quit: the lifecycle owner joins later */
+		log_write (LOG_ERROR, "Command worker cannot stop itself\n");
+		return;
+	}
+	BarWsWorkerJoin (app, true);
+}
+
+/* Free the transport; neither the worker nor the service thread may run */
+static void BarWsContextFree (BarApp_t *app) {
+	BarWsContext_t *ctx = app->wsContext;
+
+	/* Destroying the lws context closes every connection (CLOSED frees its
+	 * pending frames); no callback runs after this point. */
+	if (ctx->context) {
+		lws_context_destroy (ctx->context);
+		ctx->context = NULL;
+	}
+	free (ctx->timer);
+	if (ctx->connections) {
+		for (size_t i = 0; i < ctx->maxConnections; i++) {
+			BarWsClientQueueClear (&ctx->connections[i].pending);
+			BarWsConnectionRxReset (&ctx->connections[i]);
+		}
+		free (ctx->connections);
+		ctx->connections = NULL;
+	}
+	pthread_mutex_destroy (&ctx->volumeBroadcastMutex);
+	/* Replies not delivered by now are abandoned with the queues */
+	BarWsCommandQueueFree (ctx->commands);
+	BarWsOutboxFree (ctx->outbox);
+	free (ctx);
+	app->wsContext = NULL;
 }
 
 /* Initialize WebSocket server */
@@ -569,11 +1001,14 @@ bool BarWebsocketInit(BarApp_t *app) {
 	}
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+	pthread_mutex_init(&ctx->volumeBroadcastMutex, NULL);
+	ctx->maxConnections = 32;
+	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	ctx->outbox = BarWsOutboxNew ();
-	if (!ctx->outbox) {
-		log_write(LOG_ERROR, "Failed to allocate outbound queue\n");
-		free(ctx);
-		app->wsContext = NULL;
+	ctx->timer = calloc (1, sizeof (lws_sorted_usec_list_t));
+	if (!ctx->connections || !ctx->outbox || !ctx->timer) {
+		log_write(LOG_ERROR, "Failed to allocate the WebSocket context\n");
+		BarWsContextFree (app);
 		return false;
 	}
 	
@@ -595,19 +1030,14 @@ bool BarWebsocketInit(BarApp_t *app) {
 	if (!ctx->context) {
 		log_write(LOG_ERROR, "Failed to create context on port %d\n",
 		        app->settings.websocketPort);
-		BarWsOutboxFree (ctx->outbox);
-		free(ctx);
-		app->wsContext = NULL;
+		BarWsContextFree (app);
 		return false;
 	}
 	
 	ctx->initialized = true;
-	ctx->maxConnections = 32;
-	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	
 	/* Initialize delayed volume broadcast */
 	ctx->delayedVolumeBroadcast.pending = false;
-	pthread_mutex_init(&ctx->volumeBroadcastMutex, NULL);
 	
 	/* Initialize system volume polling state */
 	ctx->lastPolledVolume = -1;  /* Unknown until first poll */
@@ -616,18 +1046,19 @@ bool BarWebsocketInit(BarApp_t *app) {
 	log_write(DEBUG_WEBSOCKET, "Server started on port %d\n",
 	        app->settings.websocketPort);
 	
+	/* The worker and its queue exist before the first receive callback */
+	if (!BarWebsocketWorkerStart (app)) {
+		BarWsContextFree (app);
+		return false;
+	}
+	
 	/* Start WebSocket thread */
 	ctx->threadRunning = true;
-	if (pthread_create(&ctx->thread, NULL, BarWebsocketThread, app) != 0) {
+	if (BarWsThreadCreate (&ctx->thread, BarWebsocketThread, app) != 0) {
 		log_write(LOG_ERROR, "Failed to create thread\n");
-		
-		/* Cleanup on failure */
-		lws_context_destroy(ctx->context);
-		free(ctx->connections);
-		pthread_mutex_destroy(&ctx->volumeBroadcastMutex);
-		BarWsOutboxFree (ctx->outbox);
-		free(ctx);
-		app->wsContext = NULL;
+		/* No client could connect yet: the worker is idle */
+		BarWsWorkerJoin (app, false);
+		BarWsContextFree (app);
 		return false;
 	}
 	
@@ -646,6 +1077,9 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
+	/* No command runs after this; frames received meanwhile are dropped */
+	BarWebsocketWorkerStop (app);
+	
 	/* Signal thread to stop */
 	ctx->threadRunning = false;
 	
@@ -659,28 +1093,8 @@ void BarWebsocketDestroy(BarApp_t *app) {
 	pthread_join(ctx->thread, NULL);
 	log_write(DEBUG_WEBSOCKET, "Thread stopped\n");
 	
-	/* Now safe to cleanup (thread is dead). Destroying the lws context
-	 * closes every connection (CLOSED frees its pending frames); no writable
-	 * callback runs after this point. */
-	if (ctx->context) {
-		lws_context_destroy(ctx->context);
-		ctx->context = NULL;
-	}
-	
-	pthread_mutex_destroy(&ctx->volumeBroadcastMutex);
-	
-	if (ctx->connections) {
-		for (size_t i = 0; i < ctx->maxConnections; i++) {
-			BarWsClientQueueClear (&ctx->connections[i].pending);
-		}
-		free(ctx->connections);
-		ctx->connections = NULL;
-	}
-	BarWsOutboxFree (ctx->outbox);
-	ctx->outbox = NULL;
-	
-	free(ctx);
-	app->wsContext = NULL;
+	/* Both threads are gone: free the transport */
+	BarWsContextFree (app);
 	
 	log_write(DEBUG_WEBSOCKET, "Server stopped\n");
 }
@@ -719,6 +1133,9 @@ static bool BarWsSent (const BarWsContext_t *ctx, bool queued) {
 	return queued;
 }
 
+/* The BarWebsocket* senders keep the non-const BarApp_t API of websocket.h:
+ * const here would cascade through the whole websocket_bridge.h family. */
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
                        char *message) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
@@ -729,6 +1146,7 @@ bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
 			strlen (message)));
 }
 
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 bool BarWebsocketBroadcastSongStart (BarApp_t *app, char *message) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
 	if (!ctx) {
@@ -745,6 +1163,7 @@ uint32_t BarWebsocketSongGeneration (BarApp_t *app) {
 	return BarWsOutboxGeneration (((BarWsContext_t *) app->wsContext)->outbox);
 }
 
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 bool BarWebsocketBroadcastProgress (BarApp_t *app, uint32_t observedGeneration,
                                     char *message) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
@@ -755,6 +1174,7 @@ bool BarWebsocketBroadcastProgress (BarApp_t *app, uint32_t observedGeneration,
 			observedGeneration, message, strlen (message)));
 }
 
+// cppcheck-suppress [constParameterPointer, unmatchedSuppression]
 void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
                                              uint64_t epoch) {
 	BarWsContext_t *ctx = BarWsSendContext (app, message);
@@ -765,44 +1185,4 @@ void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
 		BarWsOutboxPushPlayState (ctx->outbox, epoch, message, strlen (message));
 		BarWsWake (ctx);
 	}
-}
-
-/* Handle incoming WebSocket message */
-void BarWebsocketHandleMessage (BarApp_t *app, const char *message,
-                                size_t len, const char *protocol,
-                                BarWsConnId_t requester) {
-	if (!app || !message || len == 0) {
-		return;
-	}
-	
-	/* Route to appropriate protocol handler */
-	if (strcmp(protocol, "homeassistant") == 0) {
-		/* TODO: Call BarHaBridgeHandleMessage(app, message); */
-		log_write(DEBUG_WEBSOCKET, "HA message received (not yet implemented)\n");
-	} else {
-		/* Default to Socket.IO */
-		BarSocketIoHandleMessage (app, message, requester);
-	}
-}
-
-/* Disconnect all WebSocket clients (used by app.stop) */
-void BarWebsocketDisconnectAllClients(BarApp_t *app) {
-	if (!app || !app->wsContext) {
-		return;
-	}
-	
-	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	log_write(DEBUG_WEBSOCKET, "Disconnecting all clients (%zu connected)\n", 
-	           (size_t) ctx->numConnections);
-	
-	/* Close each connected client on its next writable callback */
-	for (size_t i = 0; i < ctx->maxConnections; i++) {
-		if (ctx->connections[i].wsi != NULL) {
-			BarWsConnectionClose (ctx, &ctx->connections[i],
-			                      LWS_CLOSE_STATUS_GOINGAWAY, "Server stopping");
-		}
-	}
-	
-	log_write(DEBUG_WEBSOCKET, "All clients marked for disconnect\n");
 }

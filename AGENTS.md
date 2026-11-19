@@ -57,7 +57,8 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | C coverage (CI-style) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` (requires `lcov`) |
 | Docker CI repro | `make test-ci-local` |
 | C static analysis | `make lint` / `make lint-test` |
-| AddressSanitizer tests | `make test-asan` |
+| AddressSanitizer + UBSan tests | `make test-asan` |
+| ThreadSanitizer tests | `make test-tsan` |
 | Web UI unit tests | `cd webui && npm ci && npm test -- --run` |
 | Web UI coverage | `cd webui && npm test -- --run --coverage` |
 | Unified build + test | `./build.sh --test` |

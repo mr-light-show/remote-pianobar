@@ -29,8 +29,9 @@ THE SOFTWARE.
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include "queue.h"
+#include "conn_id.h"
 #include "outbox.h"
+#include "commands.h"
 
 /* Note: main.h must be included before this header to get BarApp_t definition */
 
@@ -44,6 +45,10 @@ typedef struct {
 	int closeStatus;              /* WebSocket close status for pendingClose */
 	const char *closeReason;      /* Static, bounded close reason */
 	char protocol[64];            /* Protocol: "socketio" or "homeassistant" */
+	char *rxBuf;                  /* Parts of the message being received */
+	size_t rxLen;                 /* Bytes in rxBuf */
+	bool rxDropping;              /* Dropping the rest of an oversize message */
+	bool busyNotified;            /* Told "busy" since its last accepted request */
 	BarWsClientQueue_t pending;   /* Frames not yet written to this client */
 } BarWsConnection_t;
 
@@ -53,6 +58,16 @@ typedef struct {
 	unsigned int lastBroadcast;   /* Last elapsed time queued */
 	uint32_t lastGeneration;      /* Song generation lastBroadcast belonged to */
 } BarWsProgress_t;
+
+/* The load the heartbeat reported last (diagnostics, service thread only).
+ * Connection count and command sequence are not part of it: they change in
+ * normal operation and are logged where they happen. */
+typedef struct {
+	size_t ingressMsgs, ingressBytes, cmdItems, cmdBytes;
+	size_t worstMsgs, worstBytes;
+	BarWsConnId_t worstId;
+	bool cmdRunning;
+} BarWsDiagSnapshot_t;
 
 /* WebSocket server context */
 typedef struct {
@@ -70,12 +85,22 @@ typedef struct {
 	
 	BarWsProgress_t progress;
 	
+	/* Command worker: receive callbacks (service thread) push requests, one
+	 * worker thread runs them in FIFO order. commands outlives the worker
+	 * (closed by WorkerStop, freed by Destroy after the service thread). */
+	BarWsCommandQueue_t *commands;
+	pthread_t worker;
+	bool workerStarted;           /* Lifecycle owner only */
+	
 	/* Delayed volume broadcast (for debouncing) */
 	struct {
 		time_t scheduleTime;    /* When to broadcast (epoch ms) */
 		bool pending;           /* Whether broadcast is pending */
 	} delayedVolumeBroadcast;
 	pthread_mutex_t volumeBroadcastMutex;
+	/* Service-loop timer (lws_sorted_usec_list_t) for the volume debounce
+	 * and the system-volume poll; service thread only */
+	void *timer;
 	
 	/* System volume polling (for detecting external changes) */
 	int lastPolledVolume;         /* Last known system volume (-1 = unknown) */
@@ -87,6 +112,20 @@ typedef struct {
 	                                * any thread may read it lock-free */
 	size_t maxConnections;
 	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
+	/* Diagnostics (service thread only): the command-queue-full episode
+	 * and the rate limit of the table-full error */
+	bool cmdRefusing;             /* refusing until the queue drains to half */
+	size_t cmdRefused;            /* requests refused in this episode */
+	long long tableFullNextMs;    /* earliest next table-full error */
+	unsigned int tableFullSuppressed;
+	bool tableHigh;               /* reached 75% full, not yet below 50% */
+	_Atomic uint64_t stallSeq;    /* command the long-running check watches;
+	                               * atomic so tests may read it */
+	long long stallNextMs;        /* when to check it next */
+	_Atomic unsigned int stallReports; /* long-running-command reports so far;
+	                                    * atomic so any thread may read it */
+	long long heartbeatNextMs;    /* 0: not scheduled */
+	BarWsDiagSnapshot_t lastHeartbeat;
 	/* Socket adapters (NULL = libwebsockets); seams so tests can drive
 	 * delivery with fake clients. writeFrame is the only socket write and is
 	 * called only from the writable handler. */
@@ -97,8 +136,35 @@ typedef struct {
 /* Initialize WebSocket server */
 bool BarWebsocketInit(BarApp_t *app);
 
-/* Destroy WebSocket server */
+/* Destroy WebSocket server: stops the command worker, then the service
+ * thread, then frees the transport. Lifecycle owner only; every other
+ * producer (playback manager, CLI) must have stopped first. */
 void BarWebsocketDestroy(BarApp_t *app);
+
+/* Command worker lifecycle. Production code only reaches these through
+ * BarWebsocketInit/BarWebsocketDestroy; they are public as test seams
+ * (worker tests on a fake-client context).
+ *
+ * Start the command worker and its queue (Init does this before the service
+ * thread starts). A closed queue left by an earlier Stop is freed first (a
+ * restart exists only for tests), so no service thread may be running.
+ * Returns false, with nothing started or allocated, on failure. */
+bool BarWebsocketWorkerStart (BarApp_t *app);
+/* Stop admission (queued commands are dropped and freed), abort the
+ * command's Pandora requests (in flight or not yet started) through the
+ * shutdown flag (BarInterruptSetShutdown) and join the worker.
+ * Replies the worker has not delivered yet are abandoned. Lifecycle owner
+ * only: from the worker itself (e.g. inside app.quit) it logs and returns. */
+void BarWebsocketWorkerStop (BarApp_t *app);
+/* Test seam: replaces pthread_create for the worker and service threads
+ * (NULL restores it). */
+typedef int (*BarWsThreadCreate_fn) (pthread_t *thread, void *(*fn) (void *),
+                                     void *arg);
+void BarWebsocketSetTestThreadCreateHook (BarWsThreadCreate_fn hook);
+/* Test seam: replaces the monotonic millisecond clock of the diagnostics
+ * (NULL restores it). */
+typedef long long (*BarWsClock_fn) (void);
+void BarWebsocketSetTestClock (BarWsClock_fn clock);
 
 /*
  * Queue a pre-formatted Socket.IO event for `dest` (a connection ID or
@@ -135,16 +201,28 @@ void BarWsServiceOutbox (BarWsContext_t *ctx);
  * Returns -1 when libwebsockets must close the connection. */
 int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi);
 
+/* Service thread: log the long-running-command check and the heartbeat
+ * that are due (DEBUG_WEBSOCKET only). Returns the milliseconds until the
+ * next one is due, or -1 when that debugging is off (nothing to arm). */
+long long BarWsServiceDiagnostics (BarWsContext_t *ctx);
+
 /* Service-thread connection table updates (exposed for tests).
- * Add returns the new connection's ID, or 0 if the table is full. Remove
- * frees the connection's pending frames. */
+ * Add returns the new connection's ID, or BAR_WS_CONN_NONE if the table is
+ * full. Remove frees the connection's pending frames and partial message. */
 BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
                                   const char *protocol);
-void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi);
-/* Receive-callback body: dispatch a frame from `wsi` as its connection's
- * request. Frames from a connection missing from the table (e.g. it was
- * full) are dropped, never handled as requester 0. Service thread only. */
-void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len);
+void BarWsConnectionRemove (BarWsContext_t *ctx, const void *wsi);
+/* Receive-callback body: queue a message from `wsi` for the command worker
+ * as its connection's request; nothing is executed here. `final` is false
+ * for every part of a message but the last; parts are collected per
+ * connection. A message longer than WS_CMD_MAX_REQUEST_BYTES is dropped
+ * whole, tail included (the connection stays open). A full command queue
+ * answers the requester with a localized error, once until one of its
+ * requests is accepted again; a closed one (shutdown) drops silently.
+ * Frames from a connection missing from the table (e.g. it was full) are
+ * dropped, never handled as requester 0. Service thread only. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
+                         bool final);
 
 /* Same ownership contract; broadcasts a completed play state unless an
  * older epoch than the newest accepted one (checked under the ingress lock;
@@ -157,17 +235,10 @@ void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
 /* Get current elapsed time */
 unsigned int BarWebsocketGetElapsed(BarApp_t *app);
 
-/* Handle incoming WebSocket message from the client `requester` */
-void BarWebsocketHandleMessage (BarApp_t *app, const char *message,
-                                size_t len, const char *protocol,
-                                BarWsConnId_t requester);
-
 /* Schedule delayed volume broadcast (for debouncing) */
 void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs);
 /* Execute a due debounced volume event using the current canonical value. */
 void BarWsProcessVolumeBroadcast(BarWsContext_t *ctx, BarApp_t *app);
 
-/* Close every WebSocket client (used by app.stop). Service thread only. */
-void BarWebsocketDisconnectAllClients(BarApp_t *app);
 
 #endif /* _WEBSOCKET_H */

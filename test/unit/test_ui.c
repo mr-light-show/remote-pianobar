@@ -27,12 +27,25 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../../src/main.h"
 #include "../../src/settings.h"
 #include "../../src/bar_state.h"
 #include "../../src/ui.h"
 #include "../../src/libpiano/piano.h"
+#include "../../src/ui_dispatch.h"
+#include <errno.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <time.h>
+#include "../test_tmp.h"
+#include "../../src/interrupt.h"
 
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
@@ -293,6 +306,352 @@ START_TEST (test_ui_piano_call_http_hits_progress_cb)
 }
 END_TEST
 
+/* While shutdown is requested curl's progress callback aborts the request,
+ * whatever the request's own interrupt flag says */
+START_TEST (test_progress_cb_aborts_on_shutdown)
+{
+	_Atomic sig_atomic_t interrupted = 0;
+
+	BarInterruptSetShutdown (true);
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 1);
+	BarInterruptSetShutdown (false);
+	ck_assert_int_eq (progressCb (&interrupted, 0, 0, 0, 0), 0);
+}
+END_TEST
+
+/* A loopback listener on a kernel-chosen port */
+static int ui_listen_loopback (uint16_t *port) {
+	struct sockaddr_in addr;
+	socklen_t len = sizeof (addr);
+	const int fd = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (fd, 0);
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	ck_assert_int_eq (listen (fd, 8), 0);
+	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
+	*port = ntohs (addr.sin_port);
+	return fd;
+}
+
+/* App for a real login request (partner login, TLS) to 127.0.0.1:port */
+static void ui_http_app_init (BarApp_t *app, PianoRequestDataLogin_t *login,
+		uint16_t port, unsigned int maxRetry) {
+	char portStr[8];
+
+	memset (app, 0, sizeof (*app));
+	memset (login, 0, sizeof (*login));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_BOTH;
+	free (app->settings.rpcHost);
+	free (app->settings.rpcTlsPort);
+	snprintf (portStr, sizeof (portStr), "%u", (unsigned int) port);
+	app->settings.rpcHost = strdup ("127.0.0.1");
+	app->settings.rpcTlsPort = strdup (portStr);
+	app->settings.timeout = 5;
+	app->settings.maxRetry = maxRetry;
+	app->settings.username = strdup ("user");
+	app->settings.password = strdup ("pass");
+	BarStateInit (app);
+	BarUiPianoHttpMutexInit (app);
+	app->http = curl_easy_init ();
+	ck_assert_ptr_nonnull (app->http);
+	ck_assert_int_eq (PianoInit (&app->ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	login->user = app->settings.username;
+	login->password = app->settings.password;
+	BarUiPianoCallClearTestHook ();
+}
+
+static void ui_http_app_free (BarApp_t *app) {
+	curl_easy_cleanup (app->http);
+	app->http = NULL;
+	PianoDestroy (&app->ph);
+	BarUiPianoHttpMutexDestroy (app);
+	BarStateDestroy (app);
+	BarSettingsDestroy (&app->settings);
+}
+
+/* Shutdown requested before the call: no connection is made at all */
+START_TEST (test_ui_piano_call_not_sent_after_shutdown)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t login;
+	PianoReturn_t pRet = PIANO_RET_ERR;
+	CURLcode wRet = CURLE_OK;
+	uint16_t port;
+	const int lfd = ui_listen_loopback (&port);
+
+	ui_http_app_init (&app, &login, port, 1);
+	BarInterruptSetShutdown (true);
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &login, &pRet, &wRet));
+	BarInterruptSetShutdown (false);
+	ck_assert_int_eq (wRet, CURLE_ABORTED_BY_CALLBACK);
+
+	struct pollfd pfd = { .fd = lfd, .events = POLLIN };
+	ck_assert_int_eq (poll (&pfd, 1, 200), 0); /* nobody connected */
+	close (lfd);
+	ui_http_app_free (&app);
+}
+END_TEST
+
+/* Accepts connections and hangs up on them; requests shutdown before
+ * hanging up on the first, so the retry that would follow must not start */
+typedef struct {
+	int lfd;
+	int accepted;
+} UiHangupServer_t;
+
+static void *ui_hangup_server (void *arg) {
+	UiHangupServer_t *srv = arg;
+	struct pollfd pfd = { .fd = srv->lfd, .events = POLLIN };
+	while (poll (&pfd, 1, 1000) > 0) {
+		const int fd = accept (srv->lfd, NULL, NULL);
+		if (fd < 0) {
+			break;
+		}
+		if (++srv->accepted == 1) {
+			BarInterruptSetShutdown (true);
+		}
+		close (fd);
+	}
+	return NULL;
+}
+
+START_TEST (test_ui_piano_call_shutdown_stops_retries)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t login;
+	PianoReturn_t pRet = PIANO_RET_ERR;
+	CURLcode wRet = CURLE_OK;
+	UiHangupServer_t srv = { .accepted = 0 };
+	uint16_t port;
+	pthread_t thread;
+
+	srv.lfd = ui_listen_loopback (&port);
+	ui_http_app_init (&app, &login, port, 5);
+	ck_assert_int_eq (pthread_create (&thread, NULL, ui_hangup_server, &srv), 0);
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &login, &pRet, &wRet));
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	BarInterruptSetShutdown (false);
+
+	ck_assert_int_eq (wRet, CURLE_ABORTED_BY_CALLBACK);
+	ck_assert_int_eq (srv.accepted, 1); /* no retry after the hang-up */
+	close (srv.lfd);
+	ui_http_app_free (&app);
+}
+END_TEST
+
+static void *ui_piano_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static bool ui_piano_mutex_held (BarApp_t *app) {
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, ui_piano_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	return (intptr_t) rc == EBUSY;
+}
+
+/* Suspend gives up every hold of this thread (e.g. before terminal input);
+ * Resume takes the same number back */
+START_TEST (test_ui_piano_hold_suspend_resume)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarUiPianoHttpMutexInit (&app);
+
+	ck_assert_uint_eq (BarUiPianoSuspend (&app), 0);
+	BarUiPianoResume (&app, 0);
+	ck_assert (!ui_piano_mutex_held (&app));
+
+	BarUiPianoHold (&app);
+	BarUiPianoHold (&app);
+	ck_assert (ui_piano_mutex_held (&app));
+	const unsigned int holds = BarUiPianoSuspend (&app);
+	ck_assert_uint_eq (holds, 2);
+	ck_assert (!ui_piano_mutex_held (&app));
+	BarUiPianoResume (&app, holds);
+	ck_assert (ui_piano_mutex_held (&app));
+	BarUiPianoRelease (&app);
+	ck_assert (ui_piano_mutex_held (&app));
+	BarUiPianoRelease (&app);
+	ck_assert (!ui_piano_mutex_held (&app));
+
+	BarUiPianoHttpMutexDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_ui_dispatch_piano_lock_policy)
+{
+	BarApp_t app;
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.keys[BAR_KS_LOVE] = '+';
+
+	ck_assert_int_eq (BarUiDispatchKeyToId (&app, '+'), BAR_KS_LOVE);
+	ck_assert_int_eq (BarUiDispatchKeyToId (&app, '\x7f'), BAR_KS_COUNT);
+	ck_assert (BarUiDispatchHoldsPianoLock (BAR_KS_LOVE));
+	ck_assert (BarUiDispatchHoldsPianoLock (BAR_KS_EXPLAIN));
+	ck_assert (!BarUiDispatchHoldsPianoLock (BAR_KS_PLAYPAUSE));
+	ck_assert (!BarUiDispatchHoldsPianoLock (BAR_KS_PANDORA_RECONNECT));
+	ck_assert (!BarUiDispatchHoldsPianoLock (BAR_KS_COUNT));
+
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static void ui_input_from_string (BarApp_t *app, const char *text) {
+	int pipefd[2];
+	ck_assert_int_eq (pipe (pipefd), 0);
+	ck_assert (write (pipefd[1], text, strlen (text)) == (ssize_t) strlen (text));
+	close (pipefd[1]);
+	FD_ZERO (&app->input.set);
+	FD_SET (pipefd[0], &app->input.set);
+	app->input.fds[0] = pipefd[0];
+	app->input.fds[1] = -1;
+	app->input.maxfd = pipefd[0] + 1;
+}
+
+static unsigned g_selectCallbackCalls;
+
+static void select_callback_toggles_all (BarApp_t *app, char *buf) {
+	g_selectCallbackCalls++;
+	if (strcmp (buf, "t") == 0) {
+		BarStateChangeQuickMixAll (app, BAR_QUICKMIX_TOGGLE_ALL);
+		*buf = '\0';
+	}
+}
+
+/* B4: stations are picked from a copy and returned by id */
+START_TEST (test_ui_select_station_id_returns_copied_id)
+{
+	BarApp_t app;
+	PianoStation_t a, b;
+	memset (&app, 0, sizeof (app));
+	memset (&a, 0, sizeof (a));
+	memset (&b, 0, sizeof (b));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	app.settings.sortOrder = BAR_SORT_NAME_AZ;
+	BarStateInit (&app);
+	a.id = "id-a";
+	a.name = "Alpha";
+	b.id = "id-b";
+	b.name = "Beta";
+	b.displayName = "Bravo";
+	app.ph.stations = PianoListAppendP (&a, &b);
+
+	/* "t" goes to the callback (which changes the list), then pick #1 */
+	g_selectCallbackCalls = 0;
+	ui_input_from_string (&app, "t\n1\n");
+	char *id = BarUiSelectStationId (&app, "Pick: ", select_callback_toggles_all, false);
+	ck_assert_str_eq (id, "id-b");
+	ck_assert_uint_eq (g_selectCallbackCalls, 1);
+	ck_assert (a.useQuickMix && b.useQuickMix);
+	free (id);
+	close (app.input.fds[0]);
+
+	/* Autoselect the only station matching the filter */
+	ui_input_from_string (&app, "Bra\n");
+	id = BarUiSelectStationId (&app, "Pick: ", NULL, true);
+	ck_assert_str_eq (id, "id-b");
+	free (id);
+	close (app.input.fds[0]);
+
+	/* Empty input aborts */
+	ui_input_from_string (&app, "\n");
+	ck_assert_ptr_null (BarUiSelectStationId (&app, "Pick: ", NULL, false));
+	close (app.input.fds[0]);
+
+	/* No stations */
+	app.ph.stations = NULL;
+	ck_assert_ptr_null (BarUiSelectStationId (&app, "Pick: ", NULL, false));
+
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	const char *fifo;
+	atomic_bool sawReleased;
+} BarTestEventcmdProbe_t;
+
+/* Waits (bounded) until pianoHttpMutex can be taken, then lets the fake
+ * eventcmd exit by writing to the FIFO it blocks on. */
+static void *eventcmd_probe_thread (void *arg) {
+	BarTestEventcmdProbe_t *p = arg;
+	for (int i = 0; i < 2000; i++) {
+		if (pthread_mutex_trylock (&p->app->pianoHttpMutex) == 0) {
+			pthread_mutex_unlock (&p->app->pianoHttpMutex);
+			atomic_store (&p->sawReleased, true);
+			break;
+		}
+		usleep (1000);
+	}
+	int fd = -1;
+	for (int i = 0; i < 5000 && fd == -1; i++) {
+		fd = open (p->fifo, O_WRONLY | O_NONBLOCK);
+		if (fd == -1) {
+			usleep (1000);
+		}
+	}
+	ck_assert_int_ne (fd, -1);
+	ck_assert (write (fd, "x\n", 2) == 2);
+	close (fd);
+	return NULL;
+}
+
+/* The eventcmd child is reaped without the caller's pianoHttpMutex hold, so
+ * a slow script does not stall other Pandora users */
+START_TEST (test_ui_eventcmd_wait_releases_piano_hold)
+{
+	BarApp_t app;
+	char dir[512], script[600], fifo[600];
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	BarUiPianoHttpMutexInit (&app);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "eventcmd"));
+	snprintf (fifo, sizeof (fifo), "%s/release", dir);
+	ck_assert_int_eq (mkfifo (fifo, 0600), 0);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	fprintf (f, "#!/bin/sh\ncat > /dev/null\nread x < '%s'\n", fifo);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	app.settings.eventCmd = strdup (script);
+
+	BarTestEventcmdProbe_t probe = { .app = &app, .fifo = fifo };
+	atomic_init (&probe.sawReleased, false);
+	pthread_t thread;
+	BarUiPianoHold (&app);
+	ck_assert_int_eq (pthread_create (&thread, NULL, eventcmd_probe_thread, &probe), 0);
+	BarUiStartEventCmd (&app.settings, "songstart", NULL, NULL, &app.player,
+			NULL, PIANO_RET_OK, CURLE_OK);
+	/* The hold is restored for the caller */
+	ck_assert (ui_piano_mutex_held (&app));
+	BarUiPianoRelease (&app);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	ck_assert (atomic_load (&probe.sawReleased));
+
+	pthread_mutex_destroy (&app.player.lock);
+	BarUiPianoHttpMutexDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -307,6 +666,13 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_progress_cb_returns_interrupt_state);
 	tcase_add_test (tc, test_ui_piano_call_logged_delegates_to_hook);
 	tcase_add_test (tc, test_ui_piano_call_http_hits_progress_cb);
+	tcase_add_test (tc, test_progress_cb_aborts_on_shutdown);
+	tcase_add_test (tc, test_ui_piano_call_not_sent_after_shutdown);
+	tcase_add_test (tc, test_ui_piano_call_shutdown_stops_retries);
+	tcase_add_test (tc, test_ui_piano_hold_suspend_resume);
+	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
+	tcase_add_test (tc, test_ui_select_station_id_returns_copied_id);
+	tcase_add_test (tc, test_ui_eventcmd_wait_releases_piano_hold);
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;

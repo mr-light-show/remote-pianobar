@@ -32,6 +32,7 @@ THE SOFTWARE.
 
 #include "../../src/bar_state.h"
 #include "../test_tmp.h"
+#include "../test_helpers.h"
 #include "../../src/interrupt.h"
 #include "../../src/playback_lifecycle.h"
 #include "../../src/settings.h"
@@ -39,6 +40,7 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/ui.h"
 #include <errno.h>
+#include <stdint.h>
 
 /* Substitute only the OS creation failure; lifecycle/reset behavior stays real. */
 static int failed_player_create (pthread_t *thread, const pthread_attr_t *attr,
@@ -47,6 +49,13 @@ static int failed_player_create (pthread_t *thread, const pthread_attr_t *attr,
 	return EAGAIN;
 }
 #define pthread_create failed_player_create
+
+/* A stream URL nobody listens on (connections are refused); valid until the
+ * next call */
+static char *refused_url (const char *path) {
+	static char url[64];
+	return test_refused_url (url, sizeof (url), path);
+}
 #define BarPlaybackStartSong BarTestPlaybackStartSong
 #define BarPlaybackFetchPlaylist BarTestPlaybackFetchPlaylist
 #include "../../src/playback_lifecycle.c"
@@ -70,6 +79,10 @@ static void setup_playback_app (BarApp_t *app) {
 }
 
 static void teardown_playback_app (BarApp_t *app) {
+	/* The playback manager frees the URL copy after joining the player; a
+	 * test that started one directly and joined it itself frees it here */
+	free (app->player.url);
+	app->player.url = NULL;
 	BarStateSetPlaylist (app, NULL);
 	BarPlayerDestroy (&app->player);
 	BarStateDestroy (app);
@@ -83,7 +96,7 @@ START_TEST (test_playback_creation_failure_clears_pending_join)
 	BarApp_t app;
 	setup_playback_app (&app);
 	PianoStation_t station = {.id = "creation-failure", .name = "Creation"};
-	PianoSong_t song = {.title = "Creation", .artist = "Fixture", .audioUrl = "http://127.0.0.1:9/tone.mp3"};
+	PianoSong_t song = {.title = "Creation", .artist = "Fixture", .audioUrl = refused_url ("tone.mp3")};
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
 	pthread_t worker = 0;
@@ -123,7 +136,7 @@ static void setup_playback_app_with_piano (BarApp_t *app) {
 	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);
 	BarPlayerInit (&app->player, &app->settings);
 
-	ck_assert_int_eq (pthread_mutex_init (&app->pianoHttpMutex, NULL), 0);
+	BarUiPianoHttpMutexInit (app);
 	ck_assert_int_eq (PianoInit (&app->ph, app->settings.partnerUser,
 	                             app->settings.partnerPassword,
 	                             app->settings.device, app->settings.inkey,
@@ -136,7 +149,7 @@ static void teardown_playback_app_with_piano (BarApp_t *app) {
 	free (app->lastStationId);
 	app->lastStationId = NULL;
 	PianoDestroy (&app->ph);
-	pthread_mutex_destroy (&app->pianoHttpMutex);
+	BarUiPianoHttpMutexDestroy (app);
 	teardown_playback_app (app);
 }
 
@@ -155,7 +168,7 @@ static PianoSong_t *alloc_song (const char *title) {
 	song->artist = strdup ("Artist");
 	song->album = strdup ("Album");
 	song->detailUrl = strdup ("");
-	song->audioUrl = strdup ("http://127.0.0.1:9/recovered.mp3");
+	song->audioUrl = strdup (refused_url ("recovered.mp3"));
 	song->length = 1;
 	return song;
 }
@@ -241,6 +254,95 @@ START_TEST (test_playback_fetch_playlist_auto_recovers_session)
 	ck_assert_ptr_nonnull (BarStateGetNextStation (&app));
 	ck_assert_str_eq (BarStateGetNextStation (&app)->id, "station-recover");
 	ck_assert (!atomic_load (&app.autoRecoverFailed));
+
+	teardown_playback_app_with_piano (&app);
+}
+END_TEST
+
+static void *lifecycle_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static bool lifecycle_mutex_held (BarApp_t *app) {
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, lifecycle_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	return (intptr_t) rc == EBUSY;
+}
+
+static bool g_fetch_station_was_locked;
+
+/* The hook replaces BarUiPianoCall: the mutex is held only if the fetch took
+ * it before reading nextStation */
+static bool mock_fetch_records_mutex (BarApp_t * const app,
+                                      const PianoRequestType_t type,
+                                      void * const data,
+                                      PianoReturn_t * const pRet,
+                                      CURLcode * const wRet) {
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	ck_assert_int_eq (type, PIANO_REQUEST_GET_PLAYLIST);
+	PianoRequestDataGetPlaylist_t *req = data;
+	ck_assert_ptr_eq (req->station, app->nextStation);
+	g_fetch_station_was_locked = lifecycle_mutex_held (app);
+	req->retPlaylist = alloc_song ("Fetched");
+	return true;
+}
+
+/* B3: nextStation is resolved inside pianoHttpMutex, not read before
+ * waiting for it */
+START_TEST (test_playback_fetch_playlist_resolves_station_under_piano_mutex)
+{
+	BarApp_t app;
+	PianoStation_t *station;
+
+	setup_playback_app_with_piano (&app);
+	station = alloc_station ("station-locked", "Locked");
+	app.ph.stations = station;
+	BarStateSetNextStation (&app, station);
+
+	g_fetch_station_was_locked = false;
+	BarUiPianoCallSetTestHook (mock_fetch_records_mutex);
+	ck_assert (BarPlaybackFetchPlaylist (&app));
+	ck_assert (g_fetch_station_was_locked);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), station);
+	ck_assert (!lifecycle_mutex_held (&app));
+
+	teardown_playback_app_with_piano (&app);
+}
+END_TEST
+
+/* The station can disappear while the fetch waits for the mutex */
+START_TEST (test_playback_fetch_playlist_without_next_station_skips_request)
+{
+	BarApp_t app;
+	char dir[512], script[600], marker[600];
+	setup_playback_app_with_piano (&app);
+
+	/* No fetch happened, so no stationfetchplaylist event either */
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "fetch_eventcmd"));
+	snprintf (marker, sizeof (marker), "%s/ran", dir);
+	snprintf (script, sizeof (script), "%s/eventcmd.sh", dir);
+	FILE *f = fopen (script, "w");
+	ck_assert_ptr_nonnull (f);
+	fprintf (f, "#!/bin/sh\ncat > /dev/null\ntouch '%s'\n", marker);
+	fclose (f);
+	ck_assert_int_eq (chmod (script, 0700), 0);
+	free (app.settings.eventCmd);
+	app.settings.eventCmd = strdup (script);
+
+	BarUiPianoCallSetTestHook (mock_fetch_records_mutex);
+	ck_assert (!BarPlaybackFetchPlaylist (&app));
+	ck_assert_ptr_null (BarStateGetPlaylist (&app));
+	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
+	ck_assert_ptr_null (app.lastStationId);
+	ck_assert_int_ne (access (marker, F_OK), 0);
 
 	teardown_playback_app_with_piano (&app);
 }
@@ -485,7 +587,7 @@ START_TEST (test_playback_start_succeeds_with_http_url)
 	station.name = "HTTP Station";
 	song.title = "HTTP Song";
 	song.artist = "Artist";
-	song.audioUrl = "http://127.0.0.1:9/unreachable.mp3";
+	song.audioUrl = refused_url ("unreachable.mp3");
 	song.fileGain = 1.0;
 	song.length = 30;
 
@@ -502,6 +604,45 @@ START_TEST (test_playback_start_succeeds_with_http_url)
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
 	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
+
+	teardown_playback_app (&app);
+}
+END_TEST
+
+/* The player owns a copy of the URL: a drain that frees the song while the
+ * player thread is still opening the stream must not leave it reading freed
+ * memory (ASan). The copy is released after the player thread is joined. */
+START_TEST (test_playback_start_copies_audio_url)
+{
+	BarApp_t app;
+	PianoSong_t song;
+	PianoStation_t station = {.id = "station-copy", .name = "Copy Station"};
+	pthread_t playerThread = 0;
+
+	memset (&song, 0, sizeof (song));
+	setup_playback_app (&app);
+	song.title = "Copy Song";
+	song.artist = "Artist";
+	song.audioUrl = strdup (refused_url ("unreachable.mp3"));
+	ck_assert_ptr_nonnull (song.audioUrl);
+	BarStateSetCurrentStation (&app, &station);
+	BarStateSetPlaylist (&app, &song);
+
+	ck_assert (BarPlaybackStartSong (&app, &playerThread));
+	ck_assert_ptr_nonnull (app.player.url);
+	ck_assert_ptr_ne (app.player.url, song.audioUrl);
+	ck_assert_str_eq (app.player.url, song.audioUrl);
+	/* The song goes away (as in a teardown drain) at once */
+	free (song.audioUrl);
+	song.audioUrl = NULL;
+
+	BarInterruptSetTarget (&app.player.interrupted);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.doQuit = true;
+	pthread_cond_broadcast (&app.player.cond);
+	pthread_mutex_unlock (&app.player.lock);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
+	BarInterruptSetTarget (NULL);
 
 	teardown_playback_app (&app);
 }
@@ -528,7 +669,7 @@ START_TEST (test_playback_start_quickmix_uses_song_station_lookup)
 	song.stationId = mixStation.id;
 	song.title = "Mix Song";
 	song.artist = "Artist";
-	song.audioUrl = "http://127.0.0.1:9/mix.mp3";
+	song.audioUrl = refused_url ("mix.mp3");
 
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
@@ -562,7 +703,7 @@ START_TEST (test_playback_start_song_rearms_auto_recover)
 	station.name = "Rearm Station";
 	song.title = "Rearm Song";
 	song.artist = "Artist";
-	song.audioUrl = "http://127.0.0.1:9/unreachable.mp3";
+	song.audioUrl = refused_url ("unreachable.mp3");
 
 	BarStateSetCurrentStation (&app, &station);
 	BarStateSetPlaylist (&app, &song);
@@ -593,7 +734,7 @@ START_TEST (test_playback_start_stops_after_terminal_reset_failure)
 {
 	BarApp_t app;
 	PianoSong_t song = {.title = "Terminal Song", .artist = "Artist",
-		.audioUrl = "http://127.0.0.1:9/unreachable.mp3"};
+		.audioUrl = refused_url ("unreachable.mp3")};
 	PianoStation_t station = {.id = "station-terminal", .name = "Terminal Station"};
 	pthread_t playerThread = 0;
 	setup_playback_app (&app);
@@ -635,10 +776,13 @@ Suite *playback_lifecycle_suite (void) {
 	tcase_add_test (tc, test_playback_start_rejects_missing_current_station);
 	tcase_add_test (tc, test_playback_start_rejects_non_http_audio_url);
 	tcase_add_test (tc, test_playback_start_succeeds_with_http_url);
+	tcase_add_test (tc, test_playback_start_copies_audio_url);
 	tcase_add_test (tc, test_playback_start_quickmix_uses_song_station_lookup);
 	tcase_add_test (tc, test_playback_start_song_rearms_auto_recover);
 	tcase_add_test (tc, test_playback_start_stops_after_terminal_reset_failure);
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_session);
+	tcase_add_test (tc, test_playback_fetch_playlist_resolves_station_under_piano_mutex);
+	tcase_add_test (tc, test_playback_fetch_playlist_without_next_station_skips_request);
 	tcase_add_test (tc, test_playback_fetch_playlist_auto_recovers_only_once);
 	tcase_add_test (tc, test_playback_fetch_playlist_disconnects_when_retry_fails);
 	tcase_add_test (tc, test_playback_fetch_playlist_interrupted_skips_recovery);

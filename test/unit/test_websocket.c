@@ -37,6 +37,9 @@ THE SOFTWARE.
 #include "../../src/websocket/protocol/socketio.h"
 #include "../../src/websocket/daemon/daemon.h"
 #include "../../src/log.h"
+#include "../../src/ui.h"
+#include "../../src/interrupt.h"
+#include <errno.h>
 #include <json-c/json.h>
 #include <libwebsockets.h>
 #include <pthread.h>
@@ -44,6 +47,7 @@ THE SOFTWARE.
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include "test_ws_capture.h"
+#include "../test_helpers.h"
 
 /* Wire-compat capture buffer */
 static char g_compatBuf[8192];
@@ -327,7 +331,7 @@ static void test_teardown_clients (BarApp_t *app, BarWsContext_t *ctx) {
 
 static BarWsConnId_t test_add_client (BarWsContext_t *ctx, int client) {
 	BarWsConnId_t id = BarWsConnectionAdd (ctx, &test_fake_sockets[client], "socketio");
-	ck_assert_uint_ne (id, BAR_WS_DEST_BROADCAST);
+	ck_assert_uint_ne (id, BAR_WS_CONN_NONE);
 	return id;
 }
 
@@ -547,25 +551,40 @@ START_TEST (test_receive_from_untracked_client_is_dropped)
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
 	test_add_client (&ctx, 0);
-	test_add_client (&ctx, 1);
+	BarWsConnId_t b = test_add_client (&ctx, 1);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
 
 	/* Live but untracked (e.g. the table was full): its query must not turn
-	 * into a broadcast, nor reach anyone else */
-	BarWsHandleReceive (&app, &test_fake_sockets[2], "0", 1);
-	BarWsHandleReceive (&app, &test_fake_sockets[2], "2[\"query\"]", 11);
-	test_drain_all (&ctx);
-	ck_assert_uint_eq (test_written_count, 0);
+	 * into a broadcast, nor reach anyone else, so it is never queued */
+	BarWsHandleReceive (&app, &test_fake_sockets[2], "0", 1, true);
+	BarWsHandleReceive (&app, &test_fake_sockets[2], "2[\"query\"]", 11, true);
 	/* Empty or missing frames are ignored, even from a tracked client */
-	BarWsHandleReceive (&app, &test_fake_sockets[1], "", 0);
-	BarWsHandleReceive (&app, &test_fake_sockets[1], NULL, 5);
-	test_drain_all (&ctx);
-	ck_assert_uint_eq (test_written_count, 0);
+	BarWsHandleReceive (&app, &test_fake_sockets[1], "", 0, true);
+	BarWsHandleReceive (&app, &test_fake_sockets[1], NULL, 5, true);
 	/* Removing a socket that was never tracked leaves the table alone */
 	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]);
 	ck_assert_uint_eq (ctx.numConnections, 2);
 
-	/* A tracked client still gets its reply, and only it */
-	BarWsHandleReceive (&app, &test_fake_sockets[1], "2[\"query\"]", 11);
+	/* A tracked client's request is queued with its ID; the receive path
+	 * runs nothing itself */
+	BarWsHandleReceive (&app, &test_fake_sockets[1], "2[\"query\"]", 11, true);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 0);
+	BarWsConnId_t id = 0;
+	char *text = NULL;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, &id, &text, NULL));
+	ck_assert_uint_eq (id, b);
+	ck_assert_str_eq (text, "2[\"query\"]");
+	/* Nothing else was queued: a sentinel pushed now is next */
+	ck_assert_int_eq (BarWsCommandQueuePush (ctx.commands, 9, "s", 1), BAR_WS_CMD_OK);
+	BarWsConnId_t sentinel = 0;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, &sentinel, NULL, NULL));
+	ck_assert_uint_eq (sentinel, 9);
+
+	/* The worker's step: its reply reaches the requester, and only it */
+	BarSocketIoHandleMessage (&app, text, id);
+	free (text);
 	ck_assert_uint_eq (test_written_count, 0); /* queued, not yet written */
 	test_drain_all (&ctx);
 	ck_assert_uint_eq (test_written_count, 2);
@@ -574,6 +593,7 @@ START_TEST (test_receive_from_untracked_client_is_dropped)
 	ck_assert (strstr (test_written_msg[0], "process") != NULL);
 	ck_assert (strstr (test_written_msg[1], "stations") != NULL);
 
+	BarWsCommandQueueFree (ctx.commands);
 	test_teardown_clients (&app, &ctx);
 }
 END_TEST
@@ -823,55 +843,124 @@ START_TEST (test_overflow_closes_only_that_client)
 }
 END_TEST
 
+/* The command worker's step, run synchronously by the test: pop the next
+ * queued request and run it, as BarWsWorkerThread does; false when none is
+ * queued. Its replies go to the ingress; the service thread moves them on. */
+static bool test_run_one_command (BarApp_t *app, BarWsContext_t *ctx) {
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx->commands, &st);
+	if (st.items == 0) {
+		return false; /* Pop would wait for a request */
+	}
+	BarWsConnId_t requester = 0;
+	char *text = NULL;
+	if (!BarWsCommandQueuePop (ctx->commands, &requester, &text, NULL)) {
+		return false;
+	}
+	BarSocketIoHandleMessage (app, text, requester);
+	free (text);
+	return true;
+}
+
 /* One client flooding requests without reading must neither overflow the
- * ingress nor disconnect a well-behaved client: the service thread drains
- * the ingress while handling the flood, so only the flooder's own queue
- * fills and only it is closed. */
+ * ingress nor disconnect a well-behaved client. Requests now run on the
+ * command worker, so the flood meets two bounds, in this order:
+ *  1. A burst faster than the worker fills the shared command queue
+ *     (WS_CMD_MAX_ITEMS); the rest is refused and the flooder is told busy
+ *     once. Nobody is closed and nothing overflows.
+ *  2. While the worker keeps up, every request runs and its replies land in
+ *     the flooder's own queue; the service thread drains the ingress at high
+ *     water on each receive, so only that queue fills and only the flooder
+ *     is closed. */
 START_TEST (test_flooding_client_does_not_disconnect_others)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
 	test_add_client (&ctx, 0); /* flooder, never reads */
 	test_add_client (&ctx, 1);
-
-	for (int i = 0; i < 4 * WS_CLIENT_MAX_MSGS; i++) {
-		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11);
-	}
 	BarWsConnection_t *flooder = test_conn (&ctx, 0);
+
+	/* 1: the worker is busy elsewhere while a whole burst is parsed */
+	for (int i = 0; i < 4 * WS_CMD_MAX_ITEMS; i++) {
+		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11, true);
+	}
+	BarWsServiceOutbox (&ctx);
+	ck_assert (!flooder->pendingClose);
+	ck_assert_uint_eq (test_pending_count (&ctx, 0), 1); /* busy, once */
+	ck_assert_uint_eq (test_pending_count (&ctx, 1), 0);
+	ck_assert (!test_conn (&ctx, 1)->pendingClose);
+
+	/* 2: the worker runs one request per received one */
+	int sent = 0;
+	while (!flooder->pendingClose && sent < 4 * WS_CLIENT_MAX_MSGS) {
+		ck_assert (test_run_one_command (&app, &ctx));
+		BarWsHandleReceive (&app, &test_fake_sockets[0], "2[\"query\"]", 11, true);
+		sent++;
+	}
 	ck_assert (flooder->pendingClose);
 	ck_assert_str_eq (flooder->closeReason, "Client event queue full");
+	/* It filled at two replies per request after the busy reply */
+	ck_assert_int_eq (sent, (WS_CLIENT_MAX_MSGS - 1) / 2 + 1);
 	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
+	while (test_run_one_command (&app, &ctx)) {
+	}
 	test_drain_all (&ctx);
+	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
 	ck_assert (!test_conn (&ctx, 1)->pendingClose);
 	ck_assert_uint_eq (test_written_count, 0); /* nothing was meant for it */
 
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
 	test_teardown_clients (&app, &ctx);
 }
 END_TEST
 
-/* Several clients requesting state in the same service round (a legitimate
- * burst, e.g. a reconnect wave) overflow nothing and close nobody. */
+/* Several clients requesting state at once (a legitimate burst, e.g. a
+ * reconnect wave) overflow nothing and close nobody, and every reply is
+ * delivered. Each round fills the command queue exactly (no busy reply),
+ * then the worker runs it dry, pushing two replies per request without the
+ * service thread in between; the next round's receives drain the ingress. */
 START_TEST (test_request_burst_from_many_clients_overflows_nothing)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_clients (&app, &ctx);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
 	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
 		test_add_client (&ctx, c);
 	}
-	for (int i = 0; i < 30; i++) {
-		for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
-			BarWsHandleReceive (&app, &test_fake_sockets[c], "2[\"query\"]", 11);
+	const int perRound = WS_CMD_MAX_ITEMS / TEST_MAX_CLIENTS;
+	const int rounds = 4;
+	for (int r = 0; r < rounds; r++) {
+		for (int i = 0; i < perRound; i++) {
+			for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+				BarWsHandleReceive (&app, &test_fake_sockets[c], "2[\"query\"]", 11,
+						true);
+			}
 		}
+		int ran = 0;
+		while (test_run_one_command (&app, &ctx)) {
+			ran++;
+		}
+		ck_assert_int_eq (ran, perRound * TEST_MAX_CLIENTS); /* none refused */
 	}
 	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
 	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
 		ck_assert (!test_conn (&ctx, c)->pendingClose);
 	}
 	test_drain_all (&ctx);
-	ck_assert_uint_eq (test_written_count, (size_t) 30 * 2 * TEST_MAX_CLIENTS);
+	ck_assert_uint_eq (test_written_count,
+			(size_t) rounds * perRound * 2 * TEST_MAX_CLIENTS);
+	for (size_t i = 0; i < test_written_count; i++) {
+		ck_assert (strstr (test_written_msg[i], "busy") == NULL);
+	}
 
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
 	test_teardown_clients (&app, &ctx);
 }
 END_TEST
@@ -971,7 +1060,10 @@ START_TEST (test_large_stations_reply_does_not_close_clients)
 }
 END_TEST
 
-START_TEST (test_disconnect_all_clients_closes_and_frees_pending)
+/* Closing a client frees the frames already waiting for it, and a second
+ * close of the same client changes nothing (both through the ingress-full
+ * policy, the real close path). */
+START_TEST (test_close_frees_queued_frames_and_is_idempotent)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
@@ -980,15 +1072,21 @@ START_TEST (test_disconnect_all_clients_closes_and_frees_pending)
 	test_add_client (&ctx, 1);
 	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"a\"]"));
 	BarWsServiceOutbox (&ctx);
+	ck_assert_uint_eq (test_conn (&ctx, 0)->pending.count, 1);
+	memset (test_writable_requests, 0, sizeof (test_writable_requests));
 
-	BarWebsocketDisconnectAllClients (&app);
-	BarWebsocketDisconnectAllClients (&app); /* idempotent */
+	for (int round = 0; round < 2; round++) {
+		for (int i = 0; i <= WS_INGRESS_MAX_MSGS; i++) {
+			test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]");
+		}
+		BarWsServiceOutbox (&ctx);
+	}
 	for (int c = 0; c < 2; c++) {
 		BarWsConnection_t *conn = test_conn (&ctx, c);
 		ck_assert (conn->pendingClose);
-		ck_assert_str_eq (conn->closeReason, "Server stopping");
-		ck_assert_int_eq (conn->closeStatus, LWS_CLOSE_STATUS_GOINGAWAY);
+		ck_assert_str_eq (conn->closeReason, "Server event queue full");
 		ck_assert_uint_eq (conn->pending.count, 0);
+		ck_assert_uint_eq (test_writable_requests[c], 1); /* closed once */
 		ck_assert_int_eq (test_writable (&ctx, c), -1);
 	}
 	ck_assert_uint_eq (test_written_count, 0);
@@ -1108,16 +1206,6 @@ START_TEST (test_bridge_progress_resumes_after_song_start)
 }
 END_TEST
 
-START_TEST (test_websocket_bridge_disconnect_all_clients_with_context)
-{
-	BarApp_t app;
-	BarWsContext_t ctx;
-	test_setup_web_app (&app, &ctx);
-	BarWsDisconnectAllClients (&app);
-	ck_assert (1);
-	test_teardown_web_app (&app, &ctx);
-}
-END_TEST
 
 START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 	BarApp_t app;
@@ -1215,9 +1303,13 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 	test_setup_web_app (&app, &ctx);
 	memset (&song, 0, sizeof (song));
 	song.title = "Up Next";
+	PianoSong_t playing;
+	memset (&playing, 0, sizeof (playing));
+	playing.head.next = &song.head;
+	app.playlist = &playing;
 
 	BarWsConnId_t requester = compatAttach (&app);
-	BarWsEmitUpcomingTo (&app, requester, &song, 1);
+	ck_assert (BarWsEmitUpcomingTo (&app, requester, 1));
 	TestWsCaptureFlush ();
 	ck_assert (strstr (g_compatBuf, "Up Next") != NULL);
 
@@ -1391,7 +1483,10 @@ START_TEST (test_websocket_init_destroy_emits_debug_lifecycle_logs)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = 18081;
+	app.settings.websocketPort = free_loopback_port ();
+	char started[64];
+	snprintf (started, sizeof (started), "Server started on port %d",
+			app.settings.websocketPort);
 
 	capture_stderr_to_pipe (pipefd, &saved_stderr);
 	log_set_debug_mask (DEBUG_WEBSOCKET);
@@ -1405,7 +1500,7 @@ START_TEST (test_websocket_init_destroy_emits_debug_lifecycle_logs)
 	BarSettingsDestroy (&app.settings);
 
 	ck_assert (n > 0);
-	ck_assert (strstr (buf, "Server started on port 18081") != NULL);
+	ck_assert (strstr (buf, started) != NULL);
 	ck_assert (strstr (buf, "Server stopped") != NULL);
 }
 END_TEST
@@ -1420,7 +1515,7 @@ START_TEST (test_websocket_init_destroy_stops_when_app_quits)
 	BarSettingsInit (&app.settings);
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = 18082;
+	app.settings.websocketPort = free_loopback_port ();
 
 	if (!BarWebsocketInit (&app)) {
 		BarSettingsDestroy (&app.settings);
@@ -1468,34 +1563,24 @@ START_TEST (test_websocket_init_fails_cleanly_when_bind_fails)
 }
 END_TEST
 
-/* A loopback port that was free a moment ago (the kernel picks it) */
-static int test_free_loopback_port (void) {
-	int fd = socket (AF_INET, SOCK_STREAM, 0);
-	ck_assert_int_ge (fd, 0);
-	struct sockaddr_in addr;
-	memset (&addr, 0, sizeof (addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-	addr.sin_port = 0;
-	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
-	socklen_t len = sizeof (addr);
-	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
-	close (fd);
-	return ntohs (addr.sin_port);
-}
-
 /* Real transport: libwebsockets clients talk to the real server (service
  * thread, writable callbacks, lws_write) over loopback. The test thread is a
  * producer for the server and the event loop of the client context. */
 #define TEST_E2E_MAX_MSGS 16
 
+#define TEST_E2E_MAX_OUT 8
+
 typedef struct {
 	struct lws *wsi;
-	bool established, failed, sendQuery;
+	bool established, failed, closed;
+	bool closeNow;                /* hang up on the next writable callback */
 	char *partial;                /* frame being reassembled from fragments */
 	size_t partialLen;
 	char *msgs[TEST_E2E_MAX_MSGS];
 	size_t count;
+	char *out[TEST_E2E_MAX_OUT];  /* frames to send, in order (owned) */
+	int outFlags[TEST_E2E_MAX_OUT]; /* lws_write protocol flags */
+	size_t outCount, outSent;
 } TestE2eClient_t;
 
 static int test_e2e_client_cb (struct lws *wsi, enum lws_callback_reasons reason,
@@ -1512,6 +1597,9 @@ static int test_e2e_client_cb (struct lws *wsi, enum lws_callback_reasons reason
 		case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
 			c->failed = true;
 			break;
+		case LWS_CALLBACK_CLIENT_CLOSED:
+			c->closed = true;
+			break;
 		case LWS_CALLBACK_CLIENT_RECEIVE:
 			c->partial = realloc (c->partial, c->partialLen + len + 1);
 			ck_assert_ptr_nonnull (c->partial);
@@ -1526,13 +1614,22 @@ static int test_e2e_client_cb (struct lws *wsi, enum lws_callback_reasons reason
 			}
 			break;
 		case LWS_CALLBACK_CLIENT_WRITEABLE:
-			if (c->sendQuery) {
-				static const char query[] = "2[\"query\"]";
-				unsigned char buf[LWS_PRE + sizeof (query)];
-				memcpy (&buf[LWS_PRE], query, sizeof (query) - 1);
-				c->sendQuery = false;
-				ck_assert_int_eq (lws_write (wsi, &buf[LWS_PRE], sizeof (query) - 1,
-						LWS_WRITE_TEXT), (int) sizeof (query) - 1);
+			if (c->closeNow) {
+				return -1;
+			}
+			if (c->outSent < c->outCount) {
+				const int flags = c->outFlags[c->outSent];
+				const char *text = c->out[c->outSent++];
+				size_t n = strlen (text);
+				unsigned char *buf = malloc (LWS_PRE + n);
+				ck_assert_ptr_nonnull (buf);
+				memcpy (&buf[LWS_PRE], text, n);
+				ck_assert_int_eq (lws_write (wsi, &buf[LWS_PRE], n,
+						(enum lws_write_protocol) flags), (int) n);
+				free (buf);
+				if (c->outSent < c->outCount) {
+					lws_callback_on_writable (wsi);
+				}
 			}
 			break;
 		default:
@@ -1586,7 +1683,25 @@ static void test_e2e_free (TestE2eClient_t *c) {
 	for (size_t i = 0; i < c->count; i++) {
 		free (c->msgs[i]);
 	}
+	for (size_t i = 0; i < c->outCount; i++) {
+		free (c->out[i]);
+	}
 	free (c->partial);
+}
+
+/* Queue a frame (or, with NO_FIN/CONTINUATION flags, a fragment) for the
+ * client to send, in order, on its writable callbacks */
+static void test_e2e_send_flags (TestE2eClient_t *c, const char *text, int flags) {
+	ck_assert_uint_lt (c->outCount, TEST_E2E_MAX_OUT);
+	c->out[c->outCount] = strdup (text);
+	ck_assert_ptr_nonnull (c->out[c->outCount]);
+	c->outFlags[c->outCount] = flags;
+	c->outCount++;
+	lws_callback_on_writable (c->wsi);
+}
+
+static void test_e2e_send (TestE2eClient_t *c, const char *text) {
+	test_e2e_send_flags (c, text, LWS_WRITE_TEXT);
 }
 
 static void test_e2e_expect (const TestE2eClient_t *c, size_t i, const char *needle) {
@@ -1603,7 +1718,7 @@ START_TEST (test_end_to_end_delivery_order_over_lws)
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = test_free_loopback_port ();
+	app.settings.websocketPort = free_loopback_port ();
 	BarStateInit (&app);
 	pthread_mutex_init (&app.player.lock, NULL);
 	pthread_cond_init (&app.player.cond, NULL);
@@ -1650,8 +1765,7 @@ START_TEST (test_end_to_end_delivery_order_over_lws)
 	}
 
 	/* A query from A (receive path) is answered to A only */
-	a.sendQuery = true;
-	lws_callback_on_writable (a.wsi);
+	test_e2e_send (&a, "2[\"query\"]");
 	test_e2e_pump_until (cctx, &a, 9, &b, 7);
 	test_e2e_expect (&a, 7, "\"process\"");
 	test_e2e_expect (&a, 8, "\"stations\"");
@@ -1687,7 +1801,7 @@ START_TEST (test_frame_at_limit_is_delivered_to_empty_client)
 	app.settings.uiMode = BAR_UI_MODE_WEB;
 	app.settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
 	app.settings.websocketHost = strdup ("127.0.0.1");
-	app.settings.websocketPort = test_free_loopback_port ();
+	app.settings.websocketPort = free_loopback_port ();
 	BarStateInit (&app);
 	pthread_mutex_init (&app.player.lock, NULL);
 	pthread_cond_init (&app.player.cond, NULL);
@@ -1892,9 +2006,13 @@ START_TEST(test_websocket_bridge_upcoming_skips_unknown_requester) {
 	test_setup_web_app (&app, &ctx);
 	memset (&song, 0, sizeof (song));
 	song.title = "Hidden Upcoming";
+	PianoSong_t playing;
+	memset (&playing, 0, sizeof (playing));
+	playing.head.next = &song.head;
+	app.playlist = &playing;
 
 	BarWsConnId_t requester = compatAttach (&app);
-	BarWsEmitUpcomingTo (&app, requester + 1, &song, 1);
+	ck_assert (BarWsEmitUpcomingTo (&app, requester + 1, 1));
 	TestWsCaptureFlush ();
 	ck_assert_str_eq (g_compatBuf, "");
 
@@ -1903,11 +2021,6 @@ START_TEST(test_websocket_bridge_upcoming_skips_unknown_requester) {
 }
 END_TEST
 
-START_TEST(test_websocket_disconnect_all_clients_null_app) {
-	BarWebsocketDisconnectAllClients (NULL);
-	ck_assert (1);
-}
-END_TEST
 
 START_TEST(test_websocket_bridge_both_mode_is_web_active) {
 	BarApp_t app;
@@ -2054,6 +2167,1740 @@ START_TEST (test_wire_compat_stations_is_array)
 END_TEST
 
 /* Create test suite */
+/* ------------------------------------------------------------------------
+ * Command worker
+ * ------------------------------------------------------------------------ */
+
+#define TEST_EXPLAIN "2[\"action\",\"song.explain\"]"
+#define TEST_QUERY   "2[\"query\"]"
+#define TEST_QUIT    "2[\"action\",\"app.quit\"]"
+#define TEST_CMD     "2[\"noop\"]" /* a queued request the worker ignores */
+
+/* Pandora mock for the worker tests. Every call records its thread and
+ * answers EXPLAIN with "why-N" (N = call number). With `block`, the first
+ * call waits until the test opens the gate or the call is interrupted: like
+ * curl's progress callback it watches its own flag, registered as the
+ * interrupt target for the duration of the call (as BarPianoHttpRequest
+ * does), and the shutdown flag. The handler holds pianoHttpMutex meanwhile
+ * (song actions do). */
+typedef struct {
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	bool block, open, interrupted;
+	bool stopFromCall;            /* call BarWebsocketWorkerStop inside */
+	int calls;
+	pthread_t thread;
+	_Atomic sig_atomic_t flag;
+} TestGate_t;
+
+static TestGate_t test_gate;
+
+static bool test_gate_call (BarApp_t * const app, const PianoRequestType_t type,
+		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	pthread_mutex_lock (&test_gate.lock);
+	const int n = ++test_gate.calls;
+	test_gate.thread = pthread_self ();
+	pthread_cond_broadcast (&test_gate.cond);
+	bool aborted = false;
+	if (test_gate.block && n == 1) {
+		_Atomic sig_atomic_t *prev = BarInterruptGetTarget ();
+		BarInterruptSetTarget (&test_gate.flag);
+		while (!test_gate.open && atomic_load (&test_gate.flag) == 0 &&
+				!BarInterruptShutdownRequested ()) {
+			struct timespec ts;
+			clock_gettime (CLOCK_REALTIME, &ts);
+			ts.tv_nsec += 1000000;
+			if (ts.tv_nsec >= 1000000000) {
+				ts.tv_sec++;
+				ts.tv_nsec -= 1000000000;
+			}
+			pthread_cond_timedwait (&test_gate.cond, &test_gate.lock, &ts);
+		}
+		BarInterruptSetTarget (prev);
+		aborted = !test_gate.open;
+		test_gate.interrupted = aborted;
+	}
+	const bool stop = test_gate.stopFromCall;
+	pthread_mutex_unlock (&test_gate.lock);
+	if (stop) {
+		BarWebsocketWorkerStop (app); /* on the worker: must not join itself */
+	}
+	if (aborted) {
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_ABORTED_BY_CALLBACK;
+		return false;
+	}
+	if (type == PIANO_REQUEST_EXPLAIN) {
+		char why[32];
+		snprintf (why, sizeof (why), "why-%d", n);
+		((PianoRequestDataExplain_t *) data)->retExplain = strdup (why);
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+static int test_gate_calls (void) {
+	pthread_mutex_lock (&test_gate.lock);
+	const int n = test_gate.calls;
+	pthread_mutex_unlock (&test_gate.lock);
+	return n;
+}
+
+/* Wait (bounded) until the mock has been called `calls` times. With FIFO
+ * execution, every command queued before that call has finished. */
+static void test_gate_wait_calls (int calls) {
+	struct timespec deadline;
+	clock_gettime (CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += 5;
+	pthread_mutex_lock (&test_gate.lock);
+	while (test_gate.calls < calls) {
+		const int r = pthread_cond_timedwait (&test_gate.cond, &test_gate.lock,
+				&deadline);
+		ck_assert_msg (r != ETIMEDOUT, "timed out waiting for call %d (saw %d)",
+				calls, test_gate.calls);
+	}
+	pthread_mutex_unlock (&test_gate.lock);
+}
+
+static void test_gate_open (void) {
+	pthread_mutex_lock (&test_gate.lock);
+	test_gate.open = true;
+	pthread_cond_broadcast (&test_gate.cond);
+	pthread_mutex_unlock (&test_gate.lock);
+}
+
+static PianoStation_t test_worker_station;
+static PianoSong_t test_worker_song;
+
+/* What the handlers need besides the transport: the recursive Pandora
+ * mutex, a playing song while "connected", player locks for app.quit, and
+ * the mock. No interrupt target, as at startup before main sets one. */
+static void test_worker_app_begin (BarApp_t *app, bool block) {
+	BarUiPianoHttpMutexInit (app);
+	pthread_mutex_init (&app->player.decoderLock, NULL);
+	pthread_cond_init (&app->player.decoderCond, NULL);
+	test_attach_station_and_song (app, &test_worker_station, &test_worker_song);
+	app->ph.user.listenerId = (char *) "listener";
+	BarInterruptSetTarget (NULL);
+	memset (&test_gate, 0, sizeof (test_gate));
+	pthread_mutex_init (&test_gate.lock, NULL);
+	pthread_cond_init (&test_gate.cond, NULL);
+	test_gate.block = block;
+	BarUiPianoCallSetTestHook (test_gate_call);
+}
+
+static void test_worker_app_end (BarApp_t *app) {
+	BarUiPianoCallClearTestHook ();
+	pthread_cond_destroy (&test_gate.cond);
+	pthread_mutex_destroy (&test_gate.lock);
+	app->ph.user.listenerId = NULL;
+	app->ph.stations = NULL;
+	app->curStation = NULL;
+	app->playlist = NULL;
+	pthread_cond_destroy (&app->player.decoderCond);
+	pthread_mutex_destroy (&app->player.decoderLock);
+	BarUiPianoHttpMutexDestroy (app);
+}
+
+/* Fake-client context (the test is the service thread) with a real worker */
+static void test_setup_worker (BarApp_t *app, BarWsContext_t *ctx, bool block) {
+	test_setup_clients (app, ctx);
+	test_worker_app_begin (app, block);
+}
+
+static void test_teardown_worker (BarApp_t *app, BarWsContext_t *ctx) {
+	BarWebsocketWorkerStop (app);
+	BarWsCommandQueueFree (ctx->commands);
+	ctx->commands = NULL;
+	test_worker_app_end (app);
+	test_teardown_clients (app, ctx);
+}
+
+/* One receive callback with a whole frame from fake client `client` */
+static void test_receive (BarApp_t *app, int client, const char *text) {
+	BarWsHandleReceive (app, &test_fake_sockets[client], text, strlen (text), true);
+}
+
+static int test_fail_create_at;   /* fail the Nth thread creation; 0: never */
+static int test_create_calls;
+
+static int test_thread_create (pthread_t *thread, void *(*fn) (void *), void *arg) {
+	if (++test_create_calls == test_fail_create_at) {
+		return EAGAIN;
+	}
+	return pthread_create (thread, NULL, fn, arg);
+}
+
+START_TEST (test_commands_execute_in_fifo_order)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	/* The first command blocks in Pandora; the rest queue up behind it */
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	test_receive (&app, 0, TEST_QUERY);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_receive (&app, 0, TEST_QUERY);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 0); /* nothing overtook it */
+
+	test_gate_open ();
+	test_gate_wait_calls (3); /* the last command runs: all before it replied */
+	BarWebsocketWorkerStop (&app); /* joins after the in-flight command */
+	test_drain_all (&ctx);
+	static const char *const order[] = {"why-1", "\"process\"", "\"stations\"",
+			"why-2", "\"process\"", "\"stations\"", "why-3"};
+	ck_assert_uint_eq (test_written_count, 7);
+	for (size_t i = 0; i < 7; i++) {
+		ck_assert_msg (strstr (test_written_msg[i], order[i]) != NULL,
+				"frame %zu is '%s', expected '%s'", i, test_written_msg[i], order[i]);
+	}
+	/* They ran on the worker, not on this (service) thread */
+	ck_assert (!pthread_equal (test_gate.thread, pthread_self ()));
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_requester_disconnect_before_reply_is_dropped)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	test_add_client (&ctx, 1);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	/* A hangs up while its command runs; C takes over A's slot */
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[0]);
+	test_add_client (&ctx, 2);
+	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[2]);
+
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app); /* the reply to A is queued by now */
+	ck_assert (!test_gate.interrupted);
+	ck_assert_int_eq (test_gate_calls (), 1);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 0); /* not B, not C */
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_shutdown_empty_queue)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+
+	/* An idle worker is blocked in Pop; Stop wakes and joins it */
+	ck_assert (BarWebsocketWorkerStart (&app));
+	ck_assert (ctx.workerStarted);
+	BarWebsocketWorkerStop (&app);
+	ck_assert (!ctx.workerStarted);
+	BarWebsocketWorkerStop (&app); /* idempotent */
+	BarWebsocketWorkerStop (NULL);
+
+	/* Admission is closed: a late frame is dropped without a reply */
+	test_receive (&app, 0, TEST_QUERY);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 0);
+	ck_assert_int_eq (test_gate_calls (), 0);
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_shutdown_with_queued_commands_frees_them)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_receive (&app, 0, TEST_QUERY);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_receive (&app, 0, TEST_QUERY);
+
+	/* Stop drops the four queued commands (ASan checks they are freed),
+	 * interrupts the blocked call and joins */
+	BarWebsocketWorkerStop (&app);
+	ck_assert (test_gate.interrupted);
+	ck_assert_int_eq (test_gate_calls (), 1); /* the queued ones never ran */
+
+	/* Only the interrupted command replied (its error); Stop delivered
+	 * nothing: pending replies are abandoned to the transport teardown */
+	ck_assert_uint_eq (test_written_count, 0);
+	ck_assert_uint_eq (TestWsPendingTake (&ctx, BAR_WS_KEY_NONE), 1);
+	const char *reply = TestWsPendingLast (&ctx, BAR_WS_KEY_NONE);
+	ck_assert (strstr (reply, "\"error\"") != NULL);
+	ck_assert (strstr (reply, "song.explain") != NULL);
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* Pandora mock for a handler that makes two requests (renaming a shared
+ * station: transform, then rename). The first returns once shutdown has
+ * begun, i.e. its response arrived just as the owner started to stop the
+ * worker; any later call blocks for 3 s and fails (a failed rename leaves
+ * the fixture's static station names alone). */
+static _Atomic int test_two_calls;
+
+static bool test_two_call (BarApp_t * const app, const PianoRequestType_t type,
+		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	(void) app;
+	(void) type;
+	(void) data;
+	const int n = atomic_fetch_add (&test_two_calls, 1) + 1;
+	for (int i = 0; i < (n == 1 ? 5000 : 3000); i++) {
+		if (n == 1 && BarInterruptShutdownRequested ()) {
+			break;
+		}
+		usleep (1000);
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = n == 1 ? CURLE_OK : CURLE_ABORTED_BY_CALLBACK;
+	return n == 1;
+}
+
+static double test_now_sec (void) {
+	struct timespec ts;
+	clock_gettime (CLOCK_MONOTONIC, &ts);
+	return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+}
+
+/* Shutdown between two requests of one handler: the second is never sent
+ * and the worker joins at once (an interrupt alone would be lost here: no
+ * request is in curl when it is raised) */
+START_TEST (test_shutdown_between_requests_skips_the_next)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	atomic_store (&test_two_calls, 0);
+	BarUiPianoCallSetTestHook (test_two_call);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_receive (&app, 0, "2[\"station.rename\",{\"stationId\":\"station-1\","
+			"\"newName\":\"Renamed\"}]");
+	for (int i = 0; i < 5000 && atomic_load (&test_two_calls) == 0; i++) {
+		usleep (1000);
+	}
+	ck_assert_int_eq (atomic_load (&test_two_calls), 1);
+
+	const double start = test_now_sec ();
+	BarWebsocketWorkerStop (&app);
+	const double elapsed = test_now_sec () - start;
+	ck_assert_int_eq (atomic_load (&test_two_calls), 1); /* rename not sent */
+	ck_assert_msg (elapsed < 1.0, "join took %.2f s", elapsed);
+	ck_assert (!BarInterruptShutdownRequested ()); /* cleared after the join */
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_app_quit_from_worker_signals_owner_not_self_join)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	test_gate.stopFromCall = true; /* a Stop from the worker must be refused */
+
+	test_receive (&app, 0, TEST_QUIT);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_receive (&app, 0, TEST_QUERY);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	/* app.quit ran first and only signalled the lifecycle owner */
+	ck_assert (atomic_load (&app.doQuit));
+	pthread_mutex_lock (&app.player.lock);
+	ck_assert (app.player.doQuit);
+	pthread_mutex_unlock (&app.player.lock);
+
+	/* Neither app.quit nor a Stop called on the worker stopped it: the
+	 * commands behind them still run */
+	test_gate_wait_calls (2);
+	ck_assert (ctx.workerStarted);
+	test_drain_all (&ctx);
+	ck_assert_uint_ge (test_written_count, 3);
+	ck_assert (strstr (test_written_msg[0], "why-1") != NULL);
+	ck_assert (strstr (test_written_msg[1], "\"process\"") != NULL);
+	ck_assert (strstr (test_written_msg[2], "\"stations\"") != NULL);
+
+	/* The owner stops (and joins) it */
+	BarWebsocketWorkerStop (&app);
+	ck_assert (!ctx.workerStarted);
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_admission_full_returns_localized_error_to_requester)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew (); /* no worker: nothing drains it */
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_ws_cap.sockets[0];
+	void *b = &test_ws_cap.sockets[1];
+
+	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
+		BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	}
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+
+	/* Full: the requester (only) is told, in the localized copy */
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 0);
+	json_object *event = json_tokener_parse (test_ws_cap.frames[0] + 1);
+	ck_assert_ptr_nonnull (event);
+	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (event, 0)),
+			"error");
+	json_object *data = json_object_array_get_idx (event, 1);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (data, "operation", &field));
+	ck_assert_str_eq (json_object_get_string (field), "command");
+	ck_assert (json_object_object_get_ex (data, "message", &field));
+	ck_assert_str_eq (json_object_get_string (field),
+			BarL10nGet (&app.l10n, "web.socket.busy"));
+	ck_assert_str_eq (json_object_get_string (field),
+			"The player is busy. Try again in a moment.");
+	json_object_put (event);
+
+	/* The queue is shared: another client is refused too, and told */
+	BarWsHandleReceive (&app, b, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	ck_assert_int_eq (test_ws_cap.frameClient[1], 1);
+	ck_assert (strstr (test_ws_cap.frames[1], "busy") != NULL);
+
+	/* Room again after one is taken */
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	BarWsHandleReceive (&app, b, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+
+	/* Closed (shutdown) is not overload: dropped without a reply */
+	BarWsCommandQueueClose (ctx.commands);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_oversize_request_frame_is_dropped_connection_stays_open)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_fake_sockets[0];
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES + 1);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'x', WS_CMD_MAX_REQUEST_BYTES + 1);
+
+	/* Longer than one request */
+	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES + 1, true);
+	/* A message whose parts add up to more than the limit (as when
+	 * libwebsockets delivers a long frame in pieces): every part is dropped, even a tail
+	 * that would parse as a command on its own */
+	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES, false);
+	BarWsHandleReceive (&app, a, big, 100, false);
+	BarWsHandleReceive (&app, a, TEST_QUERY, strlen (TEST_QUERY), true);
+	/* The connection stays open and usable: a maximal request still fits */
+	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES, true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	free (big);
+
+	size_t len = 0;
+	char *text = NULL;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, &text, &len));
+	ck_assert_uint_eq (len, WS_CMD_MAX_REQUEST_BYTES);
+	free (text);
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, &text, NULL));
+	ck_assert_str_eq (text, TEST_CMD);
+	free (text);
+	ck_assert_int_eq (BarWsCommandQueuePush (ctx.commands, 9, "s", 1), BAR_WS_CMD_OK);
+	BarWsConnId_t sentinel = 0;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, &sentinel, NULL, NULL));
+	ck_assert_uint_eq (sentinel, 9);
+
+	ck_assert (!test_conn (&ctx, 0)->pendingClose);
+	ck_assert_uint_eq (ctx.numConnections, 1);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 0);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+
+/* One client's burst (lws parses a whole read before the service thread
+ * flushes) must not flood the shared ingress with busy errors: it is told
+ * once until one of its requests is accepted again, and nobody is closed. */
+START_TEST (test_busy_burst_notifies_once_and_closes_nobody)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_ws_cap.sockets[0];
+
+	for (int i = 0; i < 200; i++) {
+		BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	}
+	TestWsCaptureFlush ();
+	for (size_t i = 0; i < ctx.maxConnections; i++) {
+		ck_assert (!ctx.connections[i].pendingClose);
+	}
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 0);
+	ck_assert (strstr (test_ws_cap.frames[0], "busy") != NULL);
+
+	/* Accepted again once there is room; the next refusal is reported */
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	ck_assert_int_eq (test_ws_cap.frameClient[1], 0);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+/* Pop the next queued command; assert its requester and text */
+static void test_expect_command (BarWsContext_t *ctx, BarWsConnId_t id,
+		const char *text) {
+	BarWsConnId_t got = 0;
+	char *bytes = NULL;
+	size_t len = 0;
+	ck_assert (BarWsCommandQueuePop (ctx->commands, &got, &bytes, &len));
+	ck_assert_uint_eq (got, id);
+	ck_assert_uint_eq (len, strlen (text));
+	ck_assert_str_eq (bytes, text);
+	free (bytes);
+}
+
+/* Nothing else is queued: a sentinel pushed now comes out next */
+static void test_expect_no_command (BarWsContext_t *ctx) {
+	ck_assert_int_eq (BarWsCommandQueuePush (ctx->commands, 999, "s", 1), BAR_WS_CMD_OK);
+	test_expect_command (ctx, 999, "s");
+}
+
+static void test_receive_part (BarApp_t *app, int client, const char *text,
+		bool final) {
+	BarWsHandleReceive (app, &test_fake_sockets[client], text, strlen (text), final);
+}
+
+/* A message that arrives in several parts (TCP segments, lws buffer
+ * boundaries or WebSocket fragments) runs once, as a whole */
+START_TEST (test_split_message_is_reassembled)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+
+	test_receive_part (&app, 0, "2[\"qu", false);
+	test_receive_part (&app, 0, "er", false);
+	test_receive_part (&app, 0, "y\"]", true);
+	test_expect_command (&ctx, a, TEST_QUERY);
+
+	/* Exactly the limit, in two parts, still fits */
+	char *half = malloc (WS_CMD_MAX_REQUEST_BYTES / 2 + 1);
+	ck_assert_ptr_nonnull (half);
+	memset (half, 'x', WS_CMD_MAX_REQUEST_BYTES / 2);
+	half[WS_CMD_MAX_REQUEST_BYTES / 2] = '\0';
+	test_receive_part (&app, 0, half, false);
+	test_receive_part (&app, 0, half, true);
+	free (half);
+	size_t len = 0;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, &len));
+	ck_assert_uint_eq (len, WS_CMD_MAX_REQUEST_BYTES);
+	/* The next message starts afresh */
+	test_receive (&app, 0, TEST_CMD);
+	test_expect_command (&ctx, a, TEST_CMD);
+	test_expect_no_command (&ctx);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* Over the limit: every part is dropped, including a tail that would parse
+ * as a command on its own; the connection stays usable */
+START_TEST (test_split_message_over_limit_is_dropped_with_tail)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'x', WS_CMD_MAX_REQUEST_BYTES - 1);
+	big[WS_CMD_MAX_REQUEST_BYTES - 1] = '\0';
+
+	test_receive_part (&app, 0, big, false);
+	test_receive_part (&app, 0, "xx", false);   /* over the limit here */
+	test_receive_part (&app, 0, "2[\"x\"]", false);
+	test_receive_part (&app, 0, TEST_QUERY, true);
+	free (big);
+	test_receive (&app, 0, TEST_CMD);
+	test_expect_command (&ctx, a, TEST_CMD);
+	test_expect_no_command (&ctx);
+	ck_assert (!test_conn (&ctx, 0)->pendingClose);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_split_messages_do_not_interleave_between_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWsConnId_t a = test_add_client (&ctx, 0);
+	BarWsConnId_t b = test_add_client (&ctx, 1);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+
+	test_receive_part (&app, 0, "2[\"qu", false);
+	test_receive_part (&app, 1, "2[\"no", false);
+	test_receive_part (&app, 0, "ery\"]", true);
+	test_receive_part (&app, 1, "op\"]", true);
+	test_expect_command (&ctx, a, TEST_QUERY);
+	test_expect_command (&ctx, b, TEST_CMD);
+	test_expect_no_command (&ctx);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* A connection that closes mid-message frees its partial message (ASan),
+ * and the client that reuses the slot does not inherit it */
+START_TEST (test_partial_message_freed_on_close)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+
+	test_receive_part (&app, 0, "2[\"qu", false);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[0]);
+	ck_assert_ptr_null (ctx.connections[0].rxBuf);
+	ck_assert_uint_eq (ctx.connections[0].rxLen, 0);
+	BarWsConnId_t c = test_add_client (&ctx, 2);
+	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[2]);
+	test_receive_part (&app, 2, TEST_CMD, true);
+	test_expect_command (&ctx, c, TEST_CMD);
+	test_expect_no_command (&ctx);
+
+	BarWsCommandQueueFree (ctx.commands);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_worker_start_failure_rolls_back)
+{
+	/* Directly: nothing is left started or allocated */
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	test_create_calls = 0;
+	test_fail_create_at = 1;
+	BarWebsocketSetTestThreadCreateHook (test_thread_create);
+	ck_assert (!BarWebsocketWorkerStart (&app));
+	ck_assert_ptr_null (ctx.commands);
+	ck_assert (!ctx.workerStarted);
+	BarWebsocketWorkerStop (&app); /* nothing to stop */
+	test_receive (&app, 0, TEST_QUERY); /* no queue: dropped */
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (test_written_count, 0);
+	BarWebsocketSetTestThreadCreateHook (NULL);
+	ck_assert (!BarWebsocketWorkerStart (NULL));
+	test_teardown_worker (&app, &ctx);
+
+	/* Through Init: the worker (1st thread) or the service thread (2nd,
+	 * after the worker started) failing leaves no context, listener, queue
+	 * or thread behind; the port can be bound again right away */
+	BarApp_t srv;
+	memset (&srv, 0, sizeof (srv));
+	BarSettingsInit (&srv.settings);
+	srv.settings.uiMode = BAR_UI_MODE_WEB;
+	srv.settings.websocketHost = strdup ("127.0.0.1");
+	srv.settings.websocketPort = free_loopback_port ();
+	BarWebsocketSetTestThreadCreateHook (test_thread_create);
+	for (int failAt = 1; failAt <= 2; failAt++) {
+		test_create_calls = 0;
+		test_fail_create_at = failAt;
+		ck_assert (!BarWebsocketInit (&srv));
+		ck_assert_ptr_null (srv.wsContext);
+		ck_assert_int_eq (test_create_calls, failAt);
+	}
+	BarWebsocketSetTestThreadCreateHook (NULL);
+	ck_assert (BarWebsocketInit (&srv));
+	ck_assert (((BarWsContext_t *) srv.wsContext)->workerStarted);
+	BarWebsocketDestroy (&srv);
+	ck_assert_ptr_null (srv.wsContext);
+	BarSettingsDestroy (&srv.settings);
+}
+END_TEST
+
+/* A failed start rolls back without interrupting anything: at startup the
+ * interrupt target is app->doQuit, so an interrupt would quit the player
+ * (Both mode continues without the web server instead). */
+START_TEST (test_service_thread_start_failure_does_not_quit)
+{
+	BarApp_t srv;
+	memset (&srv, 0, sizeof (srv));
+	BarSettingsInit (&srv.settings);
+	srv.settings.uiMode = BAR_UI_MODE_BOTH;
+	srv.settings.websocketHost = strdup ("127.0.0.1");
+	srv.settings.websocketPort = free_loopback_port ();
+	BarInterruptSetTarget (&srv.doQuit);
+	BarWebsocketSetTestThreadCreateHook (test_thread_create);
+	test_create_calls = 0;
+	test_fail_create_at = 2; /* the service thread, after the worker */
+	ck_assert (!BarWebsocketInit (&srv));
+	BarWebsocketSetTestThreadCreateHook (NULL);
+	BarInterruptSetTarget (NULL);
+	ck_assert_ptr_null (srv.wsContext);
+	ck_assert_int_eq (atomic_load (&srv.doQuit), 0);
+	BarSettingsDestroy (&srv.settings);
+}
+END_TEST
+
+/* Real server for the command tests: the E2E setup plus the worker needs */
+static void test_e2e_app_init (BarApp_t *app, bool block) {
+	memset (app, 0, sizeof (*app));
+	BarSettingsInit (&app->settings);
+	app->settings.uiMode = BAR_UI_MODE_WEB;
+	app->settings.volumeMode = BAR_VOLUME_MODE_PLAYER;
+	app->settings.websocketHost = strdup ("127.0.0.1");
+	app->settings.websocketPort = free_loopback_port ();
+	BarStateInit (app);
+	pthread_mutex_init (&app->player.lock, NULL);
+	pthread_cond_init (&app->player.cond, NULL);
+	pthread_cond_init (&app->player.audioCond, NULL);
+	app->player.settings = &app->settings;
+	test_worker_app_begin (app, block);
+	ck_assert (BarWebsocketInit (app));
+}
+
+static void test_e2e_app_destroy (BarApp_t *app) {
+	BarWebsocketDestroy (app);
+	test_worker_app_end (app);
+	pthread_cond_destroy (&app->player.audioCond);
+	pthread_cond_destroy (&app->player.cond);
+	pthread_mutex_destroy (&app->player.lock);
+	BarStateDestroy (app);
+	BarSettingsDestroy (&app->settings);
+}
+
+static struct lws_context *test_e2e_client_context (void) {
+	struct lws_context_creation_info info;
+	memset (&info, 0, sizeof (info));
+	info.port = CONTEXT_PORT_NO_LISTEN;
+	info.protocols = test_e2e_protocols;
+	struct lws_context *cctx = lws_create_context (&info);
+	ck_assert_ptr_nonnull (cctx);
+	return cctx;
+}
+
+/* Service the client context until `c` has written every queued frame, then
+ * wait for the mock to be called `calls` times. (lws_service ignores its
+ * timeout in lws 4.x, so it is only called while client work is pending.) */
+static void test_e2e_pump_until_calls (struct lws_context *cctx,
+		const TestE2eClient_t *c, int calls) {
+	struct timespec start, now;
+	clock_gettime (CLOCK_MONOTONIC, &start);
+	while (c->outSent < c->outCount) {
+		ck_assert (!c->failed && !c->closed);
+		clock_gettime (CLOCK_MONOTONIC, &now);
+		ck_assert_msg (now.tv_sec - start.tv_sec < 3, "timed out sending");
+		lws_service (cctx, 20);
+	}
+	test_gate_wait_calls (calls);
+}
+
+/* The Pi 3 disconnect fix: while a command is stuck in a slow Pandora call
+ * (holding pianoHttpMutex), the service thread still accepts connections,
+ * sends their initial state and delivers unrelated updates. */
+START_TEST (test_slow_command_does_not_block_service_thread)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, true);
+	BarWsContext_t *ctx = app.wsContext;
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, b;
+	memset (&a, 0, sizeof (a));
+	memset (&b, 0, sizeof (b));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &b, 0);
+
+	test_e2e_send (&a, TEST_EXPLAIN);
+	test_e2e_pump_until_calls (cctx, &a, 1);
+	/* Blocked on the worker, which holds pianoHttpMutex */
+	ck_assert (pthread_equal (test_gate.thread, ctx->worker));
+	ck_assert (!pthread_equal (test_gate.thread, ctx->thread));
+	ck_assert_int_eq (pthread_mutex_trylock (&app.pianoHttpMutex), EBUSY);
+
+	/* A second client connects and gets its state; an update reaches both */
+	test_e2e_connect (cctx, app.settings.websocketPort, &b);
+	test_e2e_pump_until (cctx, &a, 1, &b, 1);
+	test_e2e_expect (&b, 0, "\"process\"");
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"unrelated\"]")));
+	test_e2e_pump_until (cctx, &a, 2, &b, 2);
+	test_e2e_expect (&a, 1, "\"unrelated\"");
+	test_e2e_expect (&b, 1, "\"unrelated\"");
+	ck_assert_int_eq (test_gate_calls (), 1); /* still blocked throughout */
+
+	/* Released: the reply reaches its requester only */
+	test_gate_open ();
+	test_e2e_pump_until (cctx, &a, 3, &b, 2);
+	test_e2e_expect (&a, 2, "why-1");
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"end\"]")));
+	test_e2e_pump_until (cctx, &a, 4, &b, 3);
+	test_e2e_expect (&b, 2, "\"end\"");
+	ck_assert_uint_eq (a.count, 4);
+	ck_assert_uint_eq (b.count, 3);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_free (&b);
+	test_e2e_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_command_replies_reach_only_requester)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, false);
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, b;
+	memset (&a, 0, sizeof (a));
+	memset (&b, 0, sizeof (b));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_connect (cctx, app.settings.websocketPort, &b);
+	test_e2e_pump_until (cctx, &a, 1, &b, 1);
+
+	test_e2e_send (&a, TEST_QUERY);
+	test_e2e_send (&b, TEST_EXPLAIN);
+	test_e2e_pump_until (cctx, &a, 3, &b, 2);
+	test_e2e_expect (&a, 1, "\"process\"");
+	test_e2e_expect (&a, 2, "\"stations\"");
+	test_e2e_expect (&b, 1, "why-1");
+	/* Anything misrouted would arrive before this later broadcast */
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"end\"]")));
+	test_e2e_pump_until (cctx, &a, 4, &b, 3);
+	test_e2e_expect (&a, 3, "\"end\"");
+	test_e2e_expect (&b, 2, "\"end\"");
+	ck_assert_uint_eq (a.count, 4);
+	ck_assert_uint_eq (b.count, 3);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_free (&b);
+	test_e2e_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_shutdown_with_blocked_http_interrupts_and_joins)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, true);
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, none;
+	memset (&a, 0, sizeof (a));
+	memset (&none, 0, sizeof (none));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &none, 0);
+	test_e2e_send (&a, TEST_EXPLAIN);
+	test_e2e_pump_until_calls (cctx, &a, 1);
+
+	/* Destroy aborts the stuck call through the shutdown flag, joins
+	 * the worker, then the service thread, and frees the transport */
+	BarWebsocketDestroy (&app);
+	ck_assert (test_gate.interrupted);
+	ck_assert_ptr_null (app.wsContext);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_app_destroy (&app); /* Destroy again is a no-op */
+}
+END_TEST
+
+START_TEST (test_repeated_start_stop)
+{
+	/* The worker alone, on one context */
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	for (int cycle = 1; cycle <= 3; cycle++) {
+		ck_assert (BarWebsocketWorkerStart (&app));
+		ck_assert (!BarWebsocketWorkerStart (&app)); /* already running */
+		test_receive (&app, 0, TEST_EXPLAIN);
+		test_gate_wait_calls (cycle);
+		BarWebsocketWorkerStop (&app);
+		test_drain_all (&ctx);
+		ck_assert_uint_eq (test_written_count, (size_t) cycle);
+		char why[16];
+		snprintf (why, sizeof (why), "why-%d", cycle);
+		ck_assert (strstr (test_written_msg[cycle - 1], why) != NULL);
+	}
+	test_teardown_worker (&app, &ctx);
+
+	/* The whole server, each time with a command round trip */
+	for (int cycle = 0; cycle < 3; cycle++) {
+		BarApp_t srv;
+		test_e2e_app_init (&srv, false);
+		struct lws_context *cctx = test_e2e_client_context ();
+		TestE2eClient_t a, none;
+		memset (&a, 0, sizeof (a));
+		memset (&none, 0, sizeof (none));
+		test_e2e_connect (cctx, srv.settings.websocketPort, &a);
+		test_e2e_pump_until (cctx, &a, 1, &none, 0);
+		test_e2e_send (&a, TEST_QUERY);
+		test_e2e_pump_until (cctx, &a, 3, &none, 0);
+		test_e2e_expect (&a, 1, "\"process\"");
+		lws_context_destroy (cctx);
+		test_e2e_free (&a);
+		test_e2e_app_destroy (&srv);
+	}
+}
+END_TEST
+
+/* Real commands from a real client. An oversize frame (a valid query padded
+ * past the limit, which libwebsockets delivers in parts) is dropped without
+ * closing the connection; a query sent in two fragments is reassembled and
+ * answered once; later commands are answered in order. */
+START_TEST (test_end_to_end_commands_over_lws)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, false);
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, none;
+	memset (&a, 0, sizeof (a));
+	memset (&none, 0, sizeof (none));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &none, 0);
+
+	char oversize[WS_CMD_MAX_REQUEST_BYTES + 16];
+	memset (oversize, ' ', sizeof (oversize));
+	memcpy (oversize, "2[\"query\"", 9);
+	memcpy (oversize + sizeof (oversize) - 2, "]", 2);
+	test_e2e_send (&a, oversize);
+	test_e2e_send_flags (&a, "2[\"que", LWS_WRITE_TEXT | LWS_WRITE_NO_FIN);
+	test_e2e_send_flags (&a, "ry\"]", LWS_WRITE_CONTINUATION);
+	test_e2e_send (&a, TEST_EXPLAIN);
+	test_e2e_send (&a, TEST_QUERY);
+	test_e2e_pump_until (cctx, &a, 6, &none, 0);
+	test_e2e_expect (&a, 1, "\"process\"");
+	test_e2e_expect (&a, 2, "\"stations\"");
+	test_e2e_expect (&a, 3, "why-1");
+	test_e2e_expect (&a, 4, "\"process\"");
+	test_e2e_expect (&a, 5, "\"stations\"");
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"end\"]")));
+	test_e2e_pump_until (cctx, &a, 7, &none, 0);
+	test_e2e_expect (&a, 6, "\"end\"");
+	ck_assert_uint_eq (a.count, 7);
+	ck_assert (!a.closed);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_app_destroy (&app);
+}
+END_TEST
+
+/* The debounced volume broadcast fires on its own deadline: lws_service
+ * sleeps until a socket event, a wake or a due timer, so nothing else must
+ * have to happen for it to go out. */
+START_TEST (test_delayed_volume_broadcast_fires_without_other_traffic)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, false);
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, none;
+	memset (&a, 0, sizeof (a));
+	memset (&none, 0, sizeof (none));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &none, 0);
+
+	/* What volume.set does on the worker: schedule, then nothing else */
+	BarWsScheduleVolumeBroadcast (app.wsContext, 100);
+	struct timespec start, now;
+	clock_gettime (CLOCK_MONOTONIC, &start);
+	test_e2e_pump_until (cctx, &a, 2, &none, 0);
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	test_e2e_expect (&a, 1, "\"volume\"");
+	const double waited = (double) (now.tv_sec - start.tv_sec) +
+			(double) (now.tv_nsec - start.tv_nsec) / 1e9;
+	ck_assert_msg (waited < 2.0, "debounced volume took %.2f s", waited);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_app_destroy (&app);
+}
+END_TEST
+
+/* ------------------------------------------------------------------------
+ * Diagnostics log lines
+ * ------------------------------------------------------------------------ */
+
+/* stderr (where log_write goes) captured into a temporary file */
+static int test_log_saved = -1;
+static FILE *test_log_file;
+static char test_log_text[16384];
+
+static void test_log_start (unsigned int mask) {
+	fflush (stderr);
+	test_log_file = tmpfile ();
+	ck_assert_ptr_nonnull (test_log_file);
+	test_log_saved = dup (STDERR_FILENO);
+	ck_assert_int_ge (test_log_saved, 0);
+	ck_assert_int_ge (dup2 (fileno (test_log_file), STDERR_FILENO), 0);
+	log_set_debug_mask (mask);
+}
+
+/* Stop capturing; returns everything logged since test_log_start */
+static const char *test_log_stop (void) {
+	fflush (stderr);
+	log_set_debug_mask (0);
+	dup2 (test_log_saved, STDERR_FILENO);
+	close (test_log_saved);
+	test_log_saved = -1;
+	rewind (test_log_file);
+	size_t n = fread (test_log_text, 1, sizeof (test_log_text) - 1, test_log_file);
+	test_log_text[n] = '\0';
+	fclose (test_log_file);
+	test_log_file = NULL;
+	return test_log_text;
+}
+
+/* Checked teardown of the diagnostics tests: undo a capture or clock that
+ * a failed assertion left behind */
+static void test_diag_teardown (void) {
+	if (test_log_saved >= 0) {
+		(void) test_log_stop ();
+	}
+	log_set_debug_mask (0);
+	BarWebsocketSetTestClock (NULL);
+}
+
+static size_t test_count_lines (const char *text, const char *needle) {
+	size_t n = 0;
+	for (const char *p = strstr (text, needle); p; p = strstr (p + 1, needle)) {
+		n++;
+	}
+	return n;
+}
+
+/* Injectable clock (ms); atomic because the worker reads it too */
+static _Atomic long long test_now_ms;
+
+static long long test_clock (void) {
+	return atomic_load (&test_now_ms);
+}
+
+START_TEST (test_diag_ingress_overflow_logs_numbers)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0);
+	for (int i = 0; i < WS_INGRESS_MAX_MSGS; i++) {
+		ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	}
+	ck_assert (!test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+
+	test_log_start (0); /* an error: logged with debugging off */
+	BarWsServiceOutbox (&ctx);
+	const char *log = test_log_stop ();
+	char want[160];
+	snprintf (want, sizeof (want),
+			"Outbound event queue overflowed (%d/%d messages, %d/%d bytes queued); "
+			"closing all clients so they resync\n",
+			WS_INGRESS_MAX_MSGS, WS_INGRESS_MAX_MSGS, WS_INGRESS_MAX_MSGS * 6,
+			WS_INGRESS_MAX_BYTES);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert (test_conn (&ctx, 0)->pendingClose);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_diag_client_overflow_logs_its_pending)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_add_client (&ctx, 0); /* stops reading */
+	BarWsConnId_t fast = test_add_client (&ctx, 1);
+	for (int i = 0; i < WS_CLIENT_MAX_MSGS; i++) {
+		ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+		if ((i + 1) % WS_INGRESS_MAX_MSGS == 0) {
+			test_drain_client (&ctx, 1); /* the ingress holds fewer frames */
+		}
+	}
+	test_drain_client (&ctx, 1);
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"last\"]"));
+
+	test_log_start (0);
+	test_drain_client (&ctx, 1);
+	const char *log = test_log_stop ();
+	char want[160];
+	snprintf (want, sizeof (want),
+			"Client 1 event queue full (%d/%d messages, %d/%d bytes pending, "
+			"9-byte event refused); closing it\n",
+			WS_CLIENT_MAX_MSGS, WS_CLIENT_MAX_MSGS, WS_CLIENT_MAX_MSGS * 6,
+			WS_CLIENT_MAX_BYTES);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert_uint_eq (test_count_lines (log, "event queue full"), 1); /* not the fast one */
+	ck_assert (test_conn (&ctx, 0)->pendingClose);
+	ck_assert (!test_conn (&ctx, 1)->pendingClose);
+	ck_assert_uint_eq (fast, 2);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* One error per overload episode, not per refused frame; the episode ends
+ * when a request is accepted again (logged at debug level) */
+START_TEST (test_diag_busy_episode_logged_once)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew (); /* no worker: nothing drains it */
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_ws_cap.sockets[0];
+	void *b = &test_ws_cap.sockets[1];
+	const size_t len = strlen (TEST_CMD);
+	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
+	}
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsHandleReceive (&app, b, TEST_CMD, len, true); /* first refusal */
+	BarWsHandleReceive (&app, a, TEST_CMD, len, true); /* same episode */
+	BarWsHandleReceive (&app, b, TEST_CMD, len, true);
+	/* Sustained overload: the worker frees one slot at a time, one request
+	 * gets in, the next is refused. Still the same episode. */
+	for (int i = 0; i < 10; i++) {
+		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
+	}
+	const char *log = test_log_stop ();
+	char want[160];
+	snprintf (want, sizeof (want),
+			"Command queue full (%d/%d items, %zu/%d bytes); refusing requests, "
+			"first from client 2\n",
+			WS_CMD_MAX_ITEMS, WS_CMD_MAX_ITEMS, WS_CMD_MAX_ITEMS * len,
+			WS_CMD_MAX_BYTES);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert_uint_eq (test_count_lines (log, "Command queue full"), 1);
+#ifdef HAVE_DEBUGLOG
+	ck_assert (strstr (log, "Error") != NULL); /* LOG_ERROR label */
+#endif
+
+	/* The episode ends once the queue has drained to half */
+	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
+		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	}
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsHandleReceive (&app, a, TEST_CMD, len, true); /* now half full */
+	log = test_log_stop ();
+#ifdef HAVE_DEBUGLOG
+	ck_assert_msg (strstr (log, "Command queue accepting again after 13 refused requests\n")
+			!= NULL, "log was: %s", log);
+#endif
+	ck_assert (strstr (log, "Command queue full") == NULL);
+
+	/* A later refusal starts a new episode (debugging off: error only) */
+	test_log_start (0);
+	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
+		BarWsHandleReceive (&app, a, TEST_CMD, len, true);
+	}
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Command queue full"), 1);
+	ck_assert (strstr (log, "first from client 1\n") != NULL);
+	for (int i = 0; i < WS_CMD_MAX_ITEMS / 2 + 1; i++) {
+		ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, NULL, NULL));
+	}
+	test_log_start (0);
+	BarWsHandleReceive (&app, a, TEST_CMD, len, true);
+	log = test_log_stop ();
+	ck_assert_str_eq (log, ""); /* the recovery line is debug only */
+
+	/* The busy reply is unchanged: once per connection until one of its
+	 * requests is accepted (so once per refusal in the loop above) */
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "busy"), 12);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "busy"), 1);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+/* A client accepted while the table is full is connected but untracked:
+ * an error, at most once per second with the number not logged */
+START_TEST (test_diag_table_full_logged_rate_limited)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	for (int c = 0; c < TEST_MAX_CLIENTS; c++) {
+		test_add_client (&ctx, c);
+	}
+	char extra[3];
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, 500000);
+
+	test_log_start (0);
+	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &extra[0], "socketio"), BAR_WS_CONN_NONE);
+	atomic_store (&test_now_ms, 500999);
+	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &extra[1], "socketio"), BAR_WS_CONN_NONE);
+	const char *log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table full"), 1);
+	ck_assert_msg (strstr (log, "Connection table full (4/4 in use): a new client is "
+			"connected but untracked\n") != NULL,
+			"log was: %s", log);
+
+	atomic_store (&test_now_ms, 501000);
+	test_log_start (0);
+	ck_assert_uint_eq (BarWsConnectionAdd (&ctx, &extra[2], "socketio"), BAR_WS_CONN_NONE);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Connection table full (4/4 in use): a new client is "
+			"connected but untracked (1 more since the last report)\n") != NULL,
+			"log was: %s", log);
+	ck_assert_uint_eq (ctx.numConnections, TEST_MAX_CLIENTS);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+#define TEST_T0 1000000LL
+
+/* With debugging off nothing is due (no timer is armed), no debug line is
+ * written, even while a command runs past the threshold */
+START_TEST (test_diag_debug_off_no_lines_no_timer)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_log_start (DEBUG_AUDIO); /* another category only */
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	atomic_store (&test_now_ms, TEST_T0 + 60000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	test_add_client (&ctx, 1);
+	test_add_client (&ctx, 2); /* 75% */
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "WebSocket") == NULL, "log was: %s", log);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+
+START_TEST (test_diag_table_75_percent_transitions)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 0);
+	test_add_client (&ctx, 1);
+	const char *log = test_log_stop ();
+	ck_assert (strstr (log, "Connection table") == NULL);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 2);
+	test_add_client (&ctx, 3);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[3]); /* 3/4: still high */
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table"), 1);
+	ck_assert (strstr (log, "Connection table 75% full (3/4 in use)\n") != NULL);
+
+	/* Hysteresis: hovering between 50% and 75% logs nothing */
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]); /* 2/4 */
+	test_add_client (&ctx, 2);                           /* 3/4 */
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]); /* 2/4 */
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Connection table") == NULL, "log was: %s", log);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[1]); /* 1/4 */
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table"), 1);
+	ck_assert (strstr (log, "Connection table below 50% full again (1/4 in use)\n") != NULL);
+
+	/* Crossing 75% again is logged again */
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 1);
+	test_add_client (&ctx, 2);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Connection table 75% full (3/4 in use)\n"), 1);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* The worker marks the command it runs; the service thread logs it after
+ * 10 s and every further 10 s while it still runs, then the worker logs how
+ * long it took. Driven by the test clock, no real waiting. */
+START_TEST (test_diag_stall_check_logs_running_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_log_start (DEBUG_WEBSOCKET);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1); /* inside the handler */
+	test_receive (&app, 0, TEST_CMD); /* queued behind it */
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* the check is due */
+	atomic_store (&test_now_ms, TEST_T0 + 9999);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 1);
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running") == NULL, "log was: %s", log);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 10000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000);
+	atomic_store (&test_now_ms, TEST_T0 + 15000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 5000); /* not due: silent */
+	atomic_store (&test_now_ms, TEST_T0 + 25000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 5000); /* next at 30 s */
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Command running"), 2);
+	char want[160];
+	snprintf (want, sizeof (want), "Command running for 10 s: %s (queue 1 items/%zu bytes)\n",
+			TEST_EXPLAIN, strlen (TEST_CMD));
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	snprintf (want, sizeof (want), "Command running for 25 s: %s", TEST_EXPLAIN);
+	ck_assert (strstr (log, want) != NULL);
+
+	/* The heartbeat reports it as well */
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 30000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000);
+	log = test_log_stop ();
+	snprintf (want, sizeof (want), "worker running %s for 30 s,", TEST_EXPLAIN);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert (strstr (log, "commands 1 items/") != NULL);
+
+	/* It finishes: the worker logs the duration, the check goes quiet */
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 31000);
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	atomic_store (&test_now_ms, TEST_T0 + 50000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* heartbeat only */
+	log = test_log_stop ();
+	snprintf (want, sizeof (want), "Command finished after 31 s: %s\n", TEST_EXPLAIN);
+	ck_assert_msg (strstr (log, want) != NULL, "log was: %s", log);
+	ck_assert (strstr (log, "Command running") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_diag_stall_check_skips_finished_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+
+	test_log_start (DEBUG_WEBSOCKET);
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	BarWebsocketWorkerStop (&app); /* finished in no (test) time */
+	atomic_store (&test_now_ms, TEST_T0 + 20000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000); /* nothing to check */
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running") == NULL, "log was: %s", log);
+	ck_assert (strstr (log, "Command finished") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* A check armed for command A must not report B, which started after A
+ * finished: B gets its own 10 s from its own start */
+START_TEST (test_diag_stall_check_does_not_report_a_later_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	ctx.commands = BarWsCommandQueueNew (); /* the test marks commands itself */
+	ck_assert_ptr_nonnull (ctx.commands);
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	BarWsCommandQueueBegin (ctx.commands, "2[\"a\"]", TEST_T0);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 10000); /* A's deadline */
+	BarWsCommandQueueEnd (ctx.commands);
+	BarWsCommandQueueBegin (ctx.commands, "2[\"b\"]", TEST_T0 + 9000);
+	atomic_store (&test_now_ms, TEST_T0 + 10000); /* A's deadline fires */
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 9000); /* B's, at +19 s */
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running") == NULL, "log was: %s", log);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 19000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Command running for 10 s: 2[\"b\"]") != NULL,
+			"log was: %s", log);
+	ck_assert (strstr (log, "2[\"a\"]") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* Every 30 s with debugging on: one status line, skipped while everything
+ * is idle and unchanged since the last one */
+START_TEST (test_diag_heartbeat_content_and_idle_skip)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	BarWebsocketSetTestClock (test_clock);
+	atomic_store (&test_now_ms, TEST_T0);
+
+	test_log_start (DEBUG_WEBSOCKET);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	atomic_store (&test_now_ms, TEST_T0 + 30000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	const char *log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Status:") == NULL, "log was: %s", log); /* idle */
+
+	/* A client with a pending frame: logged, and again while it stays */
+	test_add_client (&ctx, 0);
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	BarWsServiceOutbox (&ctx);
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 60000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	atomic_store (&test_now_ms, TEST_T0 + 75000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 15000); /* not due */
+	atomic_store (&test_now_ms, TEST_T0 + 90000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Status:"), 2);
+	ck_assert_msg (strstr (log, "Status: connections 1/4, ingress 0 msgs/0 bytes, "
+			"commands 0 items/0 bytes, worker idle, worst pending 1 msgs/6 bytes "
+			"(client 1)\n") != NULL, "log was: %s", log);
+
+	/* Drained: logged once (changed), then skipped (idle, unchanged) */
+	test_log_start (DEBUG_WEBSOCKET);
+	test_drain_client (&ctx, 0);
+	atomic_store (&test_now_ms, TEST_T0 + 120000);
+	BarWsServiceDiagnostics (&ctx);
+	atomic_store (&test_now_ms, TEST_T0 + 150000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_uint_eq (test_count_lines (log, "Status:"), 1);
+	ck_assert (strstr (log, "worst pending 0 msgs/0 bytes (client 0)\n") != NULL);
+
+	/* Connections and finished commands alone do not make it speak again */
+	test_log_start (DEBUG_WEBSOCKET);
+	test_add_client (&ctx, 1);
+	BarWsCommandQueueBegin (ctx.commands, "x", TEST_T0 + 165000);
+	BarWsCommandQueueEnd (ctx.commands);
+	atomic_store (&test_now_ms, TEST_T0 + 165000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "Status:") == NULL, "log was: %s", log);
+
+	/* Undelivered ingress is reported */
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"m\"]"));
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 180000);
+	BarWsServiceDiagnostics (&ctx);
+	log = test_log_stop ();
+	ck_assert_msg (strstr (log, "ingress 1 msgs/6 bytes") != NULL, "log was: %s", log);
+
+	/* Turning debugging off disarms it; on again it waits a full period */
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), -1);
+	test_log_start (DEBUG_WEBSOCKET);
+	atomic_store (&test_now_ms, TEST_T0 + 190000);
+	ck_assert_int_eq (BarWsServiceDiagnostics (&ctx), 30000);
+	log = test_log_stop ();
+	ck_assert (strstr (log, "Status:") == NULL);
+
+	BarWebsocketSetTestClock (NULL);
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+#endif /* HAVE_DEBUGLOG */
+
+/* --- No lock is held while the WebSocket layer waits ----------------------
+ *
+ * The command worker waits for commands (queue condvar), a command waits for
+ * Pandora (by design inside pianoHttpMutex, nothing else), and the service
+ * thread writes to sockets and sleeps in lws_service(). None of these waits
+ * may block another thread on a lock. */
+
+enum {
+	WS_LOCK_PIANO = 1,
+	WS_LOCK_STATE = 2,
+	WS_LOCK_PLAYER = 4,
+	WS_LOCK_DECODER = 8,
+};
+
+/* Locks that cannot be taken now. The caller owns none of them: the only
+ * other possible owner is the worker thread. */
+static unsigned ws_locks_busy (BarApp_t *app) {
+	unsigned busy = 0;
+	if (pthread_mutex_trylock (&app->pianoHttpMutex) == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	} else {
+		busy |= WS_LOCK_PIANO;
+	}
+	if (pthread_rwlock_trywrlock (&app->stateRwlock) == 0) {
+		pthread_rwlock_unlock (&app->stateRwlock);
+	} else {
+		busy |= WS_LOCK_STATE;
+	}
+	if (pthread_mutex_trylock (&app->player.lock) == 0) {
+		pthread_mutex_unlock (&app->player.lock);
+	} else {
+		busy |= WS_LOCK_PLAYER;
+	}
+	if (pthread_mutex_trylock (&app->player.decoderLock) == 0) {
+		pthread_mutex_unlock (&app->player.decoderLock);
+	} else {
+		busy |= WS_LOCK_DECODER;
+	}
+	return busy;
+}
+
+static bool ws_worker_waiting (void *commands) {
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (commands, &st);
+	return st.waiting == 1;
+}
+
+/* A worker waiting for the next command holds nothing */
+START_TEST (test_idle_worker_waits_for_commands_without_locks)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	/* blocked in the queue's condition wait (which released the queue lock) */
+	ck_assert_msg (wait_until (ws_worker_waiting, ctx.commands, 3000),
+			"the worker never blocked waiting for a command");
+
+	ck_assert_uint_eq (ws_locks_busy (&app), 0);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx.commands, &st); /* the queue lock is free too */
+	ck_assert (!st.running);
+	ck_assert_uint_eq (st.waiting, 1);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_CMD,
+			strlen (TEST_CMD)), BAR_WS_CMD_OK);
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* A command waiting for Pandora holds pianoHttpMutex by design and nothing
+ * else; a whole service-thread round (receive, volume timer, diagnostics,
+ * delivery) completes meanwhile without waiting for the worker */
+START_TEST (test_service_thread_never_waits_on_the_busy_worker)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	pthread_mutex_init (&ctx.volumeBroadcastMutex, NULL);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+	ck_assert_uint_eq (ws_locks_busy (&app), WS_LOCK_PIANO);
+
+	test_receive (&app, 0, TEST_QUERY);
+	BarWsScheduleVolumeBroadcast (&ctx, 0);
+	BarWsProcessVolumeBroadcast (&ctx, &app);
+	(void) BarWsServiceDiagnostics (&ctx);
+	test_drain_all (&ctx);
+	ck_assert_uint_eq (ws_locks_busy (&app), WS_LOCK_PIANO);
+
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+/* Refusing new commands (the first step of shutdown) does not wait for the
+ * command that is running */
+START_TEST (test_closing_the_queue_does_not_wait_for_the_running_command)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, true);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	test_receive (&app, 0, TEST_EXPLAIN);
+	test_gate_wait_calls (1);
+
+	BarWsCommandQueueClose (ctx.commands);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx.commands, 1, TEST_CMD,
+			strlen (TEST_CMD)), BAR_WS_CMD_CLOSED);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (ctx.commands, &st);
+	ck_assert (st.running);
+
+	test_gate_open ();
+	BarWebsocketWorkerStop (&app);
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
+static BarApp_t *g_probeApp;
+static atomic_bool g_probeDone;
+
+static void *write_probe_thread (void *arg) {
+	(void) arg;
+	BarWsContext_t *ctx = g_probeApp->wsContext;
+	BarWsCommandQueueStats_t st;
+	size_t msgs, bytes;
+	BarWsOutboxDepth (ctx->outbox, &msgs, &bytes);
+	BarWsCommandQueueStats (ctx->commands, &st);
+	ck_assert_uint_eq (BarWsCommandQueuePush (ctx->commands, 1, TEST_CMD,
+			strlen (TEST_CMD)), BAR_WS_CMD_OK);
+	char *text = strdup ("2[\"during\"]");
+	ck_assert_ptr_nonnull (text);
+	BarWebsocketSend (g_probeApp, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, text);
+	atomic_store (&g_probeDone, true);
+	return NULL;
+}
+
+/* The socket write (client I/O) runs on the service thread with neither the
+ * outbox nor the command queue locked: producers and the worker's replies
+ * are not held up behind a slow client */
+static int write_probe_frame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	(void) buf;
+	pthread_t thread;
+	atomic_store (&g_probeDone, false);
+	ck_assert_int_eq (pthread_create (&thread, NULL, write_probe_thread, NULL), 0);
+	for (int i = 0; i < 2000 && !atomic_load (&g_probeDone); i++) {
+		usleep (1000);
+	}
+	ck_assert_msg (atomic_load (&g_probeDone),
+			"outbox or command queue locked during a socket write");
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	return (int) len;
+}
+
+START_TEST (test_socket_write_holds_no_outbox_or_queue_lock)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_worker (&app, &ctx, false);
+	test_add_client (&ctx, 0);
+	ck_assert (BarWebsocketWorkerStart (&app));
+	g_probeApp = &app;
+	ctx.writeFrame = write_probe_frame;
+
+	ck_assert (test_send (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, "2[\"x\"]"));
+	BarWsServiceOutbox (&ctx);
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &test_fake_sockets[0]), 0);
+	ck_assert (atomic_load (&g_probeDone));
+
+	test_teardown_worker (&app, &ctx);
+}
+END_TEST
+
 Suite *websocket_suite(void) {
 	Suite *s;
 	TCase *tc_core;
@@ -2074,7 +3921,6 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_broadcasts_real_player_state_events);
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
 	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
-	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
 	tcase_add_test (tc_core, test_send_broadcast_reaches_all_clients);
 	tcase_add_test (tc_core, test_send_to_id_reaches_only_that_client);
 	tcase_add_test (tc_core, test_send_to_reused_slot_does_not_reach_new_client);
@@ -2096,7 +3942,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_core, test_oversize_frame_is_rejected_without_closing_clients);
 	tcase_add_test (tc_core, test_large_stations_reply_does_not_close_clients);
 	tcase_add_test (tc_core, test_frame_at_limit_is_delivered_to_empty_client);
-	tcase_add_test (tc_core, test_disconnect_all_clients_closes_and_frees_pending);
+	tcase_add_test (tc_core, test_close_frees_queued_frames_and_is_idempotent);
 	tcase_add_test (tc_core, test_start_then_playstate_both_delivered);
 	tcase_add_test (tc_core, test_stop_then_start_both_delivered);
 	tcase_add_test (tc_core, test_progress_for_old_song_dropped_after_start);
@@ -2108,7 +3954,6 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test (tc_core, test_websocket_play_state_waits_for_queued_control);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_unknown_requester);
-	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);
 	tcase_add_test(tc_core, test_websocket_immediate_and_delayed_volume_read_current_player_value);
@@ -2124,12 +3969,58 @@ Suite *websocket_suite(void) {
 	
 	suite_add_tcase(s, tc_core);
 
+	TCase *tc_worker = tcase_create ("worker");
+	tcase_add_test (tc_worker, test_slow_command_does_not_block_service_thread);
+	tcase_add_test (tc_worker, test_command_replies_reach_only_requester);
+	tcase_add_test (tc_worker, test_commands_execute_in_fifo_order);
+	tcase_add_test (tc_worker, test_requester_disconnect_before_reply_is_dropped);
+	tcase_add_test (tc_worker, test_worker_start_failure_rolls_back);
+	tcase_add_test (tc_worker, test_service_thread_start_failure_does_not_quit);
+	tcase_add_test (tc_worker, test_shutdown_empty_queue);
+	tcase_add_test (tc_worker, test_shutdown_with_queued_commands_frees_them);
+	tcase_add_test (tc_worker, test_shutdown_between_requests_skips_the_next);
+	tcase_add_test (tc_worker, test_shutdown_with_blocked_http_interrupts_and_joins);
+	tcase_add_test (tc_worker, test_app_quit_from_worker_signals_owner_not_self_join);
+	tcase_add_test (tc_worker, test_repeated_start_stop);
+	tcase_add_test (tc_worker, test_admission_full_returns_localized_error_to_requester);
+	tcase_add_test (tc_worker, test_oversize_request_frame_is_dropped_connection_stays_open);
+	tcase_add_test (tc_worker, test_end_to_end_commands_over_lws);
+	tcase_add_test (tc_worker, test_busy_burst_notifies_once_and_closes_nobody);
+	tcase_add_test (tc_worker, test_delayed_volume_broadcast_fires_without_other_traffic);
+	tcase_add_test (tc_worker, test_split_message_is_reassembled);
+	tcase_add_test (tc_worker, test_split_message_over_limit_is_dropped_with_tail);
+	tcase_add_test (tc_worker, test_split_messages_do_not_interleave_between_clients);
+	tcase_add_test (tc_worker, test_partial_message_freed_on_close);
+	tcase_add_test (tc_worker, test_idle_worker_waits_for_commands_without_locks);
+	tcase_add_test (tc_worker, test_service_thread_never_waits_on_the_busy_worker);
+	tcase_add_test (tc_worker, test_closing_the_queue_does_not_wait_for_the_running_command);
+	tcase_add_test (tc_worker, test_socket_write_holds_no_outbox_or_queue_lock);
+	tcase_set_timeout (tc_worker, 30);
+	suite_add_tcase (s, tc_worker);
+
 	tc_compat = tcase_create ("wire_compat");
 	tcase_add_test (tc_compat, test_wire_compat_progress_is_object);
 	tcase_add_test (tc_compat, test_wire_compat_volume_is_bare_integer);
 	tcase_add_test (tc_compat, test_wire_compat_stop_has_no_payload);
 	tcase_add_test (tc_compat, test_wire_compat_stations_is_array);
 	suite_add_tcase (s, tc_compat);
+
+	TCase *tc_diag = tcase_create ("diagnostics");
+	tcase_add_test (tc_diag, test_diag_ingress_overflow_logs_numbers);
+	tcase_add_test (tc_diag, test_diag_client_overflow_logs_its_pending);
+	tcase_add_test (tc_diag, test_diag_busy_episode_logged_once);
+	tcase_add_test (tc_diag, test_diag_table_full_logged_rate_limited);
+	tcase_add_test (tc_diag, test_diag_debug_off_no_lines_no_timer);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test (tc_diag, test_diag_table_75_percent_transitions);
+	tcase_add_test (tc_diag, test_diag_stall_check_logs_running_command);
+	tcase_add_test (tc_diag, test_diag_stall_check_skips_finished_command);
+	tcase_add_test (tc_diag, test_diag_stall_check_does_not_report_a_later_command);
+	tcase_add_test (tc_diag, test_diag_heartbeat_content_and_idle_skip);
+#endif
+	tcase_add_checked_fixture (tc_diag, NULL, test_diag_teardown);
+	tcase_set_timeout (tc_diag, 30);
+	suite_add_tcase (s, tc_diag);
 	
 	return s;
 }

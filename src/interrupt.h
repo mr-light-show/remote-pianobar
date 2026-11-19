@@ -23,6 +23,7 @@ THE SOFTWARE.
 #pragma once
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 
 /* Register the sig_atomic_t target that signal handlers increment.
    Call once at startup; may be called again to redirect the interrupt target
@@ -32,3 +33,10 @@ _Atomic sig_atomic_t  *BarInterruptGetTarget (void);
 
 /* Atomically increment the current target; safe to call from a signal handler. */
 void          BarInterruptIncrement (void);
+
+/* Shutdown of the Pandora request issuer (the WebSocket command worker).
+   Unlike an interrupt it does not depend on the current target and stays set
+   until cleared: while set, BarUiPianoCall sends no request and curl's
+   progress callback aborts the one in flight. */
+void          BarInterruptSetShutdown (bool shutdown);
+bool          BarInterruptShutdownRequested (void);

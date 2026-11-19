@@ -54,6 +54,25 @@ static bool state_needs_lock (const BarApp_t *app) {
 	return false;
 }
 
+static BarStateSongFreeTestHook_fn g_songFreeTestHook = NULL;
+
+void BarStateSetSongFreeTestHook (BarStateSongFreeTestHook_fn hook) {
+	g_songFreeTestHook = hook;
+}
+
+/*	Every song list other threads can borrow is freed here, with the caller
+ *	holding pianoHttpMutex (order: pianoHttpMutex, then stateRwlock).
+ */
+void BarStateFreeSongs (BarApp_t *app, PianoSong_t *songs) {
+	if (songs == NULL) {
+		return;
+	}
+	if (g_songFreeTestHook != NULL) {
+		g_songFreeTestHook (app, songs);
+	}
+	PianoDestroyPlaylist (songs);
+}
+
 void BarStateSignalPlaybackManager(BarApp_t *app)
 {
 	if (app == NULL || !state_needs_lock(app)) {
@@ -206,6 +225,34 @@ PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id) {
 	return station;
 }
 
+/*	Replace the resume station id. The copy and the free of the old value
+ *	happen outside the lock; only the pointer swap is locked.
+ */
+void BarStateSetLastStationId(BarApp_t *app, const char *stationId) {
+	assert(app != NULL);
+
+	char *copy = stationId != NULL ? strdup(stationId) : NULL;
+	char *old;
+	WITH_STATE_LOCK(app, "SetLastStationId", NULL) {
+		old = app->lastStationId;
+		app->lastStationId = copy;
+	}
+	free(old);
+}
+
+/*	Detach the resume station id; the caller owns (and frees) the result
+ */
+char *BarStateTakeLastStationId(BarApp_t *app) {
+	assert(app != NULL);
+
+	char *id;
+	WITH_STATE_LOCK(app, "TakeLastStationId", NULL) {
+		id = app->lastStationId;
+		app->lastStationId = NULL;
+	}
+	return id;
+}
+
 /*	Get station list (thread-safe)
  */
 PianoStation_t *BarStateGetStationList(const BarApp_t *app) {
@@ -267,6 +314,7 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 	assert(app != NULL);
 
 	PianoSong_t *tail = NULL;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "TruncatePlaylistTail");
 	if (app->playlist != NULL) {
 		tail = PianoListNextP(app->playlist);
@@ -274,8 +322,9 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 	}
 	state_rwlock_unlock_internal(app, "TruncatePlaylistTail", NULL);
 	if (tail != NULL) {
-		PianoDestroyPlaylist(tail);
+		BarStateFreeSongs(app, tail);
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -284,12 +333,14 @@ void BarStateTruncatePlaylistTail(BarApp_t *app) {
 void BarStateDrainPlaylist(BarApp_t *app) {
 	assert(app != NULL);
 	
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	WITH_STATE_LOCK(app, "DrainPlaylist", NULL) {
 		if (app->playlist != NULL) {
-			PianoDestroyPlaylist(app->playlist);
+			BarStateFreeSongs(app, app->playlist);
 			app->playlist = NULL;
 		}
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -298,15 +349,17 @@ void BarStateDrainPlaylist(BarApp_t *app) {
 void BarStateSwitchStation(BarApp_t *app, PianoStation_t *station) {
 	assert(app != NULL);
 	
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	WITH_STATE_LOCK(app, "SwitchStation", "State: SwitchStation <- %s\n", station ? station->name : "null") {
 		/* Drain current playlist */
 		if (app->playlist != NULL) {
-			PianoDestroyPlaylist(app->playlist);
+			BarStateFreeSongs(app, app->playlist);
 			app->playlist = NULL;
 		}
 		/* Set new station */
 		app->nextStation = station;
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -319,6 +372,7 @@ void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station) {
 	assert(station != NULL);
 
 	PianoSong_t *tail = NULL;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "PrepareStationSwitch");
 	log_write(DEBUG_UI, "State: PrepareStationSwitch <- %s\n", station->name);
 	app->nextStation = station;
@@ -328,8 +382,9 @@ void BarStatePrepareStationSwitch(BarApp_t *app, PianoStation_t *station) {
 	}
 	state_rwlock_unlock_internal(app, "PrepareStationSwitch", NULL);
 	if (tail != NULL) {
-		PianoDestroyPlaylist(tail);
+		BarStateFreeSongs(app, tail);
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	BarStateSignalPlaybackManager(app);
 }
 
@@ -346,6 +401,7 @@ bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
 
 	bool found = false;
 	PianoSong_t *tail = NULL;
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "PrepareStationSwitchById");
 	PianoStation_t *station = NULL;
 	if (app->ph.stations != NULL) {
@@ -367,8 +423,9 @@ bool BarStatePrepareStationSwitchById(BarApp_t *app, const char *stationId) {
 	}
 	state_rwlock_unlock_internal(app, "PrepareStationSwitchById", NULL);
 	if (tail != NULL) {
-		PianoDestroyPlaylist(tail);
+		BarStateFreeSongs(app, tail);
 	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (found) {
 		BarStateSignalPlaybackManager(app);
 	}
@@ -410,9 +467,55 @@ void BarStateApplyQuickMixIds(BarApp_t *app, const char * const *stationIds,
 	state_rwlock_unlock_internal(app, "ApplyQuickMixIds", NULL);
 }
 
+void BarStateChangeQuickMixAll(BarApp_t *app, BarQuickMixChange_t change) {
+	assert(app != NULL);
+
+	state_rwlock_wrlock_internal(app, "ChangeQuickMixAll");
+	PianoStation_t *station = app->ph.stations;
+	PianoListForeachP (station) {
+		switch (change) {
+			case BAR_QUICKMIX_TOGGLE_ALL:
+				station->useQuickMix = !station->useQuickMix;
+				break;
+			case BAR_QUICKMIX_SELECT_ALL:
+				station->useQuickMix = true;
+				break;
+			case BAR_QUICKMIX_SELECT_NONE:
+				station->useQuickMix = false;
+				break;
+		}
+	}
+	state_rwlock_unlock_internal(app, "ChangeQuickMixAll", NULL);
+}
+
+bool BarStateToggleQuickMixById(BarApp_t *app, const char *stationId) {
+	assert(app != NULL);
+
+	if (stationId == NULL) {
+		return false;
+	}
+	bool found = false;
+	state_rwlock_wrlock_internal(app, "ToggleQuickMixById");
+	PianoStation_t *station = NULL;
+	if (app->ph.stations != NULL) {
+		station = PianoFindStationById(app->ph.stations, stationId);
+	}
+	if (station != NULL) {
+		station->useQuickMix = !station->useQuickMix;
+		found = true;
+	}
+	state_rwlock_unlock_internal(app, "ToggleQuickMixById", NULL);
+	return found;
+}
+
+/*	Rebuild display names. displayName is read by threads that hold either
+ *	stateRwlock (snapshots) or pianoHttpMutex (printing), so take both
+ *	(order: pianoHttpMutex, then stateRwlock).
+ */
 void BarStateUpdateStationDisplayNames(BarApp_t *app) {
 	assert(app != NULL);
 
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	state_rwlock_wrlock_internal(app, "UpdateStationDisplayNames");
 	PianoStation_t *station = app->ph.stations;
 	PianoListForeachP (station) {
@@ -425,6 +528,7 @@ void BarStateUpdateStationDisplayNames(BarApp_t *app) {
 		}
 	}
 	state_rwlock_unlock_internal(app, "UpdateStationDisplayNames", NULL);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
 /*	Serialize libpiano state reads/writes with state snapshots.
@@ -448,7 +552,22 @@ PianoReturn_t BarStatePianoResponse(BarApp_t *app, PianoRequest_t *req) {
 
 	PianoReturn_t ret;
 	state_rwlock_wrlock_internal(app, "PianoResponse");
+	/* DELETE_STATION frees the station: drop current/next references to it
+	 * in the same critical section so no reader sees a freed station. */
+	bool deletedIsCurrent = false, deletedIsNext = false;
+	if (req->type == PIANO_REQUEST_DELETE_STATION && req->data != NULL) {
+		deletedIsCurrent = app->curStation == req->data;
+		deletedIsNext = app->nextStation == req->data;
+	}
 	ret = PianoResponse(&app->ph, req);
+	if (ret == PIANO_RET_OK) {
+		if (deletedIsCurrent) {
+			app->curStation = NULL;
+		}
+		if (deletedIsNext) {
+			app->nextStation = NULL;
+		}
+	}
 	state_rwlock_unlock_internal(app, "PianoResponse", NULL);
 	return ret;
 }
@@ -545,6 +664,7 @@ bool BarStateSnapshotStations (const BarApp_t *app,
 		out->items[i].displayName = s->displayName ? strdup (s->displayName) : NULL;
 		out->items[i].isQuickMix  = s->isQuickMix  != 0;
 		out->items[i].isQuickMixed = s->useQuickMix != 0;
+		out->items[i].isCreator   = s->isCreator   != 0;
 		i++;
 	}
 
@@ -607,6 +727,80 @@ void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out) 
 	}
 
 	state_rwlock_unlock_internal (app, "SnapshotPlayback", NULL);
+}
+
+/*	Display name of the station with this id; caller holds stateRwlock.
+ */
+static const char *state_station_display_name_locked (const BarApp_t *app,
+                                                      const char *stationId) {
+	if (stationId == NULL) { return NULL; }
+	const PianoStation_t *station = app->ph.stations;
+	PianoListForeachP (station) {
+		if (station->id != NULL && strcmp (station->id, stationId) == 0) {
+			return station->displayName ? station->displayName : station->name;
+		}
+	}
+	return NULL;
+}
+
+/*	Snapshot the queue after the playing song under read lock, so a concurrent
+ *	tail truncation or drain cannot free a song while it is being copied.
+ */
+bool BarStateSnapshotUpcoming (const BarApp_t *app, size_t maxSongs,
+                               BarSongSnapshotList_t *out) {
+	if (app == NULL || out == NULL) { return false; }
+	out->items = NULL;
+	out->count = 0;
+
+	state_rwlock_rdlock_internal (app, "SnapshotUpcoming");
+
+	size_t count = 0;
+	const PianoSong_t *song = NULL;
+	if (app->playlist != NULL) {
+		song = PianoListNextP (app->playlist);
+	}
+	for (const PianoSong_t *s = song; s != NULL && count < maxSongs;
+			s = PianoListNextP (s)) {
+		count++;
+	}
+
+	if (count > 0) {
+		out->items = calloc (count, sizeof (*out->items));
+		if (out->items == NULL) {
+			state_rwlock_unlock_internal (app, "SnapshotUpcoming", NULL);
+			return false;
+		}
+	}
+	out->count = count;
+
+	for (size_t i = 0; i < count; i++, song = PianoListNextP (song)) {
+		BarSongSnapshot_t *item = &out->items[i];
+		item->title    = song->title    ? strdup (song->title)    : NULL;
+		item->artist   = song->artist   ? strdup (song->artist)   : NULL;
+		item->album    = song->album    ? strdup (song->album)    : NULL;
+		item->coverArt = song->coverArt ? strdup (song->coverArt) : NULL;
+		const char *name = state_station_display_name_locked (app, song->stationId);
+		item->stationName = name ? strdup (name) : NULL;
+		item->duration = song->length;
+		item->rating   = song->rating;
+	}
+
+	state_rwlock_unlock_internal (app, "SnapshotUpcoming", NULL);
+	return true;
+}
+
+void BarStateFreeSongSnapshot (BarSongSnapshotList_t *snap) {
+	if (snap == NULL) { return; }
+	for (size_t i = 0; i < snap->count; i++) {
+		free (snap->items[i].title);
+		free (snap->items[i].artist);
+		free (snap->items[i].album);
+		free (snap->items[i].coverArt);
+		free (snap->items[i].stationName);
+	}
+	free (snap->items);
+	snap->items = NULL;
+	snap->count = 0;
 }
 
 void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap) {

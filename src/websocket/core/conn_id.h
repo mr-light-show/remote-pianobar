@@ -20,13 +20,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#ifndef _WEBSOCKET_QUEUE_H
-#define _WEBSOCKET_QUEUE_H
+#pragma once
 
 #include <stdint.h>
 
 /* Connection ID, assigned on the service thread; 0 is never assigned */
 typedef uint64_t BarWsConnId_t;
 #define BAR_WS_DEST_BROADCAST ((BarWsConnId_t) 0)
+/* No connection (e.g. the table was full); same value, different meaning */
+#define BAR_WS_CONN_NONE ((BarWsConnId_t) 0)
 
-#endif /* _WEBSOCKET_QUEUE_H */

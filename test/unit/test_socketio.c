@@ -25,6 +25,9 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <errno.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <json-c/json.h>
@@ -35,7 +38,8 @@ THE SOFTWARE.
 #include "../../src/ui.h"
 #include "../../src/system_volume.h"
 #include "../../src/websocket/core/websocket.h"
-#include "../../src/websocket/core/queue.h"
+#include "../../src/websocket_bridge.h"
+#include "../../src/websocket/core/conn_id.h"
 #include "../../src/websocket/protocol/socketio.h"
 #include "test_ws_capture.h"
 #include <math.h>
@@ -116,7 +120,8 @@ START_TEST(test_socketio_emit_stop) {
 	
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
-	BarSocketIoEmitStop(&app);
+	BarWsBroadcastSongStop (&app);
+	TestWsCaptureFlush ();
 	
 	ck_assert_ptr_nonnull(test_last_broadcast ());
 	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
@@ -132,9 +137,15 @@ START_TEST(test_socketio_emit_progress) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	app.player.mode = PLAYER_PLAYING;
+	app.player.songPlayed = 60;
+	app.player.songDuration = 180;
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	
-	BarSocketIoEmitProgress(&app, 60, 180);
+	BarWsBroadcastProgress (&app);
+	TestWsCaptureFlush ();
+	pthread_mutex_destroy (&app.player.lock);
 	
 	ck_assert_ptr_nonnull(test_last_broadcast ());
 	ck_assert(strstr(test_last_broadcast (), "2[") != NULL);
@@ -668,7 +679,8 @@ START_TEST (test_socketio_emit_play_state_reports_paused_flag) {
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitPlayState (&app);
+	BarWsBroadcastPlayState (&app);
+	TestWsCaptureFlush ();
 
 	ck_assert_ptr_nonnull (test_last_broadcast ());
 	ck_assert (strstr (test_last_broadcast (), "playState") != NULL);
@@ -1396,11 +1408,16 @@ START_TEST (test_socketio_emit_upcoming_lists_songs)
 	station.id = "s1";
 	station.name = "Station One";
 	app.ph.stations = &station;
+	/* The queue after the playing song is read from state */
+	PianoSong_t playing;
+	memset (&playing, 0, sizeof (playing));
+	playing.head.next = &first.head;
+	app.playlist = &playing;
 
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], &first, 5);
+	ck_assert (BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], 5));
 
 	ck_assert_ptr_nonnull (test_last_broadcast ());
 	ck_assert (strstr (test_last_broadcast (), "query.upcoming.result") != NULL);
@@ -2240,7 +2257,7 @@ START_TEST (test_capture_playback_start_stop_broadcast) {
 	capture_app_init (&app, &station, &song);
 	BarStateSetPlaylist (&app, &song);
 
-	BarSocketIoEmitStart (&app);
+	BarWsBroadcastSongStart (&app);
 	assert_broadcast_frame ("start");
 	json_object *start = frame_payload (0);
 	json_object *field;
@@ -2251,7 +2268,7 @@ START_TEST (test_capture_playback_start_stop_broadcast) {
 	json_object_put (start);
 
 	TestWsCaptureClear ();
-	BarSocketIoEmitStop (&app);
+	BarWsBroadcastSongStop (&app);
 	assert_broadcast_frame ("stop");
 	ck_assert_ptr_null (frame_payload (0));
 
@@ -2265,7 +2282,12 @@ START_TEST (test_capture_progress_broadcast) {
 	PianoSong_t song;
 	capture_app_init (&app, &station, &song);
 
-	BarSocketIoEmitProgress (&app, 30, 120);
+	pthread_mutex_lock (&app.player.lock);
+	app.player.mode = PLAYER_PLAYING;
+	app.player.songPlayed = 30;
+	app.player.songDuration = 120;
+	pthread_mutex_unlock (&app.player.lock);
+	BarWsBroadcastProgress (&app);
 	assert_broadcast_frame ("progress");
 	json_object *p = frame_payload (0);
 	json_object *field;
@@ -2312,6 +2334,38 @@ START_TEST (test_capture_stations_broadcast) {
 	ck_assert (json_object_object_get_ex (json_object_array_get_idx (list, 0), "id", &id));
 	ck_assert_str_eq (json_object_get_string (id), "S1");
 	json_object_put (list);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
+
+/* Volume and station-list broadcasts from web commands are latest-value-wins
+ * like the bridge's: unsent ones collapse; a requester's ordered stations
+ * reply is never replaced by a later broadcast. */
+START_TEST (test_emit_volume_and_stations_coalesce_unsent) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitVolume (&app, 10);
+	BarSocketIoEmitVolume (&app, 20);
+	BarSocketIoEmitStations (&app);
+	BarSocketIoEmitStations (&app);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"volume\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"volume\", 20"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"stations\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"stations\""), 1);
+
+	TestWsCaptureClear ();
+	BarSocketIoHandleQuery (&app, test_ws_cap.ids[0]);
+	BarSocketIoEmitStations (&app);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"process\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"stations\""), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"stations\""), 1);
 
 	capture_app_destroy (&app);
 }
@@ -2372,7 +2426,11 @@ START_TEST (test_capture_explanation_and_upcoming_to_requester) {
 	capture_app_init (&app, &station, &song);
 
 	BarSocketIoEmitExplanationTo (&app, test_ws_cap.ids[0], "Because jazz.");
-	BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], &song, 5);
+	PianoSong_t playing;
+	memset (&playing, 0, sizeof (playing));
+	playing.head.next = &song.head;
+	app.playlist = &playing;
+	ck_assert (BarSocketIoEmitUpcomingTo (&app, test_ws_cap.ids[0], 5));
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
 	assert_frame (0, 0, "song.explanation");
@@ -2485,6 +2543,274 @@ START_TEST (test_message_events_dispatch_from_requester) {
 }
 END_TEST
 
+/* --- Borrowed libpiano pointers: handlers resolve them inside the
+ * pianoHttpMutex critical section (THREAD_SAFETY.md, handler pointer audit) */
+
+static void *piano_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+/* pianoHttpMutex is recursive, so the owner cannot test it; ask another thread */
+static bool piano_mutex_held_by_caller (BarApp_t *app) {
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, piano_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	return (intptr_t) rc == EBUSY;
+}
+
+static unsigned g_pianoCallsLocked;
+static unsigned g_pianoCallsUnlocked;
+
+/* The hook replaces BarUiPianoCall, so the mutex is held only when the handler
+ * took it itself around the station lookup and the call. */
+static bool mock_piano_call_records_mutex (BarApp_t *app, const PianoRequestType_t type,
+		void *data, PianoReturn_t *pRet, CURLcode *wRet) {
+	(void) type;
+	(void) data;
+	if (piano_mutex_held_by_caller (app)) {
+		g_pianoCallsLocked++;
+	} else {
+		g_pianoCallsUnlocked++;
+	}
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+typedef void (*BarTestStationHandler_fn) (BarApp_t *, json_object *);
+
+static void run_station_handler_under_probe (BarApp_t *app,
+		BarTestStationHandler_fn handler, const char *json, const char *name) {
+	json_object *data = json_tokener_parse (json);
+	ck_assert_ptr_nonnull (data);
+	g_pianoCallsLocked = 0;
+	g_pianoCallsUnlocked = 0;
+	BarUiPianoCallSetTestHook (mock_piano_call_records_mutex);
+	handler (app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+	ck_assert_msg (g_pianoCallsUnlocked == 0,
+			"%s used a station pointer outside pianoHttpMutex", name);
+	ck_assert_msg (g_pianoCallsLocked > 0, "%s made no Pandora call", name);
+}
+
+START_TEST (test_station_handlers_hold_piano_mutex_across_station_use) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	station.isCreator = true;
+	/* Not the current station, so delete does not switch stations */
+	BarStateSetCurrentStation (&app, NULL);
+
+	run_station_handler_under_probe (&app, BarSocketIoHandleAddMusic,
+			"{\"musicId\":\"M1\",\"stationId\":\"S1\"}", "addMusic");
+	run_station_handler_under_probe (&app, BarSocketIoHandleRenameStation,
+			"{\"stationId\":\"S1\",\"newName\":\"New\"}", "rename");
+	run_station_handler_under_probe (&app, BarSocketIoHandleGetStationModes,
+			"{\"stationId\":\"S1\"}", "getModes");
+	run_station_handler_under_probe (&app, BarSocketIoHandleSetStationMode,
+			"{\"stationId\":\"S1\",\"modeId\":1}", "setMode");
+	run_station_handler_under_probe (&app, BarSocketIoHandleGetStationInfo,
+			"{\"stationId\":\"S1\"}", "getInfo");
+	run_station_handler_under_probe (&app, BarSocketIoHandleDeleteSeed,
+			"{\"seedId\":\"X\",\"seedType\":\"artist\",\"stationId\":\"S1\"}", "deleteSeed");
+	run_station_handler_under_probe (&app, BarSocketIoHandleDeleteFeedback,
+			"{\"feedbackId\":\"F\",\"stationId\":\"S1\"}", "deleteFeedback");
+	run_station_handler_under_probe (&app, BarSocketIoHandleDeleteStation,
+			"{\"stationId\":\"S1\"}", "delete");
+
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+/* Shared stations are transformed first; both calls stay in one critical section */
+START_TEST (test_add_music_transform_and_seed_share_piano_mutex) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	station.isCreator = false;
+
+	run_station_handler_under_probe (&app, BarSocketIoHandleAddMusic,
+			"{\"musicId\":\"M1\",\"stationId\":\"S1\"}", "addMusic");
+	ck_assert_uint_eq (g_pianoCallsLocked, 2);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+/* Deleting the playing station switches to QuickMix by ID after the delete */
+START_TEST (test_delete_current_station_switches_to_quickmix) {
+	BarApp_t app;
+	PianoStation_t station, quickMix;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.decoderLock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.decoderCond, NULL), 0);
+	app.player.settings = &app.settings;
+	memset (&quickMix, 0, sizeof (quickMix));
+	quickMix.id = "QM";
+	quickMix.name = "QuickMix";
+	quickMix.isQuickMix = true;
+	station.head.next = &quickMix.head;
+
+	run_station_handler_under_probe (&app, BarSocketIoHandleDeleteStation,
+			"{\"stationId\":\"S1\"}", "delete");
+	/* Clearing current/next is the delete response's job (BarStatePianoResponse),
+	 * which the hook bypasses */
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), &quickMix);
+
+	pthread_cond_destroy (&app.player.decoderCond);
+	pthread_mutex_destroy (&app.player.decoderLock);
+	pthread_cond_destroy (&app.player.cond);
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+START_TEST (test_get_genres_fetch_holds_piano_mutex) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+
+	g_pianoCallsLocked = 0;
+	g_pianoCallsUnlocked = 0;
+	BarUiPianoCallSetTestHook (mock_piano_call_records_mutex);
+	BarSocketIoHandleGetGenres (&app);
+	BarUiPianoCallClearTestHook ();
+	ck_assert_uint_eq (g_pianoCallsLocked, 1);
+	ck_assert_uint_eq (g_pianoCallsUnlocked, 0);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "genres"), 1);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+/* B1: song actions resolve the current song and station inside
+ * pianoHttpMutex and keep it for the whole Pandora call */
+START_TEST (test_song_actions_hold_piano_mutex_across_song_use) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.decoderLock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.decoderCond, NULL), 0);
+	app.player.settings = &app.settings;
+	station.isCreator = true;
+	song.trackToken = "token";
+	app.playlist = &song;
+	app.ph.user.listenerId = "listener";
+
+	static const char * const actions[] = {
+		"song.love", "song.ban", "song.tired", "song.explain",
+	};
+	for (size_t i = 0; i < sizeof (actions) / sizeof (actions[0]); i++) {
+		g_pianoCallsLocked = 0;
+		g_pianoCallsUnlocked = 0;
+		BarUiPianoCallSetTestHook (mock_piano_call_records_mutex);
+		BarSocketIoHandleAction (&app, actions[i], NULL, test_ws_cap.ids[0]);
+		BarUiPianoCallClearTestHook ();
+		ck_assert_msg (g_pianoCallsUnlocked == 0,
+				"%s used the song outside pianoHttpMutex", actions[i]);
+		ck_assert_msg (g_pianoCallsLocked == 1, "%s made no Pandora call", actions[i]);
+	}
+	/* The hold is released when the action returns */
+	ck_assert (!piano_mutex_held_by_caller (&app));
+
+	app.ph.user.listenerId = NULL;
+	pthread_cond_destroy (&app.player.decoderCond);
+	pthread_mutex_destroy (&app.player.decoderLock);
+	pthread_cond_destroy (&app.player.cond);
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+/* A failed context check releases the hold too */
+START_TEST (test_song_action_context_error_releases_piano_mutex) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+	BarUiPianoHttpMutexInit (&app);
+	app.ph.user.listenerId = "listener";
+
+	BarSocketIoHandleAction (&app, "song.love", NULL, test_ws_cap.ids[0]);
+	ck_assert (!piano_mutex_held_by_caller (&app));
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "error"), 1);
+
+	app.ph.user.listenerId = NULL;
+	BarUiPianoHttpMutexDestroy (&app);
+	capture_app_destroy (&app);
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	BarWsConnId_t requester;
+	atomic_bool done;
+} BarTestUpcomingThread_t;
+
+static void *upcoming_action_thread (void *arg) {
+	BarTestUpcomingThread_t *t = arg;
+	BarSocketIoHandleAction (t->app, "query.upcoming", NULL, t->requester);
+	atomic_store (&t->done, true);
+	return NULL;
+}
+
+/* The upcoming list is read under the state lock: a writer (e.g. the CLI
+ * truncating the queue on a station switch) holds it off */
+START_TEST (test_upcoming_reads_queue_under_state_lock) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t cur, next;
+	capture_app_init (&app, &station, &cur);
+	memset (&next, 0, sizeof (next));
+	cur.head.next = &next.head;
+	next.title = "Queued Song";
+	app.playlist = &cur;
+	app.ph.user.listenerId = "listener";
+
+	BarTestUpcomingThread_t t = { .app = &app, .requester = test_ws_cap.ids[0] };
+	atomic_init (&t.done, false);
+	pthread_t thread;
+	pthread_rwlock_wrlock (&app.stateRwlock);
+	ck_assert_int_eq (pthread_create (&thread, NULL, upcoming_action_thread, &t), 0);
+	usleep (100 * 1000);
+	const bool finishedWhileLocked = atomic_load (&t.done);
+	pthread_rwlock_unlock (&app.stateRwlock);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	ck_assert_msg (!finishedWhileLocked, "upcoming walked the queue without the state lock");
+
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "query.upcoming.result"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "Queued Song"), 1);
+
+	app.ph.user.listenerId = NULL;
+	capture_app_destroy (&app);
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -2585,12 +2911,23 @@ Suite *socketio_suite(void) {
 	tcase_add_test (tc_dest, test_capture_progress_broadcast);
 	tcase_add_test (tc_dest, test_capture_volume_broadcast);
 	tcase_add_test (tc_dest, test_capture_stations_broadcast);
+	tcase_add_test (tc_dest, test_emit_volume_and_stations_coalesce_unsent);
 	tcase_add_test (tc_dest, test_capture_error_broadcast_and_to_requester);
 	tcase_add_test (tc_dest, test_capture_pandora_disconnected_broadcast);
 	tcase_add_test (tc_dest, test_capture_explanation_and_upcoming_to_requester);
 	tcase_add_test (tc_dest, test_action_query_replies_reach_only_requester);
 	tcase_add_test (tc_dest, test_message_events_dispatch_from_requester);
 	suite_add_tcase (s, tc_dest);
+
+	TCase *tc_ptr = tcase_create ("Borrowed pointers");
+	tcase_add_test (tc_ptr, test_station_handlers_hold_piano_mutex_across_station_use);
+	tcase_add_test (tc_ptr, test_add_music_transform_and_seed_share_piano_mutex);
+	tcase_add_test (tc_ptr, test_delete_current_station_switches_to_quickmix);
+	tcase_add_test (tc_ptr, test_get_genres_fetch_holds_piano_mutex);
+	tcase_add_test (tc_ptr, test_upcoming_reads_queue_under_state_lock);
+	tcase_add_test (tc_ptr, test_song_actions_hold_piano_mutex_across_song_use);
+	tcase_add_test (tc_ptr, test_song_action_context_error_releases_piano_mutex);
+	suite_add_tcase (s, tc_ptr);
 	
 	return s;
 }

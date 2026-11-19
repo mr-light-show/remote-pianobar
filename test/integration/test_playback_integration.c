@@ -48,6 +48,7 @@ THE SOFTWARE.
 #include "../../src/ui.h"
 #include "fixture_http.h"
 #include "../audio_fixture_callback.h"
+#include "../test_helpers.h"
 
 
 void BarUiActPlay (BarApp_t *app, PianoStation_t *selStation,
@@ -173,6 +174,9 @@ static void stop_player_thread (player_t *player, pthread_t *playerThread) {
 	pthread_mutex_unlock (&player->lock);
 	ck_assert (BarPlayerJoinThreadWithTimeout (player, *playerThread, NULL, 10));
 	*playerThread = 0;
+	/* mirror force_join_player_thread: the player owns a copy of the URL */
+	free (player->url);
+	player->url = NULL;
 }
 
 static bool wait_dead_after_playing (BarApp_t *barApp, unsigned timeout_ms) {
@@ -334,7 +338,7 @@ START_TEST (test_playback_fetch_playlist_with_mock_piano)
 
 	setup_integration_app (&barApp);
 
-	snprintf (g_audio_url, sizeof (g_audio_url), "http://127.0.0.1:9/tone.mp3");
+	test_refused_url (g_audio_url, sizeof (g_audio_url), "tone.mp3");
 
 	memset (&g_station, 0, sizeof (g_station));
 	g_station.id = "station-integration";
@@ -1132,6 +1136,351 @@ START_TEST (test_fixture_other_error_after_cancel_is_error)
 }
 END_TEST
 
+/*
+ * Null-backend device tests. miniaudio's null backend runs a real device
+ * thread that pulls the data callback in real time without hardware, so the
+ * decoder/device handoff, player.lock, decoderLock and the audio reservation
+ * run concurrently, as in production. They take precedence over
+ * PIANOBAR_TEST_NO_DEVICE for this test case only (checked fixture: the flag
+ * is set in the forked test process before BarPlayerInit and cleared after).
+ */
+static void null_audio_setup (void) {
+	BarPlayerSetNullAudioTestBackend (true);
+}
+
+static void null_audio_teardown (void) {
+	BarPlayerSetNullAudioTestBackend (false);
+}
+
+/* True only when the engine really runs on the null backend's device. */
+static bool null_audio_ready (const char *test, player_t *player) {
+	if (!integration_enabled ()) { return false; }
+	if (player->engineInitialized && player->audioNullBackend && !player->audioNoDevice &&
+	    ma_engine_get_device (&player->engine) != NULL) {
+		return true;
+	}
+	fprintf (stderr, "SKIP %s: miniaudio null audio backend unavailable in this build\n", test);
+	return false;
+}
+
+static void null_audio_ran (const char *test) {
+	fprintf (stderr, "null-audio: %s ran on the null device backend\n", test);
+}
+
+static bool null_audio_app_start (BarApp_t *barApp, BarFixtureHttp_t *http, const char *test) {
+	uint16_t port = 0;
+	setup_integration_app (barApp);
+	if (!null_audio_ready (test, &barApp->player)) {
+		teardown_integration_app (barApp);
+		return false;
+	}
+	BarTestAssertDeviceStarted (&barApp->player, false);
+	ck_assert (integration_fixture_exists ());
+	ck_assert (BarFixtureHttpStart (http, integration_fixture_path (), &port));
+	snprintf (g_audio_url, sizeof (g_audio_url), "http://127.0.0.1:%u/tone.mp3", port);
+	memset (&g_station, 0, sizeof (g_station));
+	g_station.id = "station-null-audio";
+	g_station.name = "Null Audio Station";
+	fill_mock_song (&g_song, "Null Audio Song", g_audio_url);
+	BarStateSetCurrentStation (barApp, &g_station);
+	BarStateSetPlaylist (barApp, &g_song);
+	return true;
+}
+
+static void null_audio_app_stop (BarApp_t *barApp, BarFixtureHttp_t *http) {
+	teardown_integration_app (barApp);
+	BarFixtureHttpStop (http);
+}
+
+/* The device callback, not the test, must advance the real cursor. */
+static bool null_audio_wait_cursor_at_least (player_t *player, ma_uint64 frames) {
+	for (unsigned elapsed = 0; elapsed < 2000; elapsed += 5) {
+		BarPlayerAudioSnapshot snapshot;
+		if (BarPlayerGetAudioSnapshot (player, &snapshot) && snapshot.cursorFrames >= frames) {
+			return true;
+		}
+		if (BarPlayerGetMode (player) != PLAYER_PLAYING) { return false; }
+		usleep (5000);
+	}
+	return false;
+}
+
+START_TEST (test_null_audio_song_plays_to_natural_end)
+{
+	BarApp_t barApp;
+	BarFixtureHttp_t http = {0};
+	pthread_t playerThread = 0;
+	if (!null_audio_app_start (&barApp, &http, "song_plays_to_natural_end")) { return; }
+
+	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+	BarTestAssertDeviceStarted (&barApp.player, true);
+	/* No test drain: only the null device thread can consume frames. */
+	ck_assert (null_audio_wait_cursor_at_least (&barApp.player, 1));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
+	ck_assert_int_eq (BarPlayerGetMode (&barApp.player), PLAYER_FINISHED);
+	BarTestAssertDeviceStarted (&barApp.player, false);
+	ck_assert (!barApp.player.soundInitialized);
+
+	null_audio_app_stop (&barApp, &http);
+	null_audio_ran ("song_plays_to_natural_end");
+}
+END_TEST
+
+START_TEST (test_null_audio_pause_resume_stops_and_restarts_device)
+{
+	BarApp_t barApp;
+	BarFixtureHttp_t http = {0};
+	pthread_t playerThread = 0;
+	if (!null_audio_app_start (&barApp, &http, "pause_resume_stops_and_restarts_device")) { return; }
+
+	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+	ck_assert (null_audio_wait_cursor_at_least (&barApp.player, 1));
+	for (unsigned cycle = 0; cycle < 3; ++cycle) {
+		BarUiActPause (&barApp, NULL, NULL, 1);
+		ck_assert (BarPlayerIsPaused (&barApp.player));
+		BarTestAssertDeviceStarted (&barApp.player, false);
+		BarPlayerAudioSnapshot before, after;
+		ck_assert (BarPlayerGetAudioSnapshot (&barApp.player, &before));
+		ck_assert (!before.playing);
+		usleep (100000);
+		ck_assert (BarPlayerGetAudioSnapshot (&barApp.player, &after));
+		ck_assert_msg (after.cursorFrames == before.cursorFrames,
+		               "a stopped device must not advance the cursor");
+		BarUiActPlay (&barApp, NULL, NULL, 1);
+		ck_assert (!BarPlayerIsPaused (&barApp.player));
+		BarTestAssertDeviceStarted (&barApp.player, true);
+		/* Short advance only: the fixture is 0.5 s and must not end mid-cycle. */
+		ck_assert (null_audio_wait_cursor_at_least (&barApp.player, before.cursorFrames + 1));
+	}
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
+	BarTestAssertDeviceStarted (&barApp.player, false);
+
+	null_audio_app_stop (&barApp, &http);
+	null_audio_ran ("pause_resume_stops_and_restarts_device");
+}
+END_TEST
+
+START_TEST (test_null_audio_volume_changes_while_playing_and_paused)
+{
+	BarApp_t barApp;
+	BarFixtureHttp_t http = {0};
+	pthread_t playerThread = 0;
+	if (!null_audio_app_start (&barApp, &http, "volume_changes_while_playing_and_paused")) { return; }
+
+	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+	ck_assert (BarPlayerSetVolume (&barApp.player, 50));
+	ck_assert_int_eq (BarPlayerGetVolume (&barApp.player), 50);
+	ck_assert (BarPlayerAdjustVolume (&barApp.player, 10));
+	ck_assert_int_eq (BarPlayerGetVolume (&barApp.player), 60);
+	ck_assert_int_eq (barApp.settings.volume, 60);
+	ck_assert (BarPlayerSetPaused (&barApp.player, true));
+	ck_assert (BarPlayerAdjustVolume (&barApp.player, -1000));
+	ck_assert_int_eq (BarPlayerGetVolume (&barApp.player), 0);
+	ck_assert (BarPlayerSetPaused (&barApp.player, false));
+	ck_assert (BarPlayerSetVolume (&barApp.player, 80));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
+	ck_assert_int_eq (BarPlayerGetVolume (&barApp.player), 80);
+
+	null_audio_app_stop (&barApp, &http);
+	null_audio_ran ("volume_changes_while_playing_and_paused");
+}
+END_TEST
+
+typedef struct {
+	player_t *player;
+	_Atomic bool stop;
+	unsigned volumeOps, snapshots;
+} NullAudioStress_t;
+
+static void *null_audio_volume_worker (void *data) {
+	NullAudioStress_t *stress = data;
+	while (!atomic_load (&stress->stop)) {
+		if (BarPlayerAdjustVolume (stress->player, (stress->volumeOps & 1) ? 5 : -5)) {
+			++stress->volumeOps;
+		}
+		usleep (1000);
+	}
+	return NULL;
+}
+
+static void *null_audio_snapshot_worker (void *data) {
+	NullAudioStress_t *stress = data;
+	while (!atomic_load (&stress->stop)) {
+		BarPlayerAudioSnapshot snapshot;
+		if (BarPlayerGetAudioSnapshot (stress->player, &snapshot)) { ++stress->snapshots; }
+		usleep (1000);
+	}
+	return NULL;
+}
+
+/* Controls, observations and the device callback contend for the same
+ * reservation and decoderLock until the song ends naturally. */
+START_TEST (test_null_audio_concurrent_controls_until_song_end)
+{
+	BarApp_t barApp;
+	BarFixtureHttp_t http = {0};
+	pthread_t playerThread = 0, volumeThread, snapshotThread;
+	if (!null_audio_app_start (&barApp, &http, "concurrent_controls_until_song_end")) { return; }
+	NullAudioStress_t stress = { .player = &barApp.player };
+
+	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+	ck_assert_int_eq (pthread_create (&volumeThread, NULL, null_audio_volume_worker, &stress), 0);
+	ck_assert_int_eq (pthread_create (&snapshotThread, NULL, null_audio_snapshot_worker, &stress), 0);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+	for (unsigned i = 0; i < 6 && BarPlayerGetMode (&barApp.player) == PLAYER_PLAYING; ++i) {
+		bool paused = false;
+		BarPlayerTogglePaused (&barApp.player, &paused);
+		usleep (20000);
+	}
+	BarPlayerSetPaused (&barApp.player, false);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
+	atomic_store (&stress.stop, true);
+	ck_assert_int_eq (pthread_join (volumeThread, NULL), 0);
+	ck_assert_int_eq (pthread_join (snapshotThread, NULL), 0);
+	BarTestAssertDeviceStarted (&barApp.player, false);
+	ck_assert_uint_gt (stress.volumeOps, 0);
+
+	null_audio_app_stop (&barApp, &http);
+	null_audio_ran ("concurrent_controls_until_song_end");
+}
+END_TEST
+
+START_TEST (test_null_audio_skip_mid_song_stops_device)
+{
+	BarApp_t barApp;
+	BarFixtureHttp_t http = {0};
+	pthread_t playerThread = 0;
+	if (!null_audio_app_start (&barApp, &http, "skip_mid_song_stops_device")) { return; }
+
+	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+	ck_assert (null_audio_wait_cursor_at_least (&barApp.player, 1));
+	BarPlayerAudioSnapshot snapshot;
+	ck_assert (BarPlayerGetAudioSnapshot (&barApp.player, &snapshot));
+	ck_assert (!snapshot.atEnd);
+	BarUiActSkipSong (&barApp, NULL, NULL, 1);
+	ck_assert (barApp.player.doQuit);
+	BarTestAssertDeviceStarted (&barApp.player, false);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
+	BarTestAssertDeviceStarted (&barApp.player, false);
+	ck_assert (!barApp.player.soundInitialized);
+
+	null_audio_app_stop (&barApp, &http);
+	null_audio_ran ("skip_mid_song_stops_device");
+}
+END_TEST
+
+/* Stop at a different point of each start (before the stream opens, while
+ * the device starts, mid-song, near the end, paused) to catch lifecycle races. */
+START_TEST (test_null_audio_repeated_start_stop)
+{
+	BarApp_t barApp;
+	BarFixtureHttp_t http = {0};
+	pthread_t playerThread = 0;
+	if (!null_audio_app_start (&barApp, &http, "repeated_start_stop")) { return; }
+
+	static const unsigned delays_us[] = { 0, 1000, 5000, 20000, 60000, 150000, 300000, 450000 };
+	const unsigned cycles = sizeof (delays_us) / sizeof (delays_us[0]);
+	for (unsigned cycle = 0; cycle < cycles * 2; ++cycle) {
+		ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+		if (cycle >= cycles) {
+			ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+		}
+		usleep (delays_us[cycle % cycles]);
+		if (cycle % 3 == 2) { BarPlayerSetPaused (&barApp.player, true); }
+		BarUiActSkipSong (&barApp, NULL, NULL, 1);
+		ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+		stop_player_thread (&barApp.player, &playerThread);
+		BarTestAssertDeviceStarted (&barApp.player, false);
+		ck_assert (!barApp.player.soundInitialized);
+	}
+	/* The lifetime engine still plays a full song after the churn. */
+	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
+	ck_assert (null_audio_wait_cursor_at_least (&barApp.player, 1));
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
+
+	null_audio_app_stop (&barApp, &http);
+	null_audio_ran ("repeated_start_stop");
+}
+END_TEST
+
+/* Engine/device-thread creation and teardown, including the reinit path. */
+START_TEST (test_null_audio_engine_init_destroy_cycles)
+{
+	for (unsigned cycle = 0; cycle < 4; ++cycle) {
+		player_t player;
+		BarSettings_t settings;
+		memset (&player, 0, sizeof (player));
+		BarSettingsInit (&settings);
+		BarPlayerInit (&player, &settings);
+		if (!null_audio_ready ("engine_init_destroy_cycles", &player)) {
+			BarPlayerDestroy (&player);
+			BarSettingsDestroy (&settings);
+			return;
+		}
+		BarPlayerInit (&player, &settings);
+		ck_assert (player.engineInitialized);
+		ck_assert (player.nullContextInitialized);
+		BarTestAssertDeviceStarted (&player, false);
+		ck_assert (BarPlayerDestroy (&player));
+		ck_assert (!player.nullContextInitialized);
+		BarSettingsDestroy (&settings);
+	}
+	null_audio_ran ("engine_init_destroy_cycles");
+}
+END_TEST
+
+/* PIANOBAR_TEST_NULL_AUDIO selects the same backend for a whole run. */
+START_TEST (test_null_audio_env_selects_null_backend)
+{
+	if (!integration_enabled ()) { return; }
+	player_t player;
+	BarSettings_t settings;
+	BarPlayerSetNullAudioTestBackend (false);
+	ck_assert_int_eq (setenv ("PIANOBAR_TEST_NULL_AUDIO", "1", 1), 0);
+	memset (&player, 0, sizeof (player));
+	BarSettingsInit (&settings);
+	BarPlayerInit (&player, &settings);
+	ck_assert_int_eq (unsetenv ("PIANOBAR_TEST_NULL_AUDIO"), 0);
+	const bool ready = null_audio_ready ("env_selects_null_backend", &player);
+	ck_assert (BarPlayerDestroy (&player));
+	BarSettingsDestroy (&settings);
+	if (ready) { null_audio_ran ("env_selects_null_backend"); }
+}
+END_TEST
+
+/* An engine lost after setup is reopened on the same lifetime context. */
+START_TEST (test_null_audio_reinit_reuses_context)
+{
+	player_t player;
+	BarSettings_t settings;
+	memset (&player, 0, sizeof (player));
+	BarSettingsInit (&settings);
+	BarPlayerInit (&player, &settings);
+	if (null_audio_ready ("reinit_reuses_context", &player)) {
+		ma_engine_uninit (&player.engine);
+		player.engineInitialized = false;
+		BarPlayerInit (&player, &settings);
+		ck_assert (player.engineInitialized);
+		ck_assert (player.nullContextInitialized);
+		ck_assert_ptr_nonnull (ma_engine_get_device (&player.engine));
+		null_audio_ran ("reinit_reuses_context");
+	}
+	BarPlayerDestroy (&player);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
 Suite *playback_integration_suite (void) {
 	Suite *s = suite_create ("playback_integration");
 	TCase *tc = tcase_create ("core");
@@ -1156,6 +1505,27 @@ Suite *playback_integration_suite (void) {
 	tcase_set_timeout (shutdown, 120.0);
 	tcase_add_test (shutdown, test_player_paused_active_and_decoded_stop_paths_join_promptly);
 	suite_add_tcase (s, shutdown);
+
+	/* Real device thread on miniaudio's null backend (no hardware needed). */
+	TCase *nullAudio = tcase_create ("null_audio_device");
+	tcase_set_timeout (nullAudio, 120.0);
+	tcase_add_checked_fixture (nullAudio, null_audio_setup, null_audio_teardown);
+	tcase_add_test (nullAudio, test_null_audio_song_plays_to_natural_end);
+	tcase_add_test (nullAudio, test_null_audio_pause_resume_stops_and_restarts_device);
+	tcase_add_test (nullAudio, test_null_audio_volume_changes_while_playing_and_paused);
+	tcase_add_test (nullAudio, test_null_audio_concurrent_controls_until_song_end);
+	tcase_add_test (nullAudio, test_null_audio_skip_mid_song_stops_device);
+	tcase_add_test (nullAudio, test_null_audio_repeated_start_stop);
+	tcase_add_test (nullAudio, test_null_audio_engine_init_destroy_cycles);
+	tcase_add_test (nullAudio, test_null_audio_env_selects_null_backend);
+	tcase_add_test (nullAudio, test_null_audio_reinit_reuses_context);
+	/* Existing device-aware tests, rerun with a real (null) device. */
+	tcase_add_test (nullAudio, test_playback_start_song_plays_http_fixture);
+	tcase_add_test (nullAudio, test_player_pause_resume_stops_device_and_preserves_cursor);
+	tcase_add_test (nullAudio, test_playback_two_song_manual_advance);
+	tcase_add_test (nullAudio, test_playback_manager_plays_fixture_song);
+	tcase_add_test (nullAudio, test_player_paused_active_and_decoded_stop_paths_join_promptly);
+	suite_add_tcase (s, nullAudio);
 	return s;
 }
 

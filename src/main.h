@@ -48,7 +48,8 @@ typedef struct {
 	_Atomic sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
-	char *lastStationId;  /* Station ID to auto-resume after reconnect */
+	char *lastStationId;  /* Station ID to auto-resume after reconnect; use
+	                       * BarStateSetLastStationId/TakeLastStationId */
 	/* Serializes all use of `http` and overlapping PianoRequest/PianoResponse
 	 * work in BarUiPianoCall (recursive: re-login path calls BarUi again).
 	 * Placed after playlist/station fields so their offsets match pre-mutex
@@ -64,7 +65,7 @@ typedef struct {
 	/* Auto-recovery of an unexpectedly dead Pandora session (see
 	 * BarSessionTryAutoRecover): one attempt per session death, cleared once a
 	 * song starts, so an outage cannot become a reconnect loop.  Written by the
-	 * playback manager and the WebSocket thread. */
+	 * playback manager and the WebSocket command worker. */
 	_Atomic bool autoRecoverInFlight;
 	_Atomic bool autoRecoverFailed;
 } BarApp_t;

@@ -26,7 +26,7 @@ THE SOFTWARE.
 #include <stdio.h>
 
 #include "main.h"
-#include "websocket/core/queue.h"
+#include "websocket/core/conn_id.h"
 
 /* WebSocket bridge functions
  * Bridge between core modules and the WebSocket subsystem
@@ -42,8 +42,9 @@ void BarWsBroadcastVolume(BarApp_t *app);
 /* Query replies to one web client (`requester` is its connection ID) */
 void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
                             const char *explanation);
-void BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester,
-                         PianoSong_t *songs, int count);
+/* Up to `count` queued songs, read from state under its lock; false when
+ * nothing is queued */
+bool BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester, int count);
 void BarWsBroadcastSongStart(BarApp_t *app);
 /** Full state sync for in-place changes (e.g. song.rating). Emits `process`, not `start`. */
 void BarWsBroadcastProcess(BarApp_t *app);
@@ -54,7 +55,6 @@ void BarWsBroadcastPlayState(BarApp_t *app);
 void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
                                       const BarPlayerPlayStateSnapshot *snapshot);
 void BarWsBroadcastStations(BarApp_t *app);
-void BarWsDisconnectAllClients(BarApp_t *app);
 
 /* Lifecycle management */
 bool BarWsInit(BarApp_t *app);

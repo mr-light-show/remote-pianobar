@@ -96,6 +96,11 @@ enum { BAR_AUDIO_WAIT_TIMEOUT_SECONDS = 1 };
 typedef enum { AUDIO_NORMAL, AUDIO_TEARDOWN, AUDIO_OBSERVATION, AUDIO_PLAYBACK_CONTROL } AudioPolicy;
 static BarPlayerAudioFatalHook audioFatalHook;
 static BarPlayerJoinTestHook joinTestHook;
+static bool nullAudioTestBackend;
+
+void BarPlayerSetNullAudioTestBackend (bool enabled) {
+	nullAudioTestBackend = enabled;
+}
 
 void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook) {
 	joinTestHook = hook;
@@ -301,6 +306,13 @@ static bool deviceSetStartedReserved (player_t *player, bool started, const char
 			started ? "started" : "stopped", operation);
 	}
 	return transitioned;
+}
+
+/* PLAYER_AUDIO_FAILED does not imply a sound node exists: setup can fail
+ * before ma_sound_init succeeds. Stopping or uninitializing a never-initialized
+ * ma_sound dereferences its NULL engine pointer (UBSan: null member access). */
+static bool soundLiveLocked (const player_t *player) {
+	return player->audioState != PLAYER_AUDIO_NONE && player->soundInitialized;
 }
 
 static bool stopSoundReserved (player_t *player, bool live, const char *operation) {
@@ -811,7 +823,22 @@ void BarPlayerInit(player_t * const p, BarSettings_t * const settings) {
 	} else {
 		engineConfig.noDevice = MA_FALSE;
 	}
-	ma_result result = ma_engine_init(&engineConfig, &p->engine);
+	ma_result result = MA_SUCCESS;
+	if (nullAudioTestBackend || getenv ("PIANOBAR_TEST_NULL_AUDIO") != NULL) {
+		/* Overrides no-device: a real device thread and data callback without
+		 * hardware. Never falls back to a hardware backend; a failure leaves
+		 * the engine uninitialized. A reinit reuses the lifetime context. */
+		const ma_backend backends[] = { ma_backend_null };
+		if (!p->nullContextInitialized) {
+			result = ma_context_init (backends, 1, NULL, &p->nullContext);
+			p->nullContextInitialized = result == MA_SUCCESS;
+		}
+		p->audioNullBackend = p->nullContextInitialized;
+		p->audioNoDevice = false;
+		engineConfig.pContext = &p->nullContext;
+		engineConfig.noDevice = MA_FALSE;
+	}
+	if (result == MA_SUCCESS) { result = ma_engine_init(&engineConfig, &p->engine); }
 	if (result != MA_SUCCESS) {
 		log_write(LOG_ERROR, "Failed to initialize audio engine: %d\n", result);
 		p->engineInitialized = false;
@@ -835,13 +862,17 @@ bool BarPlayerDestroy(player_t * const p) {
 	pthread_mutex_unlock (&p->lock);
 	if (joinPending) { BarPlayerFatalShutdown (p, "destroy before player join"); return false; }
 	if (!audioReserve (p, AUDIO_TEARDOWN, "destroy")) { return false; }
-	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (p);
 	pthread_mutex_unlock (&p->lock);
 	if (!cleanupSoundReserved (p, live, "destroy")) {
 		audioTerminal (p, "destroy");
 		return false;
 	}
 	if (p->engineInitialized) { ma_engine_uninit (&p->engine); }
+	if (p->nullContextInitialized) {
+		ma_context_uninit (&p->nullContext);
+		p->nullContextInitialized = false;
+	}
 	pthread_mutex_lock (&p->lock);
 	p->soundInitialized = false;
 	p->engineInitialized = false;
@@ -861,7 +892,7 @@ bool BarPlayerDestroy(player_t * const p) {
 
 bool BarPlayerReset(player_t * const p) {
 	if (p == NULL || !audioReserve (p, AUDIO_TEARDOWN, "reset")) { return false; }
-	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (p);
 	const uint64_t epoch = p->controlEpoch;
 	pthread_mutex_unlock (&p->lock);
 	if (!cleanupSoundReserved (p, live, "reset")) {
@@ -1378,7 +1409,7 @@ static void audioTerminal (player_t *player, const char *operation) {
 
 bool BarPlayerStopAudio (player_t *player) {
 	if (player == NULL || !audioReserve (player, AUDIO_TEARDOWN, "stop")) { return false; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	pthread_mutex_unlock (&player->lock);
 	if (!stopSoundReserved (player, live, "stop")) {
 		audioTerminal (player, "stop");
@@ -1513,7 +1544,7 @@ void BarPlayerRequestStop (player_t *player) {
 	pthread_cond_broadcast (&player->audioCond);
 	pthread_mutex_unlock (&player->lock);
 	if (!audioReserve (player, AUDIO_TEARDOWN, "request stop")) { return; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	player->doPause = false;
 	player->pauseStartTime = 0;
 	pthread_cond_broadcast (&player->cond);
@@ -1658,7 +1689,7 @@ cleanup:
 
 static bool cleanupSound (player_t *player) {
 	if (!audioReserve (player, AUDIO_TEARDOWN, "cleanup")) { return false; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	pthread_mutex_unlock (&player->lock);
 	if (!cleanupSoundReserved (player, live, "cleanup")) {
 		audioTerminal (player, "cleanup");

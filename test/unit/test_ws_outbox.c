@@ -881,6 +881,29 @@ START_TEST (test_start_is_ordered_before_new_progress) {
 }
 END_TEST
 
+START_TEST (test_outbox_depth) {
+	size_t msgs = 9, bytes = 9;
+	BarWsOutboxDepth (NULL, &msgs, &bytes);
+	ck_assert_uint_eq (msgs, 0);
+	ck_assert_uint_eq (bytes, 0);
+	BarWsOutbox_t *o = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (o);
+	BarWsOutboxDepth (o, &msgs, &bytes);
+	ck_assert_uint_eq (msgs, 0);
+	ck_assert_uint_eq (bytes, 0);
+	ck_assert (push_text (o, 0, BAR_WS_KEY_NONE, "ab"));
+	ck_assert (push_text (o, 0, BAR_WS_KEY_PROGRESS, "cde"));
+	BarWsOutboxDepth (o, &msgs, &bytes);
+	ck_assert_uint_eq (msgs, 2);
+	ck_assert_uint_eq (bytes, 5);
+	BarWsPendingFree (BarWsOutboxTake (o));
+	BarWsOutboxDepth (o, &msgs, &bytes);
+	ck_assert_uint_eq (msgs, 0);
+	ck_assert_uint_eq (bytes, 0);
+	BarWsOutboxFree (o);
+}
+END_TEST
+
 Suite *ws_outbox_suite (void) {
 	Suite *s = suite_create ("ws_outbox");
 	TCase *tc = tcase_create ("Core");
@@ -919,6 +942,7 @@ Suite *ws_outbox_suite (void) {
 	tcase_add_test (tc, test_play_state_rejects_older_epoch_after_take);
 	tcase_add_test (tc, test_start_is_ordered_before_new_progress);
 	tcase_add_test (tc, test_outbox_null_safe);
+	tcase_add_test (tc, test_outbox_depth);
 	tcase_add_test (tc, test_free_releases_pending);
 	tcase_add_test (tc, test_concurrent_push_take_no_loss_no_leak);
 	tcase_set_timeout (tc, 30);
