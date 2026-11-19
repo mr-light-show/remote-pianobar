@@ -98,7 +98,7 @@ typedef struct {
 		bool pending;           /* Whether broadcast is pending */
 	} delayedVolumeBroadcast;
 	pthread_mutex_t volumeBroadcastMutex;
-	/* Service-loop timer (lws_sorted_usec_list_t) for the volume debounce
+	/* Service-loop timer (BarWsTimer_t in websocket.c) for the volume debounce
 	 * and the system-volume poll; service thread only */
 	void *timer;
 	
@@ -165,6 +165,11 @@ void BarWebsocketSetTestThreadCreateHook (BarWsThreadCreate_fn hook);
  * (NULL restores it). */
 typedef long long (*BarWsClock_fn) (void);
 void BarWebsocketSetTestClock (BarWsClock_fn clock);
+/* Test seam: called on the service thread between arming the loop timer and
+ * entering lws_service(), where a stall lets the timer ripen before the
+ * poll (NULL restores it). */
+typedef void (*BarWsServiceGap_fn) (void);
+void BarWebsocketSetTestServiceGapHook (BarWsServiceGap_fn hook);
 
 /*
  * Queue a pre-formatted Socket.IO event for `dest` (a connection ID or

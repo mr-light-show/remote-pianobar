@@ -753,9 +753,20 @@ long long BarWsServiceDiagnostics (BarWsContext_t *ctx) {
 	return next - now;
 }
 
-/* The timer only has to end lws_service(): the loop below does the work */
+/* The service-loop timer: the lws_sul list entry plus the context to wake.
+ * The entry comes first so the callback can recover the struct. */
+typedef struct {
+	lws_sorted_usec_list_t sul;
+	struct lws_context *context;
+} BarWsTimer_t;
+
+/* The timer only has to end lws_service(): the loop below does the work.
+ * A timer that ripens before lws_service() polls runs inside it and does not
+ * end the poll, which then sleeps until libwebsockets' own 5 s timeout. The
+ * wake (a pipe write, safe here as anywhere) makes that poll return at once;
+ * it is one spare loop pass when the timer fired during the poll. */
 static void BarWsTimerWake (lws_sorted_usec_list_t *sul) {
-	(void) sul;
+	lws_cancel_service (((BarWsTimer_t *) sul)->context);
 }
 
 /* Arm the service-loop timer for the next due work: the debounced volume
@@ -786,10 +797,18 @@ static void BarWsArmTimer (BarWsContext_t *ctx, const BarApp_t *app,
 		delayMs = diagMs;
 	}
 	if (delayMs >= 0) {
-		lws_sul_schedule ((struct lws_context *) ctx->context, 0,
-				(lws_sorted_usec_list_t *) ctx->timer, BarWsTimerWake,
+		BarWsTimer_t *timer = ctx->timer;
+		timer->context = ctx->context;
+		lws_sul_schedule (timer->context, 0, &timer->sul, BarWsTimerWake,
 				(lws_usec_t) delayMs * LWS_US_PER_MS);
 	}
+}
+
+/* Atomic: tests install it while the service thread runs */
+static _Atomic (BarWsServiceGap_fn) g_serviceGapHook = NULL;
+
+void BarWebsocketSetTestServiceGapHook (BarWsServiceGap_fn hook) {
+	atomic_store (&g_serviceGapHook, hook);
 }
 
 /* WebSocket service thread - runs lws_service() loop */
@@ -821,6 +840,10 @@ static void* BarWebsocketThread(void *arg) {
 		BarWsServiceOutbox (ctx);
 		
 		BarWsArmTimer (ctx, app, BarWsServiceDiagnostics (ctx));
+		const BarWsServiceGap_fn gap = atomic_load (&g_serviceGapHook);
+		if (gap != NULL) {
+			gap ();
+		}
 		
 		/* NOTE: Progress broadcasting now handled by playback_manager thread
 		 * This ensures timing is independent of WebSocket servicing delays
@@ -1005,7 +1028,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->maxConnections = 32;
 	ctx->connections = calloc(ctx->maxConnections, sizeof(BarWsConnection_t));
 	ctx->outbox = BarWsOutboxNew ();
-	ctx->timer = calloc (1, sizeof (lws_sorted_usec_list_t));
+	ctx->timer = calloc (1, sizeof (BarWsTimer_t));
 	if (!ctx->connections || !ctx->outbox || !ctx->timer) {
 		log_write(LOG_ERROR, "Failed to allocate the WebSocket context\n");
 		BarWsContextFree (app);
