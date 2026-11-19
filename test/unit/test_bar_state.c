@@ -60,7 +60,7 @@ START_TEST(test_bar_state_init_destroy_both) {
 END_TEST
 
 #ifdef HAVE_DEBUGLOG
-/* CLI: BarStateUsesRwlock false while DEBUG_STATE is enabled (no lock logging). */
+/* CLI: DEBUG_STATE lock logging paths with stateRwlock active. */
 START_TEST(test_bar_state_debug_state_no_rwlock_cli) {
 	BarApp_t app;
 	int stderr_dup;
@@ -78,8 +78,12 @@ START_TEST(test_bar_state_debug_state_no_rwlock_cli) {
 	memset(&app, 0, sizeof(app));
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
 	(void)BarStateGetNextStation(&app);
 	BarStateSetNextStation(&app, NULL);
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
 	BarStateDestroy(&app);
 
 	dup2(stderr_dup, STDERR_FILENO);
@@ -89,18 +93,70 @@ START_TEST(test_bar_state_debug_state_no_rwlock_cli) {
 END_TEST
 #endif
 
-/* BarStateUsesRwlock: false for NULL app and cli mode */
+/* BarStateUsesRwlock: false for NULL app; true in cli mode, where the
+ * playback manager thread shares playlist/station pointers with the CLI. */
 START_TEST(test_bar_state_uses_rwlock_cli_and_null) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 
 	ck_assert(!BarStateUsesRwlock(NULL));
-	ck_assert(!BarStateUsesRwlock(&app));
+	ck_assert(BarStateUsesRwlock(&app));
 
 	BarStateInit(&app);
 	BarStateSetNextStation(&app, NULL);
 	ck_assert_ptr_null(BarStateGetNextStation(&app));
+	BarStateDestroy(&app);
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	PianoStation_t *station;
+	volatile int done;
+} CliLockProbe;
+
+static void *cli_lock_probe_get(void *arg) {
+	CliLockProbe *probe = arg;
+	(void)BarStateGetNextStation(probe->app);
+	__atomic_store_n(&probe->done, 1, __ATOMIC_SEQ_CST);
+	return NULL;
+}
+
+static void *cli_lock_probe_set(void *arg) {
+	CliLockProbe *probe = arg;
+	BarStateSetNextStation(probe->app, probe->station);
+	__atomic_store_n(&probe->done, 1, __ATOMIC_SEQ_CST);
+	return NULL;
+}
+
+/* cli mode: a getter and a setter block while another thread holds stateRwlock. */
+START_TEST(test_bar_state_cli_getters_setters_take_rwlock) {
+	BarApp_t app;
+	PianoStation_t station = { .id = "cli", .name = "CLI" };
+	void *(*const probes[2])(void *) = { cli_lock_probe_get, cli_lock_probe_set };
+
+	memset(&app, 0, sizeof(app));
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+
+	for (int i = 0; i < 2; i++) {
+		CliLockProbe probe = { .app = &app, .station = &station, .done = 0 };
+		pthread_t thread;
+		ck_assert_int_eq(pthread_rwlock_wrlock(&app.stateRwlock), 0);
+		ck_assert_int_eq(pthread_create(&thread, NULL, probes[i], &probe), 0);
+		usleep(50000);
+		ck_assert_int_eq(__atomic_load_n(&probe.done, __ATOMIC_SEQ_CST), 0);
+		ck_assert_int_eq(pthread_rwlock_unlock(&app.stateRwlock), 0);
+		ck_assert_int_eq(pthread_join(thread, NULL), 0);
+		ck_assert_int_eq(__atomic_load_n(&probe.done, __ATOMIC_SEQ_CST), 1);
+	}
+	ck_assert_ptr_eq(BarStateGetNextStation(&app), &station);
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
 	BarStateDestroy(&app);
 }
 END_TEST
@@ -891,14 +947,18 @@ START_TEST(test_signal_playback_manager_no_deadlock) {
 }
 END_TEST
 
-START_TEST(test_signal_playback_manager_noop_null_and_cli) {
+START_TEST(test_signal_playback_manager_noop_null_wakes_cli) {
 	BarStateSignalPlaybackManager(NULL);
 
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
 	app.settings.uiMode = BAR_UI_MODE_CLI;
 	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
 	BarStateSignalPlaybackManager(&app);
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
 	BarStateDestroy(&app);
 }
 END_TEST
@@ -1441,6 +1501,7 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_core, test_bar_state_init_destroy_both);
 	tcase_add_test(tc_core, test_bar_state_init_destroy_web);
 	tcase_add_test(tc_core, test_bar_state_uses_rwlock_cli_and_null);
+	tcase_add_test(tc_core, test_bar_state_cli_getters_setters_take_rwlock);
 #ifdef HAVE_DEBUGLOG
 	tcase_add_test(tc_core, test_bar_state_debug_state_no_rwlock_cli);
 	tcase_add_test(tc_core, test_bar_state_debug_state_lock_logging);
@@ -1497,7 +1558,7 @@ Suite *bar_state_suite(void) {
 	TCase *tc_web = tcase_create("WEB mode locking");
 	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
 	tcase_add_test(tc_web, test_signal_playback_manager_no_deadlock);
-	tcase_add_test(tc_web, test_signal_playback_manager_noop_null_and_cli);
+	tcase_add_test(tc_web, test_signal_playback_manager_noop_null_wakes_cli);
 	suite_add_tcase(s, tc_web);
 
 	TCase *tc_snap = tcase_create("Snapshot");

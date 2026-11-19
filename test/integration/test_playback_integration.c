@@ -46,6 +46,7 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/settings.h"
 #include "../../src/ui.h"
+#include "../../src/websocket_bridge.h"
 #include "fixture_http.h"
 #include "../audio_fixture_callback.h"
 #include "../test_helpers.h"
@@ -1071,6 +1072,11 @@ START_TEST (test_playback_two_song_manual_advance)
 }
 END_TEST
 
+/* Runs once per ui_mode (both, cli): the bridge must start the playback
+ * manager without a WebSocket server, and a station chosen after the manager
+ * has parked must wake it to fetch and play one fixture song. */
+static const BarUiMode_t g_manager_modes[] = { BAR_UI_MODE_BOTH, BAR_UI_MODE_CLI };
+
 START_TEST (test_playback_manager_plays_fixture_song)
 {
 	if (!integration_enabled ()) {
@@ -1085,6 +1091,8 @@ START_TEST (test_playback_manager_plays_fixture_song)
 	uint16_t port = 0;
 
 	setup_integration_app (&barApp);
+	barApp.settings.uiMode = g_manager_modes[_i];
+	ck_assert_ptr_null (barApp.wsContext);
 
 	ck_assert (integration_fixture_exists ());
 	ck_assert (BarFixtureHttpStart (&http, integration_fixture_path (), &port));
@@ -1096,18 +1104,20 @@ START_TEST (test_playback_manager_plays_fixture_song)
 	memset (&g_station, 0, sizeof (g_station));
 	g_station.id = "station-manager";
 	g_station.name = "Manager Station";
-	BarStateSetNextStation (&barApp, &g_station);
 
 	BarUiPianoCallSetTestHook (mock_get_playlist_counted);
-	ck_assert (BarPlaybackManagerStart (&barApp));
+	ck_assert (BarWsStartPlaybackManager (&barApp));
+	usleep (50000); /* let the manager park with no station */
+	BarStateSetNextStation (&barApp, &g_station);
 
 	ck_assert (wait_dead_after_playing (&barApp, 15000));
 	ck_assert_int_ge (g_playlist_fetch_count, 1);
 	ck_assert (BarPlaybackManagerWaitParkedIdle (&barApp, 1000));
 	BarTestAssertDeviceStarted (&barApp.player, false);
 
-	BarPlaybackManagerStop (&barApp);
+	BarWsStopPlaybackManager (&barApp);
 	BarStateDrainPlaylist (&barApp);
+	ck_assert_ptr_null (barApp.wsContext);
 
 	teardown_integration_app (&barApp);
 	BarFixtureHttpStop (&http);
@@ -1495,7 +1505,8 @@ Suite *playback_integration_suite (void) {
 	tcase_add_test (tc, test_player_pause_resume_stops_device_and_preserves_cursor);
 	tcase_add_test (tc, test_player_pause_parks_decoder_until_same_http_song_resumes);
 	tcase_add_test (tc, test_playback_two_song_manual_advance);
-	tcase_add_test (tc, test_playback_manager_plays_fixture_song);
+	tcase_add_loop_test (tc, test_playback_manager_plays_fixture_song, 0,
+	                     (int) (sizeof (g_manager_modes) / sizeof (g_manager_modes[0])));
 	tcase_add_test (tc, test_fixture_epipe_before_cancel_is_error);
 	tcase_add_test (tc, test_fixture_epipe_after_cancel_is_expected);
 	tcase_add_test (tc, test_fixture_other_error_after_cancel_is_error);

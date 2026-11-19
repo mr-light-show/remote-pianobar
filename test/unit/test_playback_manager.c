@@ -37,6 +37,7 @@ THE SOFTWARE.
 #include "../../src/playback_manager.h"
 #include "../../src/websocket/core/websocket.h"
 #include "../test_helpers.h"
+#include "../../src/websocket_bridge.h"
 
 void BarUiActSkipSong (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
 void BarUiActPandoraDisconnect (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
@@ -804,6 +805,58 @@ START_TEST(test_manager_fetches_playlist_when_next_station_set) {
 }
 END_TEST
 
+static atomic_uint cliManagerFetches;
+
+static bool
+mock_cli_get_playlist_counted (BarApp_t *app, const PianoRequestType_t type,
+                               void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	if (type == PIANO_REQUEST_GET_PLAYLIST) {
+		atomic_fetch_add (&cliManagerFetches, 1);
+	}
+	return mock_get_playlist_ok (app, type, data, pRet, wRet);
+}
+
+/* ui_mode=cli: the bridge runs the playback manager (the only song fetcher)
+ * without creating a WebSocket context, and a CLI station pick wakes it. */
+START_TEST(test_bridge_cli_mode_runs_playback_manager_without_websocket) {
+	BarApp_t app;
+	PianoStation_t st = { .id = "cli-st", .name = "CLI" };
+
+	memset(&app, 0, sizeof(app));
+	app.settings.npStationFormat = strdup ("Station \"%n\" (%i)");
+	ck_assert_ptr_nonnull (app.settings.npStationFormat);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+	atomic_store (&cliManagerFetches, 0);
+	BarUiPianoCallSetTestHook (mock_cli_get_playlist_counted);
+
+	ck_assert(BarWsInit(&app));
+	ck_assert_ptr_null(app.wsContext);
+	ck_assert(BarWsStartPlaybackManager(&app));
+	usleep(50000); /* manager parks: no station selected yet */
+	BarStateSetNextStation(&app, &st);
+	for (int i = 0; i < 400 && atomic_load (&cliManagerFetches) == 0; i++) {
+		usleep(5000);
+	}
+	ck_assert_uint_ge(atomic_load (&cliManagerFetches), 1);
+
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarWsStopPlaybackManager(&app);
+	BarWsDestroy(&app);
+	ck_assert_ptr_null(app.wsContext);
+	BarUiPianoCallClearTestHook ();
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST(test_should_park_idle_when_dead_and_empty) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
@@ -993,6 +1046,7 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_manager_thread_one_loop_iteration);
 	tcase_add_test(tc, test_manager_idle_advances_playlist);
 	tcase_add_test(tc, test_manager_fetches_playlist_when_next_station_set);
+	tcase_add_test(tc, test_bridge_cli_mode_runs_playback_manager_without_websocket);
 	tcase_add_test(tc, test_should_park_idle_when_dead_and_empty);
 	tcase_add_test(tc, test_should_not_park_when_next_station_set);
 	tcase_add_test(tc, test_should_not_park_when_not_dead);

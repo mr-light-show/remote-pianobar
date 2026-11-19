@@ -2052,8 +2052,8 @@ START_TEST(test_websocket_bridge_predicates_and_cli_noops) {
 	BarWsDestroy (&app);
 	ck_assert (BarWsDaemonize (&app));
 	BarWsRemovePidFile (&app);
-	ck_assert (BarWsStartPlaybackManager (&app));
-	BarWsStopPlaybackManager (&app);
+	ck_assert (BarWsStartPlaybackManager (NULL));
+	BarWsStopPlaybackManager (NULL);
 	ck_assert (BarWsAcquireSingletonLock (&app));
 	ck_assert_int_eq (app.lockFd, -1);
 

@@ -18,9 +18,9 @@ This document describes the threading model, lock hierarchy, and safe coding pat
 
 ## Architecture Overview
 
-Pianobar supports three `ui_mode` values (WebSocket builds):
+Pianobar supports three `ui_mode` values:
 
-- **CLI-only** (`BAR_UI_MODE_CLI`): Terminal input only; WebSocket server and playback manager **do not** start. No `stateRwlock` (single-threaded access to playlist/station pointers from main).
+- **CLI-only** (`BAR_UI_MODE_CLI`): Terminal input on main + **playback manager thread** (same as Both, minus the WebSocket server: no WebSocket context, command worker or listening port). The CLI and the playback manager share state via `stateRwlock`.
 - **Web** (`BAR_UI_MODE_WEB`): Daemon; main thread sleeps; the **WebSocket command worker** + **playback manager thread** share state via `stateRwlock` (the **WebSocket service thread** only reads snapshots).
 - **Both** (`BAR_UI_MODE_BOTH`): Foreground CLI + WebSocket + playback manager (the CLI, the command worker and the playback manager mutate shared playlist/station pointers).
 
@@ -61,7 +61,7 @@ Pianobar uses **several synchronization primitives**:
 | Lock | Purpose | Scope | File |
 |------|---------|-------|------|
 | `app->pianoHttpMutex` | **Recursive** mutex: serializes all of [`BarUiPianoCall`](ui.c) (shared `CURL *`, `PianoRequest`/`PianoResponse` on `app->ph`) so only one thread performs Pandora HTTP at a time | Always (after init in `main`) | [`main.h`](main.h), [`ui.c`](ui.c) |
-| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | `BAR_UI_MODE_WEB` and `BAR_UI_MODE_BOTH` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
+| `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | Every `ui_mode` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
 | Command queue lock | Protects the bounded command FIFO (service thread pushes, worker pops) | Web and both | [`websocket/core/commands.c`](websocket/core/commands.c) |
@@ -283,16 +283,14 @@ must not call Pandora RPC helpers while already holding `stateRwlock`.
 
 ### Conditional Locking
 
-`app->stateRwlock` is **always** held by `BarStateSet*` functions in any mode
-that has concurrent WebSocket threads (`BAR_UI_MODE_BOTH` and `BAR_UI_MODE_WEB`).
+`app->stateRwlock` is **always** held by `BarStateSet*` functions in every
+`ui_mode` (the playback manager thread runs in all of them, cli included).
 Callers must not hold a read lock when calling any `BarStateSet*` function.
-In CLI-only mode, the lock operations are no-ops (optimized away).
 
 ```c
-/* Internal helper in bar_state.c — active for BOTH and WEB modes */
-static bool state_needs_lock(const BarApp_t *app) {
-    return app->settings.uiMode == BAR_UI_MODE_BOTH ||
-           app->settings.uiMode == BAR_UI_MODE_WEB;
+/* Internal helper in bar_state.c — active in every ui_mode */
+static bool state_needs_lock (const BarApp_t *app) {
+	return BarStateUsesRwlock (app);
 }
 ```
 
@@ -788,7 +786,7 @@ This records the audit done before WebSocket commands moved to the single comman
 
 Code that holds the mutex across a selection uses `BarUiPianoHold`/`BarUiPianoRelease`, which count holds per thread. **Never hold it while waiting for terminal input.** `BarUiPianoSuspend`/`BarUiPianoResume` release and retake every hold of the thread around a prompt; afterwards the selection is resolved again by ID (`BarUiActInputBegin`/`End`).
 
-The mutex is never held across waits for the playback manager: teardown (disconnect/reconnect) suspends any hold, and auto-recovery runs unheld. In CLI-only mode `stateRwlock` is a no-op and the recursive mutex has one user, so the extra holds cost nothing and cannot deadlock.
+The mutex is never held across waits for the playback manager: teardown (disconnect/reconnect) suspends any hold, and auto-recovery runs unheld. In CLI-only mode the CLI and the playback manager are the two threads that use the mutex and `stateRwlock`, exactly as in Both mode minus the command worker; the same rules (no hold while waiting for terminal input) keep them deadlock-free.
 
 ### Who holds it
 
