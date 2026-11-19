@@ -3194,6 +3194,48 @@ START_TEST (test_delayed_volume_broadcast_fires_without_other_traffic)
 }
 END_TEST
 
+/* Stall the service thread between arming the loop timer and lws_service()
+ * once, long enough for the 100 ms debounce deadline to pass. */
+static void test_gap_stall_once (void) {
+	static atomic_int stalled;
+	if (atomic_exchange (&stalled, 1) == 0) {
+		struct timespec ts = { 0, 250 * 1000000L };
+		nanosleep (&ts, NULL);
+	}
+}
+
+/* A timer that ripens before lws_service() polls runs inside lws_service()
+ * and used to leave the poll asleep until libwebsockets' own 5 s timeout:
+ * the callback itself must end the wait. */
+START_TEST (test_delayed_volume_broadcast_survives_timer_ripening_before_poll)
+{
+	BarApp_t app;
+	test_e2e_app_init (&app, false);
+	struct lws_context *cctx = test_e2e_client_context ();
+	TestE2eClient_t a, none;
+	memset (&a, 0, sizeof (a));
+	memset (&none, 0, sizeof (none));
+	test_e2e_connect (cctx, app.settings.websocketPort, &a);
+	test_e2e_pump_until (cctx, &a, 1, &none, 0);
+
+	BarWebsocketSetTestServiceGapHook (test_gap_stall_once);
+	BarWsScheduleVolumeBroadcast (app.wsContext, 100);
+	struct timespec start, now;
+	clock_gettime (CLOCK_MONOTONIC, &start);
+	test_e2e_pump_until (cctx, &a, 2, &none, 0);
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	BarWebsocketSetTestServiceGapHook (NULL);
+	test_e2e_expect (&a, 1, "\"volume\"");
+	const double waited = (double) (now.tv_sec - start.tv_sec) +
+			(double) (now.tv_nsec - start.tv_nsec) / 1e9;
+	ck_assert_msg (waited < 2.0, "debounced volume took %.2f s", waited);
+
+	lws_context_destroy (cctx);
+	test_e2e_free (&a);
+	test_e2e_app_destroy (&app);
+}
+END_TEST
+
 /* ------------------------------------------------------------------------
  * Diagnostics log lines
  * ------------------------------------------------------------------------ */
@@ -3987,6 +4029,7 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_end_to_end_commands_over_lws);
 	tcase_add_test (tc_worker, test_busy_burst_notifies_once_and_closes_nobody);
 	tcase_add_test (tc_worker, test_delayed_volume_broadcast_fires_without_other_traffic);
+	tcase_add_test (tc_worker, test_delayed_volume_broadcast_survives_timer_ripening_before_poll);
 	tcase_add_test (tc_worker, test_split_message_is_reassembled);
 	tcase_add_test (tc_worker, test_split_message_over_limit_is_dropped_with_tail);
 	tcase_add_test (tc_worker, test_split_messages_do_not_interleave_between_clients);
