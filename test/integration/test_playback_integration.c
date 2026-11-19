@@ -1203,6 +1203,18 @@ static void null_audio_app_stop (BarApp_t *barApp, BarFixtureHttp_t *http) {
 }
 
 /* The device callback, not the test, must advance the real cursor. */
+/* BarPlayerGetAudioSnapshot never blocks: it returns false while the player
+ * lock or audio reservation is briefly held by another thread. Retry for up
+ * to 2 s while the song is still playing instead of asserting one attempt. */
+static bool null_audio_snapshot (player_t *player, BarPlayerAudioSnapshot *snapshot) {
+	for (unsigned elapsed = 0; elapsed < 2000; elapsed += 5) {
+		if (BarPlayerGetAudioSnapshot (player, snapshot)) { return true; }
+		if (BarPlayerGetMode (player) != PLAYER_PLAYING) { return false; }
+		usleep (5000);
+	}
+	return false;
+}
+
 static bool null_audio_wait_cursor_at_least (player_t *player, ma_uint64 frames) {
 	for (unsigned elapsed = 0; elapsed < 2000; elapsed += 5) {
 		BarPlayerAudioSnapshot snapshot;
@@ -1253,10 +1265,10 @@ START_TEST (test_null_audio_pause_resume_stops_and_restarts_device)
 		ck_assert (BarPlayerIsPaused (&barApp.player));
 		BarTestAssertDeviceStarted (&barApp.player, false);
 		BarPlayerAudioSnapshot before, after;
-		ck_assert (BarPlayerGetAudioSnapshot (&barApp.player, &before));
+		ck_assert (null_audio_snapshot (&barApp.player, &before));
 		ck_assert (!before.playing);
 		usleep (100000);
-		ck_assert (BarPlayerGetAudioSnapshot (&barApp.player, &after));
+		ck_assert (null_audio_snapshot (&barApp.player, &after));
 		ck_assert_msg (after.cursorFrames == before.cursorFrames,
 		               "a stopped device must not advance the cursor");
 		BarUiActPlay (&barApp, NULL, NULL, 1);
@@ -1373,7 +1385,7 @@ START_TEST (test_null_audio_skip_mid_song_stops_device)
 	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
 	ck_assert (null_audio_wait_cursor_at_least (&barApp.player, 1));
 	BarPlayerAudioSnapshot snapshot;
-	ck_assert (BarPlayerGetAudioSnapshot (&barApp.player, &snapshot));
+	ck_assert (null_audio_snapshot (&barApp.player, &snapshot));
 	ck_assert (!snapshot.atEnd);
 	BarUiActSkipSong (&barApp, NULL, NULL, 1);
 	ck_assert (barApp.player.doQuit);
