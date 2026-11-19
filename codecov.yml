@@ -28,3 +28,4 @@ ignore:
   - "test/**"
   - "webui/test/**"
   - "webui/src/locales/**"
+  - "webui/*.config.*"

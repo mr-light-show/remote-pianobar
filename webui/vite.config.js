@@ -35,7 +35,9 @@ export default defineConfig({
         'dist/',
         'src/protocol.ts',
         '../src/l10n_defaults_gen.c',
-        'vite.config.js'
+        'vite.config.js',
+        '*.config.*',
+        'playwright.config.ts'
       ]
     }
   }

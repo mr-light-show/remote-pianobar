@@ -69,8 +69,10 @@ jobs:
 
   # Web UI E2E against the real pianobar binary and a local fake Pandora API
   # (no account needed; see TESTING.md, "E2E without a Pandora account").
+  # Pinned: ubuntu-latest is now a release Playwright cannot install browser
+  # dependencies for (`playwright install --with-deps` fails there).
   e2e-fake:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
