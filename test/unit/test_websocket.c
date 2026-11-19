@@ -40,6 +40,9 @@ THE SOFTWARE.
 #include <json-c/json.h>
 #include <libwebsockets.h>
 #include <pthread.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 /* Wire-compat capture buffer */
 static char g_compatBuf[8192];
@@ -47,6 +50,33 @@ static void compatCapture (const char *msg, size_t len) {
 	size_t copy = len < sizeof (g_compatBuf) - 1 ? len : sizeof (g_compatBuf) - 1;
 	memcpy (g_compatBuf, msg, copy);
 	g_compatBuf[copy] = '\0';
+}
+
+/* Route real deliveries (BarWsDeliver) into g_compatBuf: one fake client. */
+static char g_compatSocket;
+static int compatWriteFrame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	compatCapture ((const char *) buf, len);
+	return (int) len;
+}
+
+static BarWsConnId_t compatAttach (BarWsContext_t *ctx) {
+	ctx->maxConnections = 1;
+	ctx->connections = calloc (1, sizeof (BarWsConnection_t));
+	ck_assert_ptr_nonnull (ctx->connections);
+	ctx->writeFrame = compatWriteFrame;
+	g_compatBuf[0] = '\0';
+	BarWsConnId_t id = BarWsConnectionAdd (ctx, &g_compatSocket, "socketio");
+	ck_assert_uint_ne (id, BAR_WS_DEST_BROADCAST);
+	return id;
+}
+
+static void compatDetach (BarWsContext_t *ctx) {
+	free (ctx->connections);
+	ctx->connections = NULL;
+	ctx->maxConnections = 0;
+	ctx->numConnections = 0;
+	ctx->writeFrame = NULL;
 }
 
 /* Test: WebSocket initialization with NULL app should fail */
@@ -117,6 +147,7 @@ static void test_setup_web_app (BarApp_t *app, BarWsContext_t *ctx) {
 	app->settings.volume = 40;
 	app->wsContext = ctx;
 	test_ws_context_init_buckets (ctx);
+	pthread_mutex_init (&ctx->connMutex, NULL);
 	BarStateInit (app);
 	pthread_mutex_init (&app->player.lock, NULL);
 	pthread_cond_init (&app->player.cond, NULL);
@@ -131,6 +162,7 @@ static void test_teardown_web_app (BarApp_t *app, BarWsContext_t *ctx) {
 	pthread_mutex_destroy (&app->player.lock);
 	BarStateDestroy (app);
 	test_ws_context_destroy_buckets (ctx);
+	pthread_mutex_destroy (&ctx->connMutex);
 	BarSettingsDestroy (&app->settings);
 }
 
@@ -268,6 +300,320 @@ START_TEST (test_websocket_bridge_progress_skips_duplicate_elapsed)
 }
 END_TEST
 
+/* Connection-table fixture: tracks fake clients without real sockets. */
+#define TEST_MAX_CLIENTS 4
+
+static void test_setup_clients (BarApp_t *app, BarWsContext_t *ctx) {
+	test_setup_web_app (app, ctx);
+	ctx->maxConnections = TEST_MAX_CLIENTS;
+	ctx->connections = calloc (TEST_MAX_CLIENTS, sizeof (BarWsConnection_t));
+	ck_assert_ptr_nonnull (ctx->connections);
+}
+
+static void test_teardown_clients (BarApp_t *app, BarWsContext_t *ctx) {
+	free (ctx->connections);
+	test_teardown_web_app (app, ctx);
+}
+
+static char test_fake_sockets[TEST_MAX_CLIENTS];
+
+/* Records which fake sockets a delivery wrote to, and what. */
+static void *test_written_wsi[16];
+static char test_written_msg[16][64];
+static size_t test_written_count;
+
+static int test_write_frame (void *wsi, unsigned char *buf, size_t len) {
+	ck_assert_uint_lt (test_written_count, 16);
+	test_written_wsi[test_written_count] = wsi;
+	snprintf (test_written_msg[test_written_count], 64, "%.*s", (int) len, buf);
+	test_written_count++;
+	return (int) len;
+}
+
+static void test_clients_hook_writer (BarWsContext_t *ctx) {
+	test_written_count = 0;
+	ctx->writeFrame = test_write_frame;
+}
+
+/* Run the service-thread side: drain a bucket and deliver it. */
+static void test_drain_bucket (BarWsContext_t *ctx, BarWsBucketType_t bucket) {
+	BarWsMessage_t *msg = ctx->buckets[bucket].message;
+	ctx->buckets[bucket].message = NULL;
+	ck_assert_ptr_nonnull (msg);
+	BarWsDeliver (ctx, msg->data, msg->dataLen, msg->dest);
+	BarWsMessageFree (msg);
+}
+
+START_TEST (test_send_broadcast_reaches_all_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio"), 0);
+
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_VOLUME,
+			strdup ("2[\"volume\",40]")));
+	ck_assert_uint_eq (test_written_count, 0); /* queued, not yet written */
+	test_drain_bucket (&ctx, BUCKET_VOLUME);
+
+	ck_assert_uint_eq (test_written_count, 2);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[0]);
+	ck_assert_ptr_eq (test_written_wsi[1], &test_fake_sockets[1]);
+	ck_assert_str_eq (test_written_msg[0], "2[\"volume\",40]");
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* Writer for the cross-thread tests: counts frames, safe on any thread */
+static _Atomic size_t test_atomic_written;
+
+static int test_count_frame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	(void) buf;
+	atomic_fetch_add (&test_atomic_written, 1);
+	return (int) len;
+}
+
+static void *test_broadcast_now_thread (void *arg) {
+	BarApp_t *app = arg;
+	BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BUCKET_NONE,
+			strdup ("2[\"now\"]"));
+	return NULL;
+}
+
+/* An unbucketed broadcast runs on the caller's thread (not the service
+ * thread): it resolves its recipients under connMutex, so it waits while
+ * the service thread is changing the table */
+START_TEST (test_send_broadcast_now_waits_for_connection_table)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	pthread_t thread;
+	test_setup_clients (&app, &ctx);
+	ctx.writeFrame = test_count_frame;
+	atomic_store (&test_atomic_written, 0);
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
+
+	pthread_mutex_lock (&ctx.connMutex); /* the service thread mid-update */
+	ck_assert_int_eq (pthread_create (&thread, NULL, test_broadcast_now_thread,
+			&app), 0);
+	usleep (100000);
+	ck_assert_uint_eq (atomic_load (&test_atomic_written), 0);
+	pthread_mutex_unlock (&ctx.connMutex);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+	ck_assert_uint_eq (atomic_load (&test_atomic_written), 1);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+typedef struct {
+	BarApp_t *app;
+	_Atomic bool stop;
+} TestBroadcastLoop_t;
+
+static void *test_broadcast_loop_thread (void *arg) {
+	TestBroadcastLoop_t *loop = arg;
+	while (!atomic_load (&loop->stop)) {
+		BarWebsocketSend (loop->app, BAR_WS_DEST_BROADCAST, BUCKET_NONE,
+				strdup ("2[\"now\"]"));
+	}
+	return NULL;
+}
+
+/* Unbucketed broadcasts from another thread while this (service) thread
+ * adds and removes clients: ThreadSanitizer reports any unlocked read of
+ * the table; frames only ever go to tracked fake sockets */
+START_TEST (test_send_broadcast_now_races_table_updates)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	pthread_t thread;
+	TestBroadcastLoop_t loop = { .app = &app, .stop = false };
+	test_setup_clients (&app, &ctx);
+	ctx.writeFrame = test_count_frame;
+	atomic_store (&test_atomic_written, 0);
+
+	ck_assert_int_eq (pthread_create (&thread, NULL, test_broadcast_loop_thread,
+			&loop), 0);
+	for (int round = 0; round < 2000; round++) {
+		char *wsi = &test_fake_sockets[round % TEST_MAX_CLIENTS];
+		ck_assert_uint_ne (BarWsConnectionAdd (&ctx, wsi, "socketio"), 0);
+		BarWsConnectionRemove (&ctx, wsi);
+	}
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio"), 0);
+	const size_t before = atomic_load (&test_atomic_written);
+	while (atomic_load (&test_atomic_written) == before) {
+		usleep (1000); /* a broadcast reaches the client that stays */
+	}
+	atomic_store (&loop.stop, true);
+	ck_assert_int_eq (pthread_join (thread, NULL), 0);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_to_id_reaches_only_that_client)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	BarWsConnId_t b = BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+	ck_assert_uint_ne (a, 0);
+	ck_assert_uint_ne (b, 0);
+	ck_assert_uint_ne (a, b);
+
+	ck_assert (BarWebsocketSend (&app, b, BUCKET_STATIONS, strdup ("2[\"stations\"]")));
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[1]);
+	ck_assert_str_eq (test_written_msg[0], "2[\"stations\"]");
+	/* Delivered directly: nothing parked in a bucket */
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		ck_assert_ptr_null (ctx.buckets[i].message);
+	}
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_to_reused_slot_does_not_reach_new_client)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	ck_assert_uint_eq (a, 1);
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[0]);
+	/* Client B reuses slot 0 */
+	BarWsConnId_t b = BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+	ck_assert_uint_eq (b, 2);
+	ck_assert_ptr_eq (ctx.connections[0].wsi, &test_fake_sockets[1]);
+
+	/* Send-time resolution rejects the stale ID */
+	ck_assert (!BarWebsocketSend (&app, a, BUCKET_STATE, strdup ("2[\"reply\"]")));
+	ck_assert_uint_eq (test_written_count, 0);
+	/* Delivery-time filter also skips it (message queued before the swap) */
+	BarWsDeliver (&ctx, "2[\"reply\"]", 11, a);
+	ck_assert_uint_eq (test_written_count, 0);
+	/* B itself is still addressable */
+	ck_assert (BarWebsocketSend (&app, b, BUCKET_STATE, strdup ("2[\"reply\"]")));
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[1]);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_targeted_and_broadcast_do_not_replace_each_other)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+
+	/* Broadcast pending in a bucket, then a targeted reply in the same bucket */
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATIONS,
+			strdup ("2[\"bcast\"]")));
+	ck_assert (BarWebsocketSend (&app, a, BUCKET_STATIONS, strdup ("2[\"reply\"]")));
+	ck_assert_uint_eq (test_written_count, 1);
+	ck_assert_str_eq (test_written_msg[0], "2[\"reply\"]");
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[0]);
+	/* The pending broadcast survived and still reaches both clients */
+	test_drain_bucket (&ctx, BUCKET_STATIONS);
+	ck_assert_uint_eq (test_written_count, 3);
+	ck_assert_str_eq (test_written_msg[1], "2[\"bcast\"]");
+	ck_assert_str_eq (test_written_msg[2], "2[\"bcast\"]");
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_targeted_state_keeps_pending_progress_broadcast)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnId_t a = BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	ctx.progress.lastBroadcast = 7;
+
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_PROGRESS,
+			strdup ("2[\"progress\"]")));
+	ck_assert (BarWebsocketSend (&app, a, BUCKET_STATE, strdup ("2[\"start\"]")));
+	/* Targeted STATE must not clear everyone's pending PROGRESS */
+	ck_assert_ptr_nonnull (ctx.buckets[BUCKET_PROGRESS].message);
+	ck_assert_uint_eq (ctx.progress.lastBroadcast, 7);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_receive_from_untracked_client_is_dropped)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[1], "socketio");
+
+	/* Live but untracked (e.g. the table was full): its query must not turn
+	 * into a broadcast, nor reach anyone else */
+	BarWsHandleReceive (&app, &test_fake_sockets[2], "0", 1);
+	BarWsHandleReceive (&app, &test_fake_sockets[2], "2[\"query\"]", 11);
+	ck_assert_uint_eq (test_written_count, 0);
+	/* Empty or missing frames are ignored, even from a tracked client */
+	BarWsHandleReceive (&app, &test_fake_sockets[1], "", 0);
+	BarWsHandleReceive (&app, &test_fake_sockets[1], NULL, 5);
+	ck_assert_uint_eq (test_written_count, 0);
+	/* Removing a socket that was never tracked leaves the table alone */
+	BarWsConnectionRemove (&ctx, &test_fake_sockets[2]);
+	ck_assert_uint_eq (ctx.numConnections, 2);
+
+	/* A tracked client still gets its reply, and only it */
+	BarWsHandleReceive (&app, &test_fake_sockets[1], "2[\"query\"]", 11);
+	ck_assert_uint_eq (test_written_count, 2);
+	ck_assert_ptr_eq (test_written_wsi[0], &test_fake_sockets[1]);
+	ck_assert_ptr_eq (test_written_wsi[1], &test_fake_sockets[1]);
+	ck_assert (strstr (test_written_msg[0], "process") != NULL);
+	ck_assert (strstr (test_written_msg[1], "stations") != NULL);
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+START_TEST (test_send_unknown_id_frees_message_and_returns_false)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_clients (&app, &ctx);
+	test_clients_hook_writer (&ctx);
+	BarWsConnectionAdd (&ctx, &test_fake_sockets[0], "socketio");
+
+	/* Run under ASan/valgrind to catch a leak; NULL args must not crash. */
+	ck_assert (!BarWebsocketSend (&app, 999, BUCKET_STATE, strdup ("x")));
+	ck_assert (!BarWebsocketSend (NULL, BAR_WS_DEST_BROADCAST, BUCKET_STATE, strdup ("x")));
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATE, NULL));
+	app.wsContext = NULL;
+	ck_assert (!BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_STATE, strdup ("x")));
+	app.wsContext = &ctx;
+	ck_assert_uint_eq (test_written_count, 0);
+	for (int i = 0; i < BUCKET_COUNT; i++) {
+		ck_assert_ptr_null (ctx.buckets[i].message);
+	}
+
+	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
 START_TEST (test_websocket_bridge_disconnect_all_clients_with_context)
 {
 	BarApp_t app;
@@ -287,20 +633,18 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 	test_setup_web_app (&app, &ctx);
 	test_attach_station_and_song (&app, &station, &song);
 
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	g_compatBuf[0] = '\0';
+	BarWsConnId_t requester = compatAttach (&ctx);
 
-	ck_assert (!BarWsIsUnicastRequest ());
-
-	BarWsBroadcastExplanation (&app, "ignored without unicast target");
+	BarWsEmitExplanationTo (&app, requester + 1, "ignored for an unknown client");
 	ck_assert_str_eq (g_compatBuf, "");
 
-	int dummy_wsi = 0;
-	BarSocketIoSetUnicastTarget (&dummy_wsi);
-	ck_assert (BarWsIsUnicastRequest ());
-	BarWsBroadcastExplanation (&app, "Because you like rock.");
+	BarWsEmitExplanationTo (&app, requester, "Because you like rock.");
 	ck_assert (strstr (g_compatBuf, "Because you like rock.") != NULL);
-	BarSocketIoSetUnicastTarget (NULL);
+
+	g_compatBuf[0] = '\0';
+	BarWsEmitErrorTo (&app, requester, "song.explain", "Failed to receive explanation");
+	ck_assert (strstr (g_compatBuf, "\"error\"") != NULL);
+	ck_assert (strstr (g_compatBuf, "song.explain") != NULL);
 
 	g_compatBuf[0] = '\0';
 	BarWsEmitError (&app, "station.change", "Station not found");
@@ -325,7 +669,7 @@ START_TEST(test_websocket_bridge_unicast_helpers_and_errors) {
 		ck_assert (strstr (payload, "unknown") != NULL);
 	}
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
@@ -365,16 +709,13 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoSong_t song;
-	int dummy_wsi = 0;
 
 	test_setup_web_app (&app, &ctx);
 	memset (&song, 0, sizeof (song));
 	song.title = "Up Next";
 
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	BarSocketIoSetUnicastTarget (&dummy_wsi);
-	g_compatBuf[0] = '\0';
-	BarWsBroadcastUpcoming (&app, &song, 1);
+	BarWsConnId_t requester = compatAttach (&ctx);
+	BarWsEmitUpcomingTo (&app, requester, &song, 1);
 	ck_assert (strstr (g_compatBuf, "Up Next") != NULL);
 
 	g_compatBuf[0] = '\0';
@@ -389,8 +730,7 @@ START_TEST(test_websocket_bridge_upcoming_play_state_and_release_lock) {
 	BarWsReleaseSingletonLock (&app);
 	ck_assert_int_eq (app.lockFd, -1);
 
-	BarSocketIoSetUnicastTarget (NULL);
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
@@ -592,6 +932,114 @@ START_TEST (test_websocket_init_destroy_stops_when_app_quits)
 }
 END_TEST
 
+/* Init must fail cleanly (no context left behind) when it cannot listen.
+ * The port is already held by a listening socket, so bind() fails with
+ * EADDRINUSE on every platform. (A non-local address does not work: on Linux
+ * libwebsockets retries EADDRNOTAVAIL in a busy loop and never returns.) */
+START_TEST (test_websocket_init_fails_cleanly_when_bind_fails)
+{
+	BarApp_t app;
+	struct sockaddr_in addr;
+	socklen_t len = sizeof (addr);
+
+	int holder = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (holder, 0);
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	ck_assert_int_eq (bind (holder, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	ck_assert_int_eq (listen (holder, 1), 0);
+	ck_assert_int_eq (getsockname (holder, (struct sockaddr *) &addr, &len), 0);
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = ntohs (addr.sin_port);
+
+	ck_assert (!BarWebsocketInit (&app));
+	ck_assert_ptr_null (app.wsContext);
+	BarSettingsDestroy (&app.settings);
+	close (holder);
+}
+END_TEST
+
+/* Service-thread side of a real server: a queued broadcast is drained from
+ * its bucket and written to every client by the running service thread. */
+static pthread_mutex_t g_threadWriteLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_threadWriteCond = PTHREAD_COND_INITIALIZER;
+static char g_threadWritten[64];
+static size_t g_threadWriteCount;
+
+static int test_thread_write_frame (void *wsi, unsigned char *buf, size_t len) {
+	(void) wsi;
+	pthread_mutex_lock (&g_threadWriteLock);
+	snprintf (g_threadWritten, sizeof (g_threadWritten), "%.*s", (int) len, buf);
+	g_threadWriteCount++;
+	pthread_cond_signal (&g_threadWriteCond);
+	pthread_mutex_unlock (&g_threadWriteLock);
+	return (int) len;
+}
+
+/* A loopback port that was free a moment ago (the kernel picks it) */
+static int test_free_loopback_port (void) {
+	int fd = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (fd, 0);
+	struct sockaddr_in addr;
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	socklen_t len = sizeof (addr);
+	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
+	close (fd);
+	return ntohs (addr.sin_port);
+}
+
+START_TEST (test_websocket_service_thread_drains_bucket_to_clients)
+{
+	BarApp_t app;
+	char fakeSocket;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	app.settings.websocketHost = strdup ("127.0.0.1");
+	app.settings.websocketPort = test_free_loopback_port ();
+	ck_assert (BarWebsocketInit (&app));
+	BarWsContext_t *ctx = app.wsContext;
+	g_threadWriteCount = 0;
+	ctx->writeFrame = test_thread_write_frame;
+	ck_assert_uint_ne (BarWsConnectionAdd (ctx, &fakeSocket, "socketio"), 0);
+
+	/* The bucket mutex orders the hook and table setup before the drain */
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BUCKET_VOLUME,
+			strdup ("2[\"volume\",40]")));
+
+	struct timespec deadline;
+	clock_gettime (CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += 5;
+	pthread_mutex_lock (&g_threadWriteLock);
+	while (g_threadWriteCount == 0) {
+		if (pthread_cond_timedwait (&g_threadWriteCond, &g_threadWriteLock,
+				&deadline) != 0) {
+			break;
+		}
+	}
+	size_t written = g_threadWriteCount;
+	pthread_mutex_unlock (&g_threadWriteLock);
+	ck_assert_uint_eq (written, 1);
+	ck_assert_str_eq (g_threadWritten, "2[\"volume\",40]");
+
+	/* Stop the service thread before the fake client is dropped */
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarWebsocketDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
 START_TEST (test_websocket_bridge_print_bind_all_and_startup_info)
 {
 	BarApp_t app;
@@ -732,8 +1180,7 @@ START_TEST (test_websocket_immediate_and_delayed_volume_read_current_player_valu
 	BarWsScheduleVolumeBroadcast (&ctx, 0);
 	ck_assert (BarPlayerSetVolume (&app.player, 84));
 	app.settings.volume = 3;
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	g_compatBuf[0] = '\0';
+	compatAttach (&ctx);
 	BarWsProcessVolumeBroadcast (&ctx, &app);
 	event = json_tokener_parse (g_compatBuf + 1);
 	ck_assert_ptr_nonnull (event);
@@ -741,13 +1188,13 @@ START_TEST (test_websocket_immediate_and_delayed_volume_read_current_player_valu
 	ck_assert_int_eq (json_object_get_int (json_object_array_get_idx (event, 1)), 84);
 	ck_assert (!ctx.delayedVolumeBroadcast.pending);
 	json_object_put (event);
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	pthread_mutex_destroy (&ctx.volumeBroadcastMutex);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
-START_TEST(test_websocket_bridge_upcoming_skips_without_unicast_target) {
+START_TEST(test_websocket_bridge_upcoming_skips_unknown_requester) {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoSong_t song;
@@ -755,14 +1202,11 @@ START_TEST(test_websocket_bridge_upcoming_skips_without_unicast_target) {
 	memset (&song, 0, sizeof (song));
 	song.title = "Hidden Upcoming";
 
-	BarSocketIoSetBroadcastCallback (compatCapture);
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetUnicastTarget (NULL);
-
-	BarWsBroadcastUpcoming (&app, &song, 1);
+	BarWsConnId_t requester = compatAttach (&ctx);
+	BarWsEmitUpcomingTo (&app, requester + 1, &song, 1);
 	ck_assert_str_eq (g_compatBuf, "");
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
 	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
@@ -821,14 +1265,16 @@ END_TEST
 /* Wire-compat: progress must be an object, not bare values */
 START_TEST (test_wire_compat_progress_is_object)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
 	struct json_object *data = json_object_new_object ();
 	json_object_object_add (data, "elapsed",    json_object_new_int (42));
 	json_object_object_add (data, "duration",   json_object_new_int (240));
 	json_object_object_add (data, "percentage", json_object_new_int (17));
-	BarSocketIoEmit ("progress", data);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "progress", data);
 	json_object_put (data);
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
@@ -836,33 +1282,39 @@ START_TEST (test_wire_compat_progress_is_object)
 	ck_assert (strstr (g_compatBuf, "\"elapsed\"")  != NULL);
 	ck_assert (strstr (g_compatBuf, "\"duration\"") != NULL);
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
 /* Wire-compat: volume must be a bare integer, not wrapped in an object */
 START_TEST (test_wire_compat_volume_is_bare_integer)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
-	BarSocketIoEmit ("volume", json_object_new_int (50));
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "volume", json_object_new_int (50));
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
 	ck_assert (strstr (g_compatBuf, "\"volume\"") != NULL);
 	ck_assert (strstr (g_compatBuf, "{\"volume\"") == NULL);
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
 /* Wire-compat: stop must have no payload element — no comma after "stop" */
 START_TEST (test_wire_compat_stop_has_no_payload)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
-	BarSocketIoEmit ("stop", NULL);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "stop", NULL);
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
 	const char *stopPos = strstr (g_compatBuf, "\"stop\"");
@@ -870,15 +1322,18 @@ START_TEST (test_wire_compat_stop_has_no_payload)
 	/* No comma after "stop" means no second (payload) element */
 	ck_assert_ptr_null (strchr (stopPos, ','));
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
 /* Wire-compat: stations payload must open as an array bracket, not an object */
 START_TEST (test_wire_compat_stations_is_array)
 {
-	g_compatBuf[0] = '\0';
-	BarSocketIoSetBroadcastCallback (compatCapture);
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	compatAttach (&ctx);
 
 	struct json_object *arr = json_object_new_array ();
 	struct json_object *s   = json_object_new_object ();
@@ -886,7 +1341,7 @@ START_TEST (test_wire_compat_stations_is_array)
 	json_object_object_add (s, "name",       json_object_new_string ("My Station"));
 	json_object_object_add (s, "isQuickMix", json_object_new_boolean (0));
 	json_object_array_add (arr, s);
-	BarSocketIoEmit ("stations", arr);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "stations", arr);
 	json_object_put (arr);
 
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
@@ -897,7 +1352,8 @@ START_TEST (test_wire_compat_stations_is_array)
 	while (*after == ',' || *after == ' ') after++;
 	ck_assert_int_eq (*after, '[');
 
-	BarSocketIoSetBroadcastCallback (NULL);
+	compatDetach (&ctx);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
@@ -912,6 +1368,8 @@ Suite *websocket_suite(void) {
 	
 	tcase_add_test(tc_core, test_websocket_init_null);
 	tcase_add_test(tc_core, test_websocket_init_destroy_stops_when_app_quits);
+	tcase_add_test(tc_core, test_websocket_init_fails_cleanly_when_bind_fails);
+	tcase_add_test(tc_core, test_websocket_service_thread_drains_bucket_to_clients);
 	tcase_add_test(tc_core, test_websocket_destroy_null);
 	tcase_add_test(tc_core, test_websocket_elapsed_null);
 	tcase_add_test(tc_core, test_websocket_broadcast_null);
@@ -921,11 +1379,20 @@ Suite *websocket_suite(void) {
 	tcase_add_test(tc_core, test_websocket_bridge_start_stop_and_paused_progress);
 	tcase_add_test(tc_core, test_websocket_bridge_progress_skips_duplicate_elapsed);
 	tcase_add_test(tc_core, test_websocket_bridge_disconnect_all_clients_with_context);
+	tcase_add_test (tc_core, test_send_broadcast_reaches_all_clients);
+	tcase_add_test (tc_core, test_send_broadcast_now_waits_for_connection_table);
+	tcase_add_test (tc_core, test_send_broadcast_now_races_table_updates);
+	tcase_add_test (tc_core, test_send_to_id_reaches_only_that_client);
+	tcase_add_test (tc_core, test_send_to_reused_slot_does_not_reach_new_client);
+	tcase_add_test (tc_core, test_send_targeted_and_broadcast_do_not_replace_each_other);
+	tcase_add_test (tc_core, test_send_targeted_state_keeps_pending_progress_broadcast);
+	tcase_add_test (tc_core, test_send_unknown_id_frees_message_and_returns_false);
+	tcase_add_test (tc_core, test_receive_from_untracked_client_is_dropped);
 	tcase_add_test(tc_core, test_websocket_bridge_unicast_helpers_and_errors);
 	tcase_add_test(tc_core, test_websocket_bridge_guarded_broadcasts_noop_without_web_context);
 	tcase_add_test(tc_core, test_websocket_bridge_upcoming_play_state_and_release_lock);
 	tcase_add_test (tc_core, test_websocket_play_state_waits_for_queued_control);
-	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_without_unicast_target);
+	tcase_add_test(tc_core, test_websocket_bridge_upcoming_skips_unknown_requester);
 	tcase_add_test(tc_core, test_websocket_disconnect_all_clients_null_app);
 	tcase_add_test(tc_core, test_websocket_bridge_system_volume_mode_broadcast);
 	tcase_add_test(tc_core, test_websocket_schedule_volume_broadcast_sets_pending_flag);

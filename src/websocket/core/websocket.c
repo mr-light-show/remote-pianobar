@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include "../protocol/socketio.h"
 #include "../http/http_server.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -50,11 +51,7 @@ static const lws_retry_bo_t keepalive_policy = {
 	.jitter_percent = 0,
 };
 
-/* Global context for broadcast callback */
-static BarWsContext_t *g_wsContext = NULL;
-
 /* Forward declarations */
-static void BarWebsocketBroadcast(const char *message, size_t len);
 static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *msg);
 static void* BarWebsocketThread(void *arg);
 
@@ -140,6 +137,97 @@ static BarWsMessage_t* BarWsBucketTake(BarWsContext_t *ctx, BarWsBucketType_t bu
 	return msg;
 }
 
+static int BarWsLwsWriteFrame (void *wsi, unsigned char *buf, size_t len) {
+	return lws_write ((struct lws *) wsi, buf, len, LWS_WRITE_TEXT);
+}
+
+/* Per-slot recipient rule: a live slot whose ID matches `dest` (or any live
+ * slot for broadcast). A reused slot carries a new ID, so never matches.
+ * Caller holds connMutex. */
+static bool BarWsSlotMatches (const BarWsConnection_t *conn, BarWsConnId_t dest) {
+	return conn->wsi != NULL &&
+			(dest == BAR_WS_DEST_BROADCAST || conn->id == dest);
+}
+
+/* Add a client to the connection table (service thread) and assign its
+ * ID. IDs come from a monotonic counter and are never reused. Returns 0
+ * if the table is full. */
+BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
+                                  const char *protocol) {
+	BarWsConnId_t id = BAR_WS_DEST_BROADCAST;
+
+	pthread_mutex_lock (&ctx->connMutex);
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		BarWsConnection_t *conn = &ctx->connections[i];
+		if (conn->wsi == NULL) {
+			id = ++ctx->nextConnId;
+			conn->id = id;
+			conn->wsi = wsi;
+			conn->pendingClose = false;
+			snprintf (conn->protocol, sizeof (conn->protocol), "%s", protocol);
+			ctx->numConnections++;
+			break;
+		}
+	}
+	pthread_mutex_unlock (&ctx->connMutex);
+	return id;
+}
+
+/* Connection ID of `wsi`, or BAR_WS_DEST_BROADCAST if it is not tracked */
+static BarWsConnId_t BarWsConnectionIdOf (BarWsContext_t *ctx, void *wsi) {
+	BarWsConnId_t id = BAR_WS_DEST_BROADCAST;
+
+	pthread_mutex_lock (&ctx->connMutex);
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		if (ctx->connections[i].wsi == wsi) {
+			id = ctx->connections[i].id;
+			break;
+		}
+	}
+	pthread_mutex_unlock (&ctx->connMutex);
+	return id;
+}
+
+/* Dispatch a frame received from `wsi` (service thread). A received message
+ * always has a nonzero requester. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len) {
+	if (!app || !app->wsContext || !in || len == 0) {
+		return;
+	}
+	BarWsConnId_t requester = BarWsConnectionIdOf (app->wsContext, wsi);
+	if (requester == BAR_WS_DEST_BROADCAST) {
+		/* Untracked (table was full): its replies would have no recipient */
+		log_write (DEBUG_WEBSOCKET, "Dropping message from untracked client (wsi=%p)\n",
+		           wsi);
+		return;
+	}
+	char *message = malloc (len + 1);
+	if (message) {
+		memcpy (message, in, len);
+		message[len] = '\0';
+		BarWebsocketHandleMessage (app, message, len, "socketio", requester);
+		free (message);
+	}
+}
+
+void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi) {
+	pthread_mutex_lock (&ctx->connMutex);
+	for (size_t i = 0; i < ctx->maxConnections; i++) {
+		BarWsConnection_t *conn = &ctx->connections[i];
+		if (conn->wsi == wsi) {
+			log_write(DEBUG_WEBSOCKET, "Client removed (id %llu, total %zu)\n",
+			           (unsigned long long) conn->id, (size_t) ctx->numConnections - 1);
+			conn->id = 0;
+			conn->wsi = NULL;
+			conn->pendingClose = false;
+			conn->protocol[0] = '\0';
+			ctx->numConnections--;
+			break;
+		}
+	}
+	pthread_mutex_unlock (&ctx->connMutex);
+}
+
 /* WebSocket protocol callback */
 static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
                               void *user, void *in, size_t len) {
@@ -177,24 +265,21 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 		if (app && app->wsContext) {
 			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 			
-			/* Find empty slot in connections array */
-			for (size_t i = 0; i < ctx->maxConnections; i++) {
-				if (ctx->connections[i].wsi == NULL) {
-					ctx->connections[i].wsi = wsi;
-					ctx->connections[i].pendingClose = false;
-					strncpy(ctx->connections[i].protocol, 
-					        lws_get_protocol(wsi)->name, 
-					        sizeof(ctx->connections[i].protocol) - 1);
-					ctx->numConnections++;
-					
-					log_write(DEBUG_WEBSOCKET, "Client tracked (slot %zu, total %zu)\n", 
-					           i, ctx->numConnections);
-					
-					/* Send current state to new client only (unicast) */
-					BarSocketIoEmitProcessUnicast(app, wsi);
-					break;
-				}
+			BarWsConnId_t id = BarWsConnectionAdd (ctx, wsi,
+					lws_get_protocol (wsi)->name);
+			if (id == 0) {
+				/* Untracked clients would have every frame dropped: refuse
+				 * the connection so the client can reconnect later */
+				log_write (LOG_ERROR,
+						"Connection table full (%zu); refusing client\n",
+						ctx->maxConnections);
+				return -1;
 			}
+			log_write(DEBUG_WEBSOCKET, "Client tracked (id %llu, total %zu)\n",
+			           (unsigned long long) id, (size_t) ctx->numConnections);
+
+			/* Send current state to the new client only */
+			BarSocketIoEmitProcessTo (app, id);
 		}
 		break;
 	}
@@ -206,33 +291,14 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 		if (app && app->wsContext) {
 			BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 			
-			for (size_t i = 0; i < ctx->maxConnections; i++) {
-				if (ctx->connections[i].wsi == wsi) {
-					ctx->connections[i].wsi = NULL;
-					ctx->connections[i].pendingClose = false;
-					ctx->connections[i].protocol[0] = '\0';
-					ctx->numConnections--;
-					
-					log_write(DEBUG_WEBSOCKET, "Client removed (slot %zu, total %zu)\n", 
-					           i, ctx->numConnections);
-					break;
-				}
-			}
+			BarWsConnectionRemove (ctx, wsi);
 		}
 		break;
 	}
 			
 		case LWS_CALLBACK_RECEIVE:
 			/* Received message from client */
-			if (app && in && len > 0) {
-				char *message = malloc(len + 1);
-				if (message) {
-					memcpy(message, in, len);
-					message[len] = '\0';
-					BarWebsocketHandleMessage(app, message, len, "socketio", wsi);
-					free(message);
-				}
-			}
+			BarWsHandleReceive (app, wsi, in, len);
 			break;
 			
 		case LWS_CALLBACK_SERVER_WRITEABLE:
@@ -287,7 +353,8 @@ static void BarWebsocketProcessBroadcast(BarWsContext_t *ctx, BarWsMessage_t *ms
 	switch (msg->type) {
 		case MSG_TYPE_BROADCAST_SOCKETIO:
 			if (msg->data != NULL && msg->dataLen > 0) {
-				BarWebsocketBroadcast ((const char *) msg->data, msg->dataLen);
+				BarWsDeliver (ctx, (const char *) msg->data, msg->dataLen,
+				              msg->dest);
 			}
 			break;
 
@@ -415,6 +482,8 @@ static void* BarWebsocketThread(void *arg) {
 	}
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+	ctx->serviceThread = pthread_self ();
+	ctx->serviceThreadKnown = true;
 	
 	log_write(DEBUG_WEBSOCKET, "Thread started\n");
 	
@@ -492,9 +561,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	}
 	
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	
-	/* Set global context for broadcast callback */
-	g_wsContext = ctx;
+	pthread_mutex_init (&ctx->connMutex, NULL);
 	
 	/* Initialize libwebsockets */
 	memset(&info, 0, sizeof(info));
@@ -514,6 +581,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 	if (!ctx->context) {
 		log_write(LOG_ERROR, "Failed to create context on port %d\n",
 		        app->settings.websocketPort);
+		pthread_mutex_destroy (&ctx->connMutex);
 		free(ctx);
 		app->wsContext = NULL;
 		return false;
@@ -534,9 +602,6 @@ bool BarWebsocketInit(BarApp_t *app) {
 	ctx->lastPolledVolume = -1;  /* Unknown until first poll */
 	ctx->lastVolumePollTime = 0; /* Force immediate first poll */
 	
-	/* Set up Socket.IO broadcast callback */
-	BarSocketIoSetBroadcastCallback(BarWebsocketBroadcast);
-	
 	log_write(DEBUG_WEBSOCKET, "Server started on port %d\n",
 	        app->settings.websocketPort);
 	
@@ -549,6 +614,7 @@ bool BarWebsocketInit(BarApp_t *app) {
 		BarWsBucketsDestroy(ctx);
 		lws_context_destroy(ctx->context);
 		free(ctx->connections);
+		pthread_mutex_destroy (&ctx->connMutex);
 		free(ctx);
 		app->wsContext = NULL;
 		return false;
@@ -597,9 +663,7 @@ void BarWebsocketDestroy(BarApp_t *app) {
 		free(ctx->connections);
 		ctx->connections = NULL;
 	}
-	
-	/* Clear global context */
-	g_wsContext = NULL;
+	pthread_mutex_destroy (&ctx->connMutex);
 	
 	free(ctx);
 	app->wsContext = NULL;
@@ -622,11 +686,12 @@ unsigned int BarWebsocketGetElapsed(BarApp_t *app) {
 }
 
 /* Enqueue a pre-formatted Socket.IO message; takes ownership of message */
-static void broadcastSocketIoMessage (BarApp_t *app, BarWsBucketType_t bucket,
-                                       char *message, const uint64_t *playStateEpoch) {
+static bool enqueueSocketIoMessage (BarApp_t *app, BarWsConnId_t dest,
+                                     BarWsBucketType_t bucket, char *message,
+                                     const uint64_t *playStateEpoch) {
 	if (!app || !app->wsContext || !message) {
 		free (message);
-		return;
+		return false;
 	}
 
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
@@ -645,9 +710,10 @@ static void broadcastSocketIoMessage (BarApp_t *app, BarWsBucketType_t bucket,
 	BarWsMessage_t *msg = calloc (1, sizeof (BarWsMessage_t));
 	if (!msg) {
 		free (message);
-		return;
+		return false;
 	}
 	msg->type = MSG_TYPE_BROADCAST_SOCKETIO;
+	msg->dest = dest;
 	msg->data = message; /* transfer ownership */
 	msg->dataLen = strlen (message);
 	msg->next = NULL;
@@ -657,7 +723,7 @@ static void broadcastSocketIoMessage (BarApp_t *app, BarWsBucketType_t bucket,
 		if (ctx->playStateEpochValid && *playStateEpoch < ctx->playStateEpoch) {
 			pthread_mutex_unlock (&ctx->buckets[bucket].mutex);
 			BarWsMessageFree (msg);
-			return;
+			return false;
 		}
 		ctx->playStateEpoch = *playStateEpoch;
 		ctx->playStateEpochValid = true;
@@ -671,47 +737,82 @@ static void broadcastSocketIoMessage (BarApp_t *app, BarWsBucketType_t bucket,
 	if (ctx->context) {
 		lws_cancel_service ((struct lws_context *)ctx->context);
 	}
+	return true;
+}
+
+bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest,
+                       BarWsBucketType_t bucket, char *message) {
+	if (dest == BAR_WS_DEST_BROADCAST && bucket != BUCKET_NONE) {
+		return enqueueSocketIoMessage (app, dest, bucket, message, NULL);
+	}
+
+	/* Deliver now: BUCKET_NONE broadcasts (interim, on the caller's thread
+	 * as before) and every targeted send. A target is resolved at send time
+	 * (IDs are never reused, so a closed client or a new client in its old
+	 * slot cannot match). Buckets are latest-wins and their STATE side
+	 * effects are global, so targeted frames bypass them. */
+	if (!app || !app->wsContext || !message) {
+		free (message);
+		return false;
+	}
+	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
+	bool found = dest == BAR_WS_DEST_BROADCAST;
+	if (!found) {
+		/* Targeted delivery writes sockets: service thread only */
+		assert (!ctx->serviceThreadKnown ||
+				pthread_equal (pthread_self (), ctx->serviceThread));
+		pthread_mutex_lock (&ctx->connMutex);
+		for (size_t i = 0; i < ctx->maxConnections; i++) {
+			if (BarWsSlotMatches (&ctx->connections[i], dest)) {
+				found = true;
+				break;
+			}
+		}
+		pthread_mutex_unlock (&ctx->connMutex);
+	}
+	if (found) {
+		BarWsDeliver (ctx, message, strlen (message), dest);
+	}
+	free (message);
+	return found;
 }
 
 void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
                                             BarWsBucketType_t bucket,
                                             char *message) {
-	broadcastSocketIoMessage (app, bucket, message, NULL);
+	BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, bucket, message);
 }
 
 void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
                                              uint64_t epoch) {
-	broadcastSocketIoMessage (app, BUCKET_STATE, message, &epoch);
+	enqueueSocketIoMessage (app, BAR_WS_DEST_BROADCAST, BUCKET_STATE, message,
+	                        &epoch);
 }
 
-/* Broadcast message to all connected WebSocket clients */
-static void BarWebsocketBroadcast(const char *message, size_t len) {
-	if (!g_wsContext || !message || len == 0) {
+void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
+                   BarWsConnId_t dest) {
+	if (!ctx || !message || len == 0) {
 		log_write(DEBUG_WEBSOCKET, "Broadcast called with null/empty message\n");
 		return;
 	}
-	
-	BarWsContext_t *ctx = g_wsContext;
 	
 	/* Detect progress messages for separate debug flag */
 	bool isProgress = (len > 13 && strncmp(message, "2[ \"progress\"", 13) == 0);
 	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
 
 	log_write(dbgFlag, "Broadcasting to %zu clients (%zu bytes): %.*s%s\n",
-	           ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
+	           (size_t) ctx->numConnections, len, (int)LOG_MESSAGE_TRUNCATE_LEN, message, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 	
-	/* Check for unicast mode - if set, only send to target client */
-	void *unicastTarget = BarSocketIoGetUnicastTarget();
-	
-	/* Iterate through all connected clients */
+	/* Iterate through all connected clients. Each slot is read under
+	 * connMutex (this may run off the service thread, see BarWebsocketSend);
+	 * the write happens after releasing it, as lws_write may call back into
+	 * the table on the service thread. */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {
-		if (ctx->connections[i].wsi != NULL) {
-			struct lws *wsi = (struct lws *)ctx->connections[i].wsi;
-			
-			/* Skip if in unicast mode and this isn't the target */
-			if (unicastTarget != NULL && wsi != unicastTarget) {
-				continue;
-			}
+		pthread_mutex_lock (&ctx->connMutex);
+		void *wsi = BarWsSlotMatches (&ctx->connections[i], dest) ?
+				ctx->connections[i].wsi : NULL;
+		pthread_mutex_unlock (&ctx->connMutex);
+		if (wsi != NULL) {
 			
 			log_write(dbgFlag, "Sending to client %zu (wsi=%p)\n", i, wsi);
 			
@@ -728,7 +829,8 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 			log_write(dbgFlag, "About to call lws_write (len=%zu)\n", len);
 			
 			/* Send to this client */
-			int written = lws_write(wsi, &buf[LWS_PRE], len, LWS_WRITE_TEXT);
+			int written = (ctx->writeFrame ? ctx->writeFrame : BarWsLwsWriteFrame)
+				(wsi, &buf[LWS_PRE], len);
 			
 			if (written < 0) {
 				log_write(dbgFlag, "lws_write failed for client %zu (error=%d)\n", i, written);
@@ -744,8 +846,9 @@ static void BarWebsocketBroadcast(const char *message, size_t len) {
 }
 
 /* Handle incoming WebSocket message */
-void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
-                               size_t len, const char *protocol, void *wsi) {
+void BarWebsocketHandleMessage (BarApp_t *app, const char *message,
+                                size_t len, const char *protocol,
+                                BarWsConnId_t requester) {
 	if (!app || !message || len == 0) {
 		return;
 	}
@@ -756,7 +859,7 @@ void BarWebsocketHandleMessage(BarApp_t *app, const char *message,
 		log_write(DEBUG_WEBSOCKET, "HA message received (not yet implemented)\n");
 	} else {
 		/* Default to Socket.IO */
-		BarSocketIoHandleMessage(app, message, wsi);
+		BarSocketIoHandleMessage (app, message, requester);
 	}
 }
 
@@ -769,7 +872,7 @@ void BarWebsocketDisconnectAllClients(BarApp_t *app) {
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
 	
 	log_write(DEBUG_WEBSOCKET, "Disconnecting all clients (%zu connected)\n", 
-	           ctx->numConnections);
+	           (size_t) ctx->numConnections);
 	
 	/* Close each connected client */
 	for (size_t i = 0; i < ctx->maxConnections; i++) {

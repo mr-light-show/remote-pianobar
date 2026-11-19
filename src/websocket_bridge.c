@@ -64,24 +64,16 @@ void BarWsBroadcastVolume(BarApp_t *app) {
 	}
 }
 
-void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation) {
-	if (app && app->wsContext) {
-		/* Only emit if unicast target is set (WebUI request).
-		 * CLI requests have no unicast target - user sees result in terminal. */
-		if (BarSocketIoGetUnicastTarget() != NULL) {
-			BarSocketIoEmitExplanation(app, explanation);
-		}
-	}
+/* Query replies: to the requesting web client only. CLI requests never call
+ * these; the user sees the result in the terminal. */
+void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
+                            const char *explanation) {
+	BarSocketIoEmitExplanationTo(app, requester, explanation);
 }
 
-void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count) {
-	if (app && app->wsContext) {
-		/* Only emit if unicast target is set (WebUI request).
-		 * CLI requests have no unicast target - user sees result in terminal. */
-		if (BarSocketIoGetUnicastTarget() != NULL) {
-			BarSocketIoEmitUpcoming(app, songs, count);
-		}
-	}
+void BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester,
+                         PianoSong_t *songs, int count) {
+	BarSocketIoEmitUpcomingTo(app, requester, songs, count);
 }
 
 void BarWsBroadcastSongStart(BarApp_t *app) {
@@ -264,11 +256,6 @@ void BarWsReleaseSingletonLock(BarApp_t *app) {
 	}
 }
 
-/* Unicast request detection */
-bool BarWsIsUnicastRequest(void) {
-	return BarSocketIoGetUnicastTarget() != NULL;
-}
-
 /* Error event broadcasting */
 void BarWsEmitError(BarApp_t *app, const char *event, const char *msg) {
 	BarSocketIoEmitError(app, event, msg);
@@ -277,6 +264,11 @@ void BarWsEmitError(BarApp_t *app, const char *event, const char *msg) {
 void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
                        const char *extra) {
 	BarSocketIoEmitErrorEx(app, event, msg, extra);
+}
+
+void BarWsEmitErrorTo(BarApp_t *app, BarWsConnId_t requester,
+                      const char *event, const char *msg) {
+	BarSocketIoEmitErrorTo(app, requester, event, msg);
 }
 
 /* Pandora disconnect notification */

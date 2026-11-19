@@ -40,7 +40,11 @@ typedef enum {
 	BUCKET_VOLUME,     /* Volume changes */
 	BUCKET_PROGRESS,   /* Progress updates */
 	BUCKET_STATIONS,   /* Station list - lowest priority */
-	BUCKET_COUNT       /* Total number of buckets */
+	BUCKET_COUNT,      /* Total number of buckets */
+	/* Interim lane, not a bucket: deliver now, unqueued and never coalesced,
+	 * as the formerly direct emitters always have. Becomes the ordered,
+	 * unkeyed outbound entry when the outbound queue lands (PR2). */
+	BUCKET_NONE
 } BarWsBucketType_t;
 
 /* Message bucket - holds one message of a specific category */
@@ -51,6 +55,7 @@ typedef struct {
 
 /* WebSocket connection state */
 typedef struct {
+	BarWsConnId_t id;             /* Connection ID (service thread assigns) */
 	void *wsi;                    /* libwebsockets instance */
 	bool authenticated;           /* Authentication status */
 	bool pendingClose;            /* Connection marked for close (app.stop) */
@@ -70,6 +75,9 @@ typedef struct {
 	/* Threading */
 	pthread_t thread;             /* WebSocket service thread */
 	_Atomic bool threadRunning;   /* Thread lifecycle flag */
+	/* Recorded by the service thread itself; checks targeted sends */
+	pthread_t serviceThread;
+	bool serviceThreadKnown;
 	/* stateRwlock is in BarApp_t (web/both via BarStateUsesRwlock); player->lock for transport here */
 	
 	/* Message buckets (Main → WS thread) - REPLACES broadcastQueue */
@@ -92,10 +100,25 @@ typedef struct {
 	int lastPolledVolume;         /* Last known system volume (-1 = unknown) */
 	time_t lastVolumePollTime;    /* Last poll timestamp (seconds) */
 	
-	/* Connections (WS thread only) */
+	/* Connections: the service thread mutates the table under connMutex.
+	 * Every other read takes connMutex too: BarWebsocketSend resolving a
+	 * destination ID, and BarWsDeliver resolving each slot (it is released
+	 * before the frame is written). Known gap until the outbox replaces it:
+	 * an unbucketed broadcast (BUCKET_NONE) is delivered on the caller's
+	 * thread, so lws_write runs off the service thread (CLI reconnect,
+	 * playback-manager auto-recovery error events) and the wsi it resolved
+	 * can be closed by the service thread before the write. */
 	BarWsConnection_t *connections;
-	size_t numConnections;
+	_Atomic size_t numConnections; /* Written under connMutex; atomic so
+	                                * any thread may read it lock-free */
 	size_t maxConnections;
+	BarWsConnId_t nextConnId;     /* Monotonic; last ID handed out */
+	/* Guards the connection table: the service thread mutates it, producers
+	 * resolve destination IDs against it in BarWebsocketSend and recipients
+	 * in BarWsDeliver. Never held across a socket write. */
+	pthread_mutex_t connMutex;
+	/* Frame writer (NULL = lws_write); a seam so tests can observe delivery */
+	int (*writeFrame) (void *wsi, unsigned char *buf, size_t len);
 } BarWsContext_t;
 
 /* Initialize WebSocket server */
@@ -113,6 +136,39 @@ void BarWebsocketDestroy(BarApp_t *app);
 void BarWebsocketBroadcastSocketIoMessage (BarApp_t *app,
                                             BarWsBucketType_t bucket,
                                             char *message);
+/*
+ * Send a pre-formatted Socket.IO event. Always takes ownership of `message`
+ * (freed on failure). Returns false for a NULL app/context/message, or when
+ * `dest` names no currently connected client (unknown, closed, or a reused
+ * slot).
+ *  - BAR_WS_DEST_BROADCAST: queued in `bucket` (latest-wins), thread-safe;
+ *    with BUCKET_NONE, written to every client now on the caller's thread.
+ *  - A connection ID: delivered immediately to that client only, bypassing
+ *    the buckets and their STATE/PROGRESS side effects (`bucket` is ignored).
+ *    Must be called on the service thread until the outbound queue (Task 2)
+ *    replaces this.
+ */
+bool BarWebsocketSend (BarApp_t *app, BarWsConnId_t dest,
+                       BarWsBucketType_t bucket, char *message);
+
+/* Write `message` to every client (BAR_WS_DEST_BROADCAST) or only the client
+ * whose connection ID is `dest`. Meant for the service thread, but reached on
+ * the caller's thread by unbucketed broadcasts (see the connection table);
+ * reads the table under connMutex, writes without it. This is the single
+ * delivery routine. */
+void BarWsDeliver (BarWsContext_t *ctx, const char *message, size_t len,
+                   BarWsConnId_t dest);
+
+/* Service-thread connection table updates (exposed for tests).
+ * Add returns the new connection's ID, or 0 if the table is full. */
+BarWsConnId_t BarWsConnectionAdd (BarWsContext_t *ctx, void *wsi,
+                                  const char *protocol);
+void BarWsConnectionRemove (BarWsContext_t *ctx, void *wsi);
+/* Receive-callback body: dispatch a frame from `wsi` as its connection's
+ * request. Frames from a connection missing from the table (e.g. it was
+ * full) are dropped, never handled as requester 0. Service thread only. */
+void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len);
+
 /* Same ownership contract; rejects older completed play-state epochs under
  * STATE's mutex. The watermark survives consumption and generic messages.
  * Callers snapshot stable player state, then release every application lock.
@@ -123,9 +179,10 @@ void BarWebsocketBroadcastPlayStateMessage (BarApp_t *app, char *message,
 /* Get current elapsed time */
 unsigned int BarWebsocketGetElapsed(BarApp_t *app);
 
-/* Handle incoming WebSocket message */
-void BarWebsocketHandleMessage(BarApp_t *app, const char *message, 
-                               size_t len, const char *protocol, void *wsi);
+/* Handle incoming WebSocket message from the client `requester` */
+void BarWebsocketHandleMessage (BarApp_t *app, const char *message,
+                                size_t len, const char *protocol,
+                                BarWsConnId_t requester);
 
 /* Schedule delayed volume broadcast (for debouncing) */
 void BarWsScheduleVolumeBroadcast(BarWsContext_t *ctx, int delayMs);
