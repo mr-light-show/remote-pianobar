@@ -1,0 +1,9 @@
+# ThreadSanitizer suppressions for `make test-tsan`.
+# Keep every entry narrow and explain why it is safe.
+
+# miniaudio 0.11.23 (also unchanged in upstream 0.11.26): ma_sound_set_volume
+# stores the gainer's float master volume with a plain write while the device
+# thread reads it in ma_gainer_process_pcm_frames. A float store is not torn
+# on supported targets; the worst case is one period played at the old
+# volume. Remove this when miniaudio makes masterVolume atomic.
+race:ma_gainer_set_master_volume

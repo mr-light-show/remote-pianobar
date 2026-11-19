@@ -39,6 +39,8 @@ typedef void (*BarUiSelectStationCallback_t) (BarApp_t *app, char *buf);
 void BarUiMsg (const BarSettings_t *, const BarUiMsg_t, const char *, ...) __attribute__((format(printf, 3, 4)));
 PianoStation_t *BarUiSelectStation (BarApp_t *, PianoStation_t *, const char *,
 		BarUiSelectStationCallback_t, bool);
+char *BarUiSelectStationId (BarApp_t *, const char *,
+		BarUiSelectStationCallback_t, bool);
 PianoSong_t *BarUiSelectSong (const BarApp_t * const app,
 		PianoSong_t *startSong, BarReadlineFds_t *input);
 PianoArtist_t *BarUiSelectArtist (BarApp_t *, PianoArtist_t *);
@@ -48,11 +50,22 @@ void BarUiPrintSong (const BarSettings_t *, const PianoSong_t *,
 		const PianoStation_t *);
 size_t BarUiListSongs (const BarApp_t * const app,
 		const PianoSong_t *song, const char *filter);
+/* Reads station/song data only while formatting the script's input; then it
+ * releases this thread's pianoHttpMutex holds (BarUiPianoSuspend) for writing
+ * to and waiting on the script, and restores them before returning. Callers
+ * must resolve stations/songs again after it returns. */
 void BarUiStartEventCmd (const BarSettings_t *, const char *,
 		const PianoStation_t *, const PianoSong_t *, player_t *,
 		PianoStation_t *, PianoReturn_t, CURLcode);
 void BarUiPianoHttpMutexInit (BarApp_t *app);
 void BarUiPianoHttpMutexDestroy (BarApp_t *app);
+/* Hold pianoHttpMutex across resolving and using borrowed libpiano pointers.
+ * Holds are counted per thread so Suspend can release them all before a wait
+ * for terminal input and Resume can take them back. */
+void BarUiPianoHold (BarApp_t *app);
+void BarUiPianoRelease (BarApp_t *app);
+unsigned int BarUiPianoSuspend (BarApp_t *app);
+void BarUiPianoResume (BarApp_t *app, unsigned int holds);
 typedef bool (*BarUiPianoCallTestHook_fn) (BarApp_t * const app,
 		const PianoRequestType_t type, void * const data,
 		PianoReturn_t * const pRet, CURLcode * const wRet);

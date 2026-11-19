@@ -57,14 +57,13 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | C coverage (CI-style) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` (requires `lcov`) |
 | Docker CI repro | `make test-ci-local` |
 | C static analysis | `make lint` / `make lint-test` |
-| AddressSanitizer tests | `make test-asan` |
+| AddressSanitizer + UBSan tests | `make test-asan` |
+| ThreadSanitizer tests | `make test-tsan` |
 | Web UI unit tests | `cd webui && npm ci && npm test -- --run` |
 | Web UI coverage | `cd webui && npm test -- --run --coverage` |
 | Unified build + test | `./build.sh --test` |
 
 **Note:** Local pre-push hook runs `make test-all`, or **`make distclean && PIANOBAR_INTEGRATION=1 make test-all`** when pushed commits touch `Makefile` or `test/**`. GitHub Actions C job runs `PIANOBAR_INTEGRATION=1 make test-coverage` (clean build). Run the CI-parity command when you change test infrastructure — see `.cursor/skills/pre-push-ci-parity/SKILL.md`.
-
-Tests are disabled when building with `NOWEBSOCKET=1`.
 
 **Git hooks (one-time):** `git config core.hooksPath .githooks` — pre-push runs `make test-all`.
 

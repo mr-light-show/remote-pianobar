@@ -67,6 +67,14 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 	assert (bufSize > 0);
 	assert (input != NULL);
 
+	/* Web-only mode has no terminal or fifo: the input set is empty and
+	 * maxfd is 0, so select() would block forever. Behave as if the user
+	 * cancelled the prompt. */
+	if (input->maxfd <= 0) {
+		memset (buf, 0, bufSize);
+		return 0;
+	}
+
 	/* not actually used here. just stops the player from receiving the
 	 * signal */
 	_Atomic sig_atomic_t *prevInt = BarInterruptGetTarget ();

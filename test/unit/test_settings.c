@@ -298,7 +298,6 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 	ck_assert_int_eq (s.sampleRate, 44100);
 	ck_assert_uint_eq (s.debug, 15);
 	ck_assert (s.gainMul > 1.49f && s.gainMul < 1.51f);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_WEB);
 	ck_assert_int_eq (s.websocketPort, 8123);
 	ck_assert_str_eq (s.websocketHost, "0.0.0.0");
@@ -307,7 +306,6 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 	ck_assert_str_eq (s.pidFile, expected);
 	snprintf (expected, sizeof (expected), "%s/pianobar.log", tmpl);
 	ck_assert_str_eq (s.logFile, expected);
-#endif
 
 	BarSettingsDestroy (&s);
 }
@@ -337,9 +335,7 @@ START_TEST (test_settings_table_dispatch_handles_typical_user_overrides_and_typo
 
 	ck_assert_int_eq (s.audioQuality, PIANO_AQ_HIGH);
 	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_COREAUDIO);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_BOTH);
-#endif
 	/* Invalid values should not clobber defaults. */
 	ck_assert_int_ne (s.volume, 200);
 	ck_assert_uint_ne (s.history, (unsigned int)-1);
@@ -388,9 +384,7 @@ START_TEST (test_settings_table_dispatch_remaining_backends_sorts_and_accounts) 
 	ck_assert_int_eq (s.sortOrder, BAR_SORT_QUICKMIX_01_NAME_ZA);
 	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_JACK);
 	ck_assert_int_eq (s.volumeMode, BAR_VOLUME_MODE_PLAYER);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_CLI);
-#endif
 	ck_assert_uint_eq (s.accountCount, 2);
 	ck_assert_str_eq (s.accounts[0].id, "home");
 	ck_assert_str_eq (s.accounts[0].label, "Home Account");
@@ -446,10 +440,8 @@ START_TEST (test_settings_table_dispatch_invalid_websocket_port_ignored) {
 
 	BarSettings_t s;
 	read_settings_in_dir (&s, tmpl);
-#ifdef WEBSOCKET_ENABLED
 	/* Out-of-range values are ignored; default remains unset (0). */
 	ck_assert_int_eq (s.websocketPort, 0);
-#endif
 	BarSettingsDestroy (&s);
 }
 END_TEST

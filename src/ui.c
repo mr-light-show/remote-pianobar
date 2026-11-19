@@ -188,6 +188,7 @@ static size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
 }
 
 /*	libcurl progress callback. aborts the current request if user pressed ^C
+ *	or shutdown was requested
  */
 int progressCb (void * const data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow) {
@@ -197,7 +198,7 @@ int progressCb (void * const data, curl_off_t dltotal, curl_off_t dlnow,
 	(void) ulnow;
 	const _Atomic sig_atomic_t *flag = data;
 	const sig_atomic_t lint = atomic_load_explicit (flag, memory_order_relaxed);
-	if (lint != 0) {
+	if (lint != 0 || BarInterruptShutdownRequested ()) {
 		return 1;
 	}
 	return 0;
@@ -301,6 +302,11 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 
 	unsigned int retry = 0;
 	do {
+		/* no new attempt (retry, next step of a request) once shutdown began */
+		if (BarInterruptShutdownRequested ()) {
+			httpret = CURLE_ABORTED_BY_CALLBACK;
+			break;
+		}
 		httpret = curl_easy_perform (http);
 		++retry;
 		if (temporaryCurlError (httpret)) {
@@ -342,6 +348,46 @@ void BarUiPianoHttpMutexDestroy (BarApp_t *app) {
 	pthread_mutex_destroy (&app->pianoHttpMutex);
 }
 
+/* pianoHttpMutex holds taken through BarUiPianoHold on this thread, and
+ * the app they belong to (for code that only has settings, e.g. eventcmd) */
+static _Thread_local unsigned int g_barUiPianoHolds = 0;
+static _Thread_local BarApp_t *g_barUiPianoHoldApp = NULL;
+
+void BarUiPianoHold (BarApp_t *app) {
+	assert (app != NULL);
+	pthread_mutex_lock (&app->pianoHttpMutex);
+	g_barUiPianoHolds++;
+	g_barUiPianoHoldApp = app;
+}
+
+void BarUiPianoRelease (BarApp_t *app) {
+	assert (app != NULL);
+	assert (g_barUiPianoHolds > 0);
+	if (g_barUiPianoHolds == 0) {
+		return;
+	}
+	g_barUiPianoHolds--;
+	pthread_mutex_unlock (&app->pianoHttpMutex);
+}
+
+/*	Release every hold of this thread, e.g. before waiting for terminal input.
+ *	Pointers resolved under the hold are invalid afterwards.
+ *	@return number of holds to give back to BarUiPianoResume
+ */
+unsigned int BarUiPianoSuspend (BarApp_t *app) {
+	const unsigned int holds = g_barUiPianoHolds;
+	while (g_barUiPianoHolds > 0) {
+		BarUiPianoRelease (app);
+	}
+	return holds;
+}
+
+void BarUiPianoResume (BarApp_t *app, unsigned int holds) {
+	while (holds-- > 0) {
+		BarUiPianoHold (app);
+	}
+}
+
 static BarUiPianoCallTestHook_fn g_barUiPianoCallTestHook = NULL;
 
 void BarUiPianoCallSetTestHook (BarUiPianoCallTestHook_fn hook) {
@@ -360,6 +406,13 @@ void BarUiPianoCallClearTestHook (void) {
  */
 bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 		void * const data, PianoReturn_t * const pRet, CURLcode * const wRet) {
+	/* once shutdown began no request starts, whatever the interrupt target */
+	if (BarInterruptShutdownRequested ()) {
+		log_write (DEBUG_NETWORK, "Shutting down: Pandora request not sent\n");
+		*pRet = PIANO_RET_OK;
+		*wRet = CURLE_ABORTED_BY_CALLBACK;
+		return false;
+	}
 	if (g_barUiPianoCallTestHook != NULL) {
 		return g_barUiPianoCallTestHook (app, type, data, pRet, wRet);
 	}
@@ -516,6 +569,87 @@ PianoStation_t *BarUiSelectStation (BarApp_t *app, PianoStation_t *stations,
 
 	free (sortedStations);
 	return retStation;
+}
+
+/*	let user pick one of the account's stations without holding a pointer
+ *	into the shared station list while waiting for input: the list is copied
+ *	under the state lock (and again after the callback may have changed it)
+ *	@param app handle
+ *	@param prompt string
+ *	@param called if input was not a number
+ *	@param auto-select if only one station remains after filtering
+ *	@return id of the selected station (caller frees) or NULL
+ */
+char *BarUiSelectStationId (BarApp_t *app, const char *prompt,
+		BarUiSelectStationCallback_t callback, bool autoselect) {
+	char *retId = NULL;
+	char buf[BAR_INPUT_MAX];
+	BarStationSnapshotList_t snap;
+
+	memset (buf, 0, sizeof (buf));
+
+	do {
+		size_t lastDisplayed = 0, displayCount = 0;
+		bool selected = false;
+
+		if (!BarStateSnapshotStations (app, &snap) || snap.count == 0) {
+			BarStateFreeStationSnapshot (&snap);
+			BarUiMsg (&app->settings, MSG_ERR, "No station available.\n");
+			return NULL;
+		}
+		BarSortStationSnapshots (snap.items, snap.count,
+				app->settings.sortOrder);
+
+		for (size_t i = 0; i < snap.count; i++) {
+			const BarStationSnapshot_t *currStation = &snap.items[i];
+			const char *displayName = currStation->displayName ?
+					currStation->displayName : currStation->name;
+			/* filter stations */
+			if (BarStrCaseStr (displayName, buf) != NULL) {
+				BarUiMsg (&app->settings, MSG_LIST, "%2zi) %c%c%c %s\n", i,
+						currStation->isQuickMixed ? 'q' : ' ',
+						currStation->isQuickMix ? 'Q' : ' ',
+						!currStation->isCreator ? 'S' : ' ',
+						displayName);
+				++displayCount;
+				lastDisplayed = i;
+			}
+		}
+
+		BarUiMsg (&app->settings, MSG_QUESTION, "%s", prompt);
+		if (autoselect && displayCount == 1 && snap.count != 1) {
+			/* auto-select last remaining station */
+			BarUiMsg (&app->settings, MSG_NONE, "%zi\n", lastDisplayed);
+			retId = snap.items[lastDisplayed].id ?
+					strdup (snap.items[lastDisplayed].id) : NULL;
+			selected = true;
+		} else {
+			if (BarReadlineStr (buf, sizeof (buf), &app->input,
+					BAR_RL_DEFAULT) == 0) {
+				BarStateFreeStationSnapshot (&snap);
+				break;
+			}
+
+			if (isnumeric (buf)) {
+				unsigned long sel = strtoul (buf, NULL, 0);
+				if (sel < snap.count) {
+					retId = snap.items[sel].id ? strdup (snap.items[sel].id) : NULL;
+					selected = true;
+				}
+			}
+		}
+		BarStateFreeStationSnapshot (&snap);
+
+		/* hand over buffer to external function if it was not a station number */
+		if (!selected && callback != NULL) {
+			callback (app, buf);
+		}
+		if (selected) {
+			break;
+		}
+	} while (true);
+
+	return retId;
 }
 
 /*	let user pick one song
@@ -926,7 +1060,21 @@ void BarUiStartEventCmd (const BarSettings_t *settings, const char *type,
 
 		close (pipeFd[0]);
 
-		pipeWriteFd = fdopen (pipeFd[1], "w");
+		/* Format everything first: borrowed station/song data is only read
+		 * here, while the caller's pianoHttpMutex hold keeps it alive. The
+		 * write to the script and the wait for it happen without the hold
+		 * (below), so a slow or non-reading script cannot stall other
+		 * threads' Pandora work. */
+		char *payload = NULL;
+		size_t payloadLen = 0;
+		pipeWriteFd = open_memstream (&payload, &payloadLen);
+		if (pipeWriteFd == NULL) {
+			BarUiMsg (settings, MSG_ERR, "Cannot buffer eventcmd input. (%s)\n",
+					strerror (errno));
+			close (pipeFd[1]);
+			waitpid (chld, &status, 0);
+			return;
+		}
 
 		if (curSong != NULL && stations != NULL && curStation != NULL &&
 				curStation->isQuickMix) {
@@ -991,10 +1139,32 @@ void BarUiStartEventCmd (const BarSettings_t *settings, const char *type,
 			fwrite (msg, sizeof (*msg), strlen (msg), pipeWriteFd);
 		}
 	
-		/* closes pipeFd[1] as well */
 		fclose (pipeWriteFd);
+
+		/* No station/song data is used past this point. Release this
+		 * thread's holds (none if the caller holds none) for the write and
+		 * the wait, and restore them before returning. */
+		BarApp_t * const holdApp = g_barUiPianoHolds > 0 ?
+				g_barUiPianoHoldApp : NULL;
+		const unsigned int holds = holdApp != NULL ?
+				BarUiPianoSuspend (holdApp) : 0;
+		for (size_t off = 0; payload != NULL && off < payloadLen; ) {
+			const ssize_t n = write (pipeFd[1], payload + off, payloadLen - off);
+			if (n < 0 && errno == EINTR) {
+				continue;
+			}
+			if (n <= 0) {
+				break;
+			}
+			off += (size_t) n;
+		}
+		free (payload);
+		close (pipeFd[1]);
 		/* wait to get rid of the zombie */
 		waitpid (chld, &status, 0);
+		if (holdApp != NULL) {
+			BarUiPianoResume (holdApp, holds);
+		}
 	}
 }
 
@@ -1006,6 +1176,9 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 	/* make sure it's a single song */
 	assert (PianoListNextP (song) == NULL);
 
+	/* History songs are borrowed by CLI history actions: change and free
+	 * the list inside pianoHttpMutex (BarStateFreeSongs). */
+	pthread_mutex_lock (&app->pianoHttpMutex);
 	if (app->settings.history != 0) {
 		app->songHistory = PianoListPrependP (app->songHistory, song);
 		PianoSong_t *del;
@@ -1013,14 +1186,15 @@ void BarUiHistoryPrepend (BarApp_t *app, PianoSong_t *song) {
 			del = PianoListGetP (app->songHistory, app->settings.history);
 			if (del != NULL) {
 				app->songHistory = PianoListDeleteP (app->songHistory, del);
-				PianoDestroyPlaylist (del);
+				BarStateFreeSongs (app, del);
 			} else {
 				break;
 			}
 		} while (true);
 	} else {
-		PianoDestroyPlaylist (song);
+		BarStateFreeSongs (app, song);
 	}
+	pthread_mutex_unlock (&app->pianoHttpMutex);
 }
 
 

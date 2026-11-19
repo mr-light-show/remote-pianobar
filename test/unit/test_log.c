@@ -54,6 +54,25 @@ START_TEST (test_log_debug_mask_partial_bits)
 }
 END_TEST
 
+/* Whether log_write would emit a kind: errors always; DEBUG_* only for set
+ * bits, and never without HAVE_DEBUGLOG */
+START_TEST (test_log_is_enabled)
+{
+	log_set_debug_mask (0);
+	ck_assert (log_is_enabled (LOG_ERROR));
+	ck_assert (!log_is_enabled (DEBUG_WEBSOCKET));
+	log_set_debug_mask (DEBUG_WEBSOCKET);
+	ck_assert (log_is_enabled (LOG_ERROR));
+#ifdef HAVE_DEBUGLOG
+	ck_assert (log_is_enabled (DEBUG_WEBSOCKET));
+#else
+	ck_assert (!log_is_enabled (DEBUG_WEBSOCKET));
+#endif
+	ck_assert (!log_is_enabled (DEBUG_AUDIO));
+	log_set_debug_mask (0);
+}
+END_TEST
+
 /* --- HAVE_DEBUGLOG path --- */
 
 #ifndef HAVE_DEBUGLOG
@@ -215,6 +234,7 @@ Suite *log_suite (void) {
 	tcase_add_test (tc_mask, test_log_debug_mask_set_get_roundtrip);
 	tcase_add_test (tc_mask, test_log_debug_mask_zero_default);
 	tcase_add_test (tc_mask, test_log_debug_mask_partial_bits);
+	tcase_add_test (tc_mask, test_log_is_enabled);
 	suite_add_tcase (s, tc_mask);
 
 	TCase *tc_debug = tcase_create ("DEBUG_STATE");

@@ -77,8 +77,8 @@ CK_VERBOSITY=verbose ./pianobar_test
 
 **`test/unit/test_playback_manager.c`** - Post-cleanup mode refresh (`BarPlaybackManagerRefreshCachedModeAfterCleanup`) and `BarPlaybackManagerCompleteSongCleanup` (no full manager thread)
 
-**`test/unit/test_bar_state.c`** - Bar state and lock behavior (17+ tests when `WEBSOCKET_ENABLED`)
-- `BarStateUsesRwlock` false for CLI and NULL app; `DEBUG_STATE` lock logging in BOTH and WEB (stderr suppressed)
+**`test/unit/test_bar_state.c`** - Bar state and lock behavior (17+ tests)
+- `BarStateUsesRwlock` true in every ui_mode (CLI included), false for NULL app; `DEBUG_STATE` lock logging in BOTH and WEB (stderr suppressed)
 - Init/destroy stateRwlock in BOTH and WEB modes
 - Station getters/setters under stateRwlock (NextStation, CurrentStation)
 - Station lookup: `BarStateFindStationById` (NULL list, one station), `BarStateGetStationList`

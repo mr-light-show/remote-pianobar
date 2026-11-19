@@ -26,20 +26,25 @@ THE SOFTWARE.
 #include <stdio.h>
 
 #include "main.h"
+#include "websocket/core/conn_id.h"
 
 /* WebSocket bridge functions
- * These functions are no-ops when WEBSOCKET_ENABLED is not defined
+ * Bridge between core modules and the WebSocket subsystem
  */
 
-/* Mode predicates - return false when WebSocket is disabled */
+/* Mode predicates */
 bool BarIsWebOnlyMode(const BarApp_t *app);
 bool BarShouldSkipCliOutput(const BarApp_t *app);
 bool BarWsIsWebActive(const BarApp_t *app);
 
 /* Event broadcasts */
 void BarWsBroadcastVolume(BarApp_t *app);
-void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation);
-void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count);
+/* Query replies to one web client (`requester` is its connection ID) */
+void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
+                            const char *explanation);
+/* Up to `count` queued songs, read from state under its lock; false when
+ * nothing is queued */
+bool BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester, int count);
 void BarWsBroadcastSongStart(BarApp_t *app);
 /** Full state sync for in-place changes (e.g. song.rating). Emits `process`, not `start`. */
 void BarWsBroadcastProcess(BarApp_t *app);
@@ -50,7 +55,6 @@ void BarWsBroadcastPlayState(BarApp_t *app);
 void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
                                       const BarPlayerPlayStateSnapshot *snapshot);
 void BarWsBroadcastStations(BarApp_t *app);
-void BarWsDisconnectAllClients(BarApp_t *app);
 
 /* Lifecycle management */
 bool BarWsInit(BarApp_t *app);
@@ -72,10 +76,11 @@ void BarWsPrintStartupInfo(const BarApp_t *app);
 void BarWsConfigureWebOnlyInput(BarApp_t *app);
 
 /* Event/error broadcasting */
-bool BarWsIsUnicastRequest(void);
 void BarWsEmitError(BarApp_t *app, const char *event, const char *msg);
 void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
                        const char *extra);
+void BarWsEmitErrorTo(BarApp_t *app, BarWsConnId_t requester,
+                      const char *event, const char *msg);
 void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason);
 
 /* UI info printing */

@@ -35,7 +35,7 @@ This guide covers setting up your development environment for contributing to Re
 - libjson-c
 - libgcrypt
 - libcurl
-- libwebsockets (2.4+)
+- libwebsockets (4.0+)
 
 ---
 
@@ -151,7 +151,7 @@ The Makefile defaults to **ISO C17** (`-std=c17`) by appending it to **`CFLAGS`*
 git clone https://github.com/yourusername/pianobar.git
 cd pianobar
 
-# Build without WebSocket support
+# Build Remote Pianobar
 make clean
 make
 
@@ -168,8 +168,8 @@ make clean
 # Remove all build AND coverage artifacts (*.gcda, *.gcno, *.gcov) in one step
 make distclean
 
-# Build Remote Pianobar with debug symbols (WebSocket enabled by default)
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+# Build Remote Pianobar with debug symbols
+make CFLAGS="-g -O0"
 
 # The binary will be created as ./pianobar
 ```
@@ -180,7 +180,7 @@ make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 |---------|---------|-------|
 | **Default** (recommended) | `make` | Optimized (`-O2`); `debug=N` in config and `PIANOBAR_DEBUG` work at runtime |
 | **Minimal** | `make minimal` or `./build.sh minimal` | Same optimization; omits `HAVE_DEBUGLOG` for a slightly smaller binary — `debug=` has no effect |
-| **Dev / symbols** | `make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"` | Debugging with gdb/lldb |
+| **Dev / symbols** | `make CFLAGS="-g -O0"` | Debugging with gdb/lldb |
 | **Unified script** | `./build.sh` / `./build.sh --minimal` / `./build.sh debug 15` | Builds backend + web UI |
 
 ### Build with Debug Logging
@@ -188,7 +188,7 @@ make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 ```bash
 # Build with all debug flags enabled
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -DPIANOBAR_DEBUG=0xFFFFFFFF"
+make CFLAGS="-g -O0 -DPIANOBAR_DEBUG=0xFFFFFFFF"
 ```
 
 Available debug flags (defined in `src/debug.h`):
@@ -261,6 +261,10 @@ make test
 # Run with verbose output
 ./pianobar_test --verbose
 ```
+
+#### Static analysis
+
+`make lint` runs cppcheck and is strict: a suppression that matches nothing fails the run, so stale ones are caught on current cppcheck. cppcheck older than 2.18 (for example Ubuntu 24.04's apt package) reports many existing suppressions as unmatched; run `make lint CPPCHECK_LENIENT=1` there.
 
 ### TypeScript/JavaScript Unit Tests
 
@@ -403,9 +407,9 @@ kill $(cat /tmp/pianobar.pid)
 **Terminal 1:** Run Remote Pianobar
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make CFLAGS="-g -O0"
 
 # Run pianobar
 ./pianobar
@@ -517,8 +521,9 @@ pianobar/
 │   ├── libpiano/            # Pandora API client
 │   └── websocket/           # WebSocket implementation
 │       ├── core/            # WebSocket server core
-│       │   ├── websocket.c  # Main WebSocket logic
-│       │   └── queue.c      # Message queue
+│       │   ├── websocket.c  # Transport, connections, command worker
+│       │   ├── outbox.c     # Outbound event queues (per client)
+│       │   └── commands.c   # Inbound command queue
 │       ├── http/            # HTTP static file server
 │       │   └── http_server.c
 │       ├── protocol/        # Socket.IO protocol
@@ -565,9 +570,9 @@ pianobar/
 ### Debugging C Code with GDB
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make CFLAGS="-g -O0"
 
 # Run with GDB
 gdb ./pianobar
@@ -583,9 +588,9 @@ gdb ./pianobar
 ### Debugging C Code with LLDB (macOS)
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make CFLAGS="-g -O0"
 
 # Run with LLDB
 lldb ./pianobar

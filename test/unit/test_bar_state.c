@@ -24,6 +24,8 @@ THE SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <errno.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include "../../src/main.h"
@@ -31,8 +33,7 @@ THE SOFTWARE.
 #include "../../src/settings.h"
 #include "../../src/station_display.h"
 #include "../../src/log.h"
-
-#ifdef WEBSOCKET_ENABLED
+#include "../../src/ui.h"
 
 /* Minimal station for FindStationById tests (list has one element). */
 static PianoStation_t station_a;
@@ -932,7 +933,6 @@ START_TEST(test_bar_state_lock_taken_in_web_mode) {
 }
 END_TEST
 
-#ifdef WEBSOCKET_ENABLED
 START_TEST(test_signal_playback_manager_no_deadlock) {
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
@@ -962,7 +962,6 @@ START_TEST(test_signal_playback_manager_noop_null_wakes_cli) {
 	BarStateDestroy(&app);
 }
 END_TEST
-#endif
 
 /* --- Snapshot tests --- */
 
@@ -1143,6 +1142,359 @@ START_TEST (test_bar_state_snapshot_playback_uses_station_name_when_no_display_n
 }
 END_TEST
 
+START_TEST (test_bar_state_snapshot_upcoming_copies_songs_after_head)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t cur, next, last;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	memset (&cur, 0, sizeof (cur));
+	memset (&next, 0, sizeof (next));
+	memset (&last, 0, sizeof (last));
+	app.settings.uiMode = BAR_UI_MODE_WEB;
+	BarStateInit (&app);
+
+	station.id = "sid";
+	station.name = "Plain";
+	station.displayName = "Shown";
+	app.ph.stations = &station;
+	cur.title = "Playing";
+	cur.head.next = &next.head;
+	next.title = "Next";
+	next.artist = "Artist";
+	next.album = "Album";
+	next.coverArt = "http://art";
+	next.stationId = "sid";
+	next.length = 200;
+	next.rating = PIANO_RATE_LOVE;
+	next.head.next = &last.head;
+	last.title = "Last";
+	last.stationId = "gone";
+	app.playlist = &cur;
+
+	BarSongSnapshotList_t snap;
+	ck_assert (BarStateSnapshotUpcoming (&app, 5, &snap));
+	ck_assert_uint_eq (snap.count, 2);
+	ck_assert_str_eq (snap.items[0].title, "Next");
+	ck_assert_str_eq (snap.items[0].artist, "Artist");
+	ck_assert_str_eq (snap.items[0].album, "Album");
+	ck_assert_str_eq (snap.items[0].coverArt, "http://art");
+	ck_assert_str_eq (snap.items[0].stationName, "Shown");
+	ck_assert_uint_eq (snap.items[0].duration, 200);
+	ck_assert_int_eq (snap.items[0].rating, PIANO_RATE_LOVE);
+	ck_assert_str_eq (snap.items[1].title, "Last");
+	ck_assert_ptr_null (snap.items[1].artist);
+	ck_assert_ptr_null (snap.items[1].stationName);
+	BarStateFreeSongSnapshot (&snap);
+	ck_assert_ptr_null (snap.items);
+	ck_assert_uint_eq (snap.count, 0);
+
+	/* The limit is honoured */
+	ck_assert (BarStateSnapshotUpcoming (&app, 1, &snap));
+	ck_assert_uint_eq (snap.count, 1);
+	ck_assert_str_eq (snap.items[0].title, "Next");
+	BarStateFreeSongSnapshot (&snap);
+
+	/* Station name falls back to the raw name */
+	station.displayName = NULL;
+	ck_assert (BarStateSnapshotUpcoming (&app, 1, &snap));
+	ck_assert_str_eq (snap.items[0].stationName, "Plain");
+	BarStateFreeSongSnapshot (&snap);
+
+	BarStateDestroy (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_snapshot_upcoming_empty_queue)
+{
+	BarApp_t app;
+	PianoSong_t cur;
+	memset (&app, 0, sizeof (app));
+	memset (&cur, 0, sizeof (cur));
+	BarStateInit (&app);
+
+	BarSongSnapshotList_t snap;
+	ck_assert (BarStateSnapshotUpcoming (&app, 5, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert_ptr_null (snap.items);
+
+	cur.title = "Only";
+	app.playlist = &cur;
+	ck_assert (BarStateSnapshotUpcoming (&app, 5, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert (BarStateSnapshotUpcoming (&app, 0, &snap));
+	ck_assert_uint_eq (snap.count, 0);
+	ck_assert (!BarStateSnapshotUpcoming (NULL, 5, &snap));
+	ck_assert (!BarStateSnapshotUpcoming (&app, 5, NULL));
+	BarStateFreeSongSnapshot (NULL);
+
+	BarStateDestroy (&app);
+}
+END_TEST
+
+/* DELETE_STATION frees the station inside PianoResponse; current/next must
+ * not point at it once the write lock is released (B2). */
+START_TEST (test_bar_state_delete_station_response_clears_current_and_next)
+{
+	BarApp_t app;
+	PianoRequest_t req;
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+	ck_assert_int_eq (pthread_mutex_init (&app.player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app.player.cond, NULL), 0);
+
+	PianoStation_t *doomed = calloc (1, sizeof (*doomed));
+	PianoStation_t *kept = calloc (1, sizeof (*kept));
+	ck_assert_ptr_nonnull (doomed);
+	ck_assert_ptr_nonnull (kept);
+	doomed->id = strdup ("doomed");
+	doomed->name = strdup ("Doomed");
+	kept->id = strdup ("kept");
+	kept->name = strdup ("Kept");
+	app.ph.stations = PianoListAppendP (doomed, kept);
+	app.curStation = doomed;
+	app.nextStation = doomed;
+
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_DELETE_STATION;
+	req.data = doomed;
+	req.responseData = strdup ("{\"stat\":\"ok\",\"result\":{}}");
+	ck_assert_int_eq (BarStatePianoResponse (&app, &req), PIANO_RET_OK);
+	free (req.responseData);
+	ck_assert_ptr_null (BarStateGetCurrentStation (&app));
+	ck_assert_ptr_null (BarStateGetNextStation (&app));
+	ck_assert_ptr_eq (BarStateGetStationList (&app), kept);
+
+	/* Deleting another station leaves current/next alone */
+	PianoStation_t *other = calloc (1, sizeof (*other));
+	ck_assert_ptr_nonnull (other);
+	other->id = strdup ("other");
+	app.ph.stations = PianoListAppendP (app.ph.stations, other);
+	app.curStation = kept;
+	app.nextStation = kept;
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_DELETE_STATION;
+	req.data = other;
+	req.responseData = strdup ("{\"stat\":\"ok\",\"result\":{}}");
+	ck_assert_int_eq (BarStatePianoResponse (&app, &req), PIANO_RET_OK);
+	free (req.responseData);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), kept);
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), kept);
+
+	/* A failed delete keeps the station selected */
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_DELETE_STATION;
+	req.data = kept;
+	req.responseData = strdup ("{\"stat\":\"fail\",\"code\":0,\"message\":\"x\"}");
+	ck_assert_int_ne (BarStatePianoResponse (&app, &req), PIANO_RET_OK);
+	free (req.responseData);
+	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), kept);
+	ck_assert_ptr_eq (BarStateGetNextStation (&app), kept);
+
+	free (kept->id);
+	free (kept->name);
+	free (kept);
+	pthread_cond_destroy (&app.player.cond);
+	pthread_mutex_destroy (&app.player.lock);
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_last_station_id_set_and_take)
+{
+	BarApp_t app;
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+
+	ck_assert_ptr_null (BarStateTakeLastStationId (&app));
+	BarStateSetLastStationId (&app, "first");
+	BarStateSetLastStationId (&app, "second");
+	char *id = BarStateTakeLastStationId (&app);
+	ck_assert_str_eq (id, "second");
+	free (id);
+	ck_assert_ptr_null (BarStateTakeLastStationId (&app));
+
+	BarStateSetLastStationId (&app, "third");
+	BarStateSetLastStationId (&app, NULL);
+	ck_assert_ptr_null (app.lastStationId);
+
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
+static void *last_station_id_churn (void *arg) {
+	BarApp_t *app = arg;
+	for (int i = 0; i < 2000; i++) {
+		BarStateSetLastStationId (app, (i & 1) ? "odd" : "even");
+		free (BarStateTakeLastStationId (app));
+	}
+	return NULL;
+}
+
+/* Concurrent set/take from several threads never frees the same copy twice
+ * (run under make test-asan to see a violation) */
+START_TEST (test_bar_state_last_station_id_concurrent_set_take)
+{
+	BarApp_t app;
+	pthread_t threads[4];
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+
+	for (size_t i = 0; i < 4; i++) {
+		ck_assert_int_eq (pthread_create (&threads[i], NULL,
+				last_station_id_churn, &app), 0);
+	}
+	for (size_t i = 0; i < 4; i++) {
+		ck_assert_int_eq (pthread_join (threads[i], NULL), 0);
+	}
+	free (BarStateTakeLastStationId (&app));
+
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
+/* --- B1: songs are freed only inside pianoHttpMutex --- */
+
+static void *song_free_mutex_probe (void *arg) {
+	BarApp_t *app = arg;
+	const int rc = pthread_mutex_trylock (&app->pianoHttpMutex);
+	if (rc == 0) {
+		pthread_mutex_unlock (&app->pianoHttpMutex);
+	}
+	return (void *) (intptr_t) rc;
+}
+
+static unsigned g_songFreesLocked;
+static unsigned g_songFreesUnlocked;
+
+/* pianoHttpMutex is recursive, so ask another thread whether it is held */
+static void song_free_records_mutex (BarApp_t *app, const PianoSong_t *songs) {
+	(void) songs;
+	pthread_t probe;
+	void *rc = NULL;
+	ck_assert_int_eq (pthread_create (&probe, NULL, song_free_mutex_probe, app), 0);
+	ck_assert_int_eq (pthread_join (probe, &rc), 0);
+	if ((intptr_t) rc == EBUSY) {
+		g_songFreesLocked++;
+	} else {
+		g_songFreesUnlocked++;
+	}
+}
+
+static PianoSong_t *song_list_new (size_t count) {
+	PianoSong_t *list = NULL;
+	for (size_t i = 0; i < count; i++) {
+		PianoSong_t *song = calloc (1, sizeof (*song));
+		ck_assert_ptr_nonnull (song);
+		list = PianoListAppendP (list, song);
+	}
+	return list;
+}
+
+static void song_free_app_setup (BarApp_t *app) {
+	bar_state_test_setup (app, BAR_UI_MODE_BOTH);
+	ck_assert_int_eq (pthread_mutex_init (&app->player.lock, NULL), 0);
+	ck_assert_int_eq (pthread_cond_init (&app->player.cond, NULL), 0);
+	BarUiPianoHttpMutexInit (app);
+	g_songFreesLocked = 0;
+	g_songFreesUnlocked = 0;
+	BarStateSetSongFreeTestHook (song_free_records_mutex);
+}
+
+static void song_free_app_teardown (BarApp_t *app) {
+	BarStateSetSongFreeTestHook (NULL);
+	BarStateFreeSongs (app, app->playlist);
+	app->playlist = NULL;
+	BarStateFreeSongs (app, app->songHistory);
+	app->songHistory = NULL;
+	BarUiPianoHttpMutexDestroy (app);
+	pthread_cond_destroy (&app->player.cond);
+	pthread_mutex_destroy (&app->player.lock);
+	bar_state_test_teardown (app);
+}
+
+START_TEST (test_bar_state_playlist_frees_hold_piano_mutex)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	memset (&station, 0, sizeof (station));
+	station.id = "sid";
+	station.name = "Station";
+	song_free_app_setup (&app);
+	app.ph.stations = &station;
+
+	app.playlist = song_list_new (3);
+	BarStateTruncatePlaylistTail (&app);
+	app.playlist->head.next = &song_list_new (1)->head;
+	BarStatePrepareStationSwitch (&app, &station);
+	app.playlist->head.next = &song_list_new (1)->head;
+	ck_assert (BarStatePrepareStationSwitchById (&app, "sid"));
+	BarStateDrainPlaylist (&app);
+	app.playlist = song_list_new (2);
+	BarStateSwitchStation (&app, &station);
+
+	ck_assert_uint_eq (g_songFreesLocked, 5);
+	ck_assert_uint_eq (g_songFreesUnlocked, 0);
+	song_free_app_teardown (&app);
+}
+END_TEST
+
+START_TEST (test_history_frees_hold_piano_mutex)
+{
+	BarApp_t app;
+	song_free_app_setup (&app);
+
+	/* Trimming the history past its size frees the oldest song */
+	app.settings.history = 1;
+	BarUiHistoryPrepend (&app, song_list_new (1));
+	BarUiHistoryPrepend (&app, song_list_new (1));
+	/* History disabled: the finished song is freed at once */
+	app.settings.history = 0;
+	BarUiHistoryPrepend (&app, song_list_new (1));
+
+	ck_assert_uint_eq (g_songFreesLocked, 2);
+	ck_assert_uint_eq (g_songFreesUnlocked, 0);
+	song_free_app_teardown (&app);
+}
+END_TEST
+
+START_TEST (test_bar_state_quickmix_changes_and_snapshot_creator)
+{
+	BarApp_t app;
+	PianoStation_t a, b;
+	memset (&a, 0, sizeof (a));
+	memset (&b, 0, sizeof (b));
+	bar_state_test_setup (&app, BAR_UI_MODE_BOTH);
+	a.id = "a";
+	a.isCreator = true;
+	b.id = "b";
+	b.useQuickMix = true;
+	app.ph.stations = PianoListAppendP (&a, &b);
+
+	BarStateChangeQuickMixAll (&app, BAR_QUICKMIX_TOGGLE_ALL);
+	ck_assert (a.useQuickMix);
+	ck_assert (!b.useQuickMix);
+	BarStateChangeQuickMixAll (&app, BAR_QUICKMIX_SELECT_ALL);
+	ck_assert (a.useQuickMix && b.useQuickMix);
+	BarStateChangeQuickMixAll (&app, BAR_QUICKMIX_SELECT_NONE);
+	ck_assert (!a.useQuickMix && !b.useQuickMix);
+
+	ck_assert (BarStateToggleQuickMixById (&app, "b"));
+	ck_assert (b.useQuickMix);
+	ck_assert (!BarStateToggleQuickMixById (&app, "missing"));
+	ck_assert (!BarStateToggleQuickMixById (&app, NULL));
+
+	BarStationSnapshotList_t snap;
+	ck_assert (BarStateSnapshotStations (&app, &snap));
+	ck_assert_uint_eq (snap.count, 2);
+	ck_assert (snap.items[0].isCreator);
+	ck_assert (!snap.items[1].isCreator);
+	BarStateFreeStationSnapshot (&snap);
+
+	app.ph.stations = NULL;
+	ck_assert (!BarStateToggleQuickMixById (&app, "a"));
+	bar_state_test_teardown (&app);
+}
+END_TEST
+
 Suite *bar_state_suite(void) {
 	Suite *s = suite_create("BarState");
 	TCase *tc_core = tcase_create("Init and stations");
@@ -1194,15 +1546,19 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_empty_list);
 	tcase_add_test(tc_misc, test_bar_update_station_display_names_null_app_noop);
 	tcase_add_test(tc_misc, test_bar_state_piano_request_response_wrappers);
+	tcase_add_test(tc_misc, test_bar_state_delete_station_response_clears_current_and_next);
+	tcase_add_test(tc_misc, test_bar_state_last_station_id_set_and_take);
+	tcase_add_test(tc_misc, test_bar_state_last_station_id_concurrent_set_take);
+	tcase_add_test(tc_misc, test_bar_state_playlist_frees_hold_piano_mutex);
+	tcase_add_test(tc_misc, test_history_frees_hold_piano_mutex);
+	tcase_add_test(tc_misc, test_bar_state_quickmix_changes_and_snapshot_creator);
 	tcase_add_test(tc_misc, test_bar_state_new_apis_cli_and_web);
 	suite_add_tcase(s, tc_misc);
 
 	TCase *tc_web = tcase_create("WEB mode locking");
 	tcase_add_test(tc_web, test_bar_state_lock_taken_in_web_mode);
-#ifdef WEBSOCKET_ENABLED
 	tcase_add_test(tc_web, test_signal_playback_manager_no_deadlock);
 	tcase_add_test(tc_web, test_signal_playback_manager_noop_null_wakes_cli);
-#endif
 	suite_add_tcase(s, tc_web);
 
 	TCase *tc_snap = tcase_create("Snapshot");
@@ -1213,25 +1569,10 @@ Suite *bar_state_suite(void) {
 	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_unknown_song_station_id);
 	tcase_add_test(tc_snap, test_bar_state_snapshot_stations_uses_display_name);
 	tcase_add_test(tc_snap, test_bar_state_snapshot_playback_uses_station_name_when_no_display_name);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_upcoming_copies_songs_after_head);
+	tcase_add_test(tc_snap, test_bar_state_snapshot_upcoming_empty_queue);
 	suite_add_tcase(s, tc_snap);
 
 	return s;
 }
 
-#else
-
-/* Stub when WEBSOCKET_ENABLED is not set: bar_state uses no lock in that case. */
-START_TEST(test_bar_state_stub_no_websocket) {
-	ck_assert(1);
-}
-END_TEST
-
-Suite *bar_state_suite(void) {
-	Suite *s = suite_create("BarState");
-	TCase *tc = tcase_create("No-op");
-	tcase_add_test(tc, test_bar_state_stub_no_websocket);
-	suite_add_tcase(s, tc);
-	return s;
-}
-
-#endif

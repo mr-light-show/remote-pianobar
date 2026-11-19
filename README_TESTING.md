@@ -48,7 +48,8 @@ This will:
 - `make test-integration` - Run integration tests (sets `PIANOBAR_INTEGRATION=1`)
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
-- `make test-asan` - Run tests with AddressSanitizer (memory leak detection)
+- `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors, leaks, UB aborts the run)
+- `make test-tsan` - Run tests with ThreadSanitizer (known miniaudio races are suppressed in `test/tsan.supp`)
 - `make test-valgrind` - Run tests with valgrind (Linux only)
 
 ### Cleaning Test Files
@@ -118,6 +119,29 @@ Requirements:
 - Headless CI uses `PIANOBAR_TEST_NO_DEVICE=1` (miniaudio `noDevice`); without it, audio tests skip if the engine cannot init
 - `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
 
+#### Null audio backend (real device thread, no hardware)
+
+`PIANOBAR_TEST_NO_DEVICE=1` replaces the device with test-driven engine reads, so
+the device thread, the decoder/device handoff and their locks never run. The
+`null_audio_device` test case instead opens the lifetime engine on miniaudio's
+**null backend** (`ma_backend_null`): a real device thread pulls the data callback
+in real time without audio hardware. It covers natural song end, pause/resume,
+volume changes, skip mid-song, concurrent controls, repeated start/stop and
+engine init/destroy, and reruns the device-aware integration tests on that device.
+
+- Tests select it with `BarPlayerSetNullAudioTestBackend (true)` (a checked fixture,
+  so it is set in the forked test process before `BarPlayerInit`); this takes
+  precedence over `PIANOBAR_TEST_NO_DEVICE`. Setting `PIANOBAR_TEST_NULL_AUDIO=1`
+  does the same for a whole run.
+- It never falls back to a hardware backend. If the null backend is unavailable
+  the engine stays uninitialized and each test prints
+  `SKIP <test>: miniaudio null audio backend unavailable in this build`.
+- Each test that ran prints `null-audio: <test> ran on the null device backend`.
+- Requires `PIANOBAR_INTEGRATION=1`; it runs in CI and in `make test-ci-local`.
+  Run it alone with
+  `CK_RUN_SUITE=playback_integration CK_RUN_CASE=null_audio_device PIANOBAR_INTEGRATION=1 ./pianobar_test`.
+- Production default is unchanged.
+
 Production code exposes `BarUiPianoCallSetTestHook()` / `BarUiPianoCallClearTestHook()`
 so playlist fetch can be mocked without network access.
 
@@ -133,11 +157,11 @@ Codecov patch coverage reflects **only what CI uploads** — it does **not** mer
 | `make test-coverage` | Full WebSocket test binary + integration + headless audio | Yes (`c-tests` flag) | Matches GitHub Actions `test.yml`; always use this before judging patch % |
 | `make test` | Unit tests only (no integration) | No | Fast dev loop; lower coverage than CI |
 | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` | Same tests as CI except no `--coverage` | No | Pre-push CI parity when `Makefile` / `test/**` changed |
-| `make NOWEBSOCKET=1 test` | Base tests only; no WebSocket objects linked | No | Separate binary; `#ifdef WEBSOCKET_ENABLED` code is **not** exercised |
-| `make test-asan` | ASan rebuild + unit tests | No | Memory checking only |
+| `make test-asan` | ASan + UBSan rebuild + unit tests | No | Memory and undefined-behavior checking |
+| `make test-tsan` | TSan rebuild + unit tests | No | Data races; suppressions in `test/tsan.supp` |
 | `cd webui && npm test -- --run --coverage` | Vitest | Yes (`web-tests` flag) | Separate upload; combined with `c-tests` for default patch gate |
 
-**Implication:** production lines compiled only under `NOWEBSOCKET=1`, or only when integration env vars are unset, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
+**Implication:** production lines exercised only when integration env vars are set, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
 
 The `codecov/patch/c-tests` gate scopes to **`src/**/*.c` only** — changed headers (`*.h`) and docs (`*.md`) in `src/` are excluded from the patch denominator because they are not executable.
 

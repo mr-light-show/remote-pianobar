@@ -108,6 +108,60 @@ BarKeyShortcutId_t BarUiDispatchById (BarApp_t *app, BarKeyShortcutId_t actionId
 	return BAR_KS_COUNT;
 }
 
+/*	Map a key to its action
+ *	@return action ID or BAR_KS_COUNT if no action is bound to the key
+ */
+BarKeyShortcutId_t BarUiDispatchKeyToId (const BarApp_t *app, const char key) {
+	assert (app != NULL);
+
+	for (size_t i = 0; i < BAR_KS_COUNT; i++) {
+		if (app->settings.keys[i] != BAR_KS_DISABLED &&
+				app->settings.keys[i] == key) {
+			return (BarKeyShortcutId_t) i;
+		}
+	}
+	return BAR_KS_COUNT;
+}
+
+/*	Actions that use the selected station/song (or the queue behind it).
+ *	Stations and songs are only freed inside pianoHttpMutex, so holding it
+ *	from resolution to return keeps them alive across the Pandora call and
+ *	eventcmd. Station selection, playback, volume, quit and the Pandora
+ *	disconnect/reconnect (which wait for the playback manager) run without.
+ */
+bool BarUiDispatchHoldsPianoLock (const BarKeyShortcutId_t id) {
+	switch (id) {
+		case BAR_KS_LOVE:
+		case BAR_KS_BAN:
+		case BAR_KS_TIRED:
+		case BAR_KS_EXPLAIN:
+		case BAR_KS_INFO:
+		case BAR_KS_DEBUG:
+		case BAR_KS_UPCOMING:
+			return true;
+
+		/* Interactive: they release the hold around every wait for
+		 * terminal input and resolve the selection again by ID afterwards
+		 * (BarUiActInputBegin/End in ui_act.c). */
+		case BAR_KS_ADDMUSIC:
+		case BAR_KS_CREATESTATION:
+		case BAR_KS_DELETESTATION:
+		case BAR_KS_GENRESTATION:
+		case BAR_KS_HISTORY:
+		case BAR_KS_ADDSHARED:
+		case BAR_KS_RENAMESTATION:
+		case BAR_KS_SELECTQUICKMIX:
+		case BAR_KS_BOOKMARK:
+		case BAR_KS_MANAGESTATION:
+		case BAR_KS_CREATESTATIONFROMSONG:
+		case BAR_KS_SETTINGS:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
 /*	Look up dispatcher action by ID
  *	@return pointer to action or NULL if not found
  */

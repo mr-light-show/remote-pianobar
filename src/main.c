@@ -76,11 +76,9 @@ THE SOFTWARE.
 #include "playback_manager.h"
 #include "system_volume.h"
 
-#ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"
 #include "websocket/daemon/daemon.h"
-#endif
 #include "websocket_bridge.h"
 #include "ui_readline.h"
 
@@ -319,42 +317,39 @@ static bool BarMainGetStations (BarApp_t *app) {
 	if (ret) {
 		BarUpdateStationDisplayNames(app);
 		/* Broadcast to WebSocket clients: early connections may have received
-		 * an empty unicast from query before getStationList completed. */
+		 * an empty station list from query before getStationList completed. */
 		BarWsBroadcastStations(app);
 	}
 	
+	/* eventcmd walks the station list: keep it alive (pianoHttpMutex) */
+	BarUiPianoHold (app);
 	BarUiStartEventCmd (&app->settings, "usergetstations", NULL, NULL, &app->player,
 			BarStateGetStationList(app), pRet, wRet);
+	BarUiPianoRelease (app);
 	return ret;
 }
 
-/*	get initial station from autostart setting or user input
+/*	queue the autostart station (active account, else global setting)
+ *	Never prompts: the web UI or the 's' key picks a station when none is
+ *	queued, so startup cannot block on a terminal in any UI mode. An empty
+ *	value disables autostart.
  */
 static void BarMainGetInitialStation (BarApp_t *app) {
-	/* try to get autostart station */
-	if (app->settings.autostartStation != NULL) {
-		PianoStation_t *station = BarStateFindStationById(app,
-				app->settings.autostartStation);
-		BarStateSetNextStation(app, station);
-		if (station == NULL) {
-			BarUiMsg (&app->settings, MSG_ERR, "%s",
-					BarL10nGet (&app->l10n, "cli.autostart_not_found"));
-		}
-	}
-	
-	/* In web-only mode, don't prompt for station - let the web UI handle it */
-	if (BarIsWebOnlyMode(app) && BarStateGetNextStation(app) == NULL) {
-		BarUiMsg (&app->settings, MSG_INFO, "%s",
-				BarL10nGet (&app->l10n, "cli.wait_station_web"));
+	const BarAccount_t *acct = BarSettingsGetActiveAccount (&app->settings);
+	/* global autostart_station is copied into the primary account at load */
+	const char *id = acct != NULL ? acct->autostartStation :
+			app->settings.autostartStation;
+	if (id == NULL || id[0] == '\0') {
 		return;
 	}
-	
-	/* no autostart? ask the user */
-	if (BarStateGetNextStation(app) == NULL) {
-		PianoStation_t *station = BarUiSelectStation (app, BarStateGetStationList(app),
-				BarL10nGet (&app->l10n, "cli.select_station"), NULL, app->settings.autoselect);
-		BarStateSetNextStation(app, station);
+
+	PianoStation_t *station = BarStateFindStationById (app, id);
+	if (station == NULL) {
+		BarUiMsg (&app->settings, MSG_ERR, "%s",
+				BarL10nGet (&app->l10n, "cli.autostart_not_found"));
+		return;
 	}
+	BarStateSetNextStation (app, station);
 }
 
 /*	wait for user input
@@ -370,51 +365,21 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 		} else {
 			context |= BAR_DC_PANDORA_DISCONNECTED;
 		}
+		/* Resolve the selection inside pianoHttpMutex for actions that use
+		 * it; songs and stations are only freed while it is held */
+		const bool hold = BarUiDispatchHoldsPianoLock (
+				BarUiDispatchKeyToId (app, buf[0]));
+		if (hold) {
+			BarUiPianoHold (app);
+		}
 		BarUiDispatch (app, buf[0], BarStateGetCurrentStation(app), 
 				BarStateGetPlaylist(app), true, context);
-	}
-}
-
-
-/*	player is done, clean up
- */
-static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
-	void *threadRet;
-
-	BarUiStartEventCmd (&app->settings, "songfinish", BarStateGetCurrentStation(app),
-			BarStateGetPlaylist(app), &app->player, BarStateGetStationList(app), 
-			PIANO_RET_OK, CURLE_OK);
-
-	BarWsBroadcastSongStop(app);
-
-	/* Wait for player thread with timeout to prevent infinite hang */
-	bool threadExited = BarPlayerJoinThreadWithTimeout (&app->player, *playerThread, &threadRet, 10);
-
-	if (!threadExited) {
-		BarPlayerFatalShutdown (&app->player, "CLI player thread final join");
-		atomic_store (&app->doQuit, 1);
-		return;
-	}
-
-	if (threadRet == (void *) PLAYER_RET_OK) {
-		app->playerErrors = 0;
-	} else if (threadRet == (void *) PLAYER_RET_STALE_URLS) {
-		BarStateDrainPlaylist(app);
-		app->playerErrors = 0;
-	} else if (threadRet == (void *) PLAYER_RET_SOFTFAIL) {
-		++app->playerErrors;
-		if (app->playerErrors >= app->settings.maxRetry) {
-			/* don't continue playback if thread reports too many error */
-			BarStateSetNextStation(app, NULL);
+		if (hold) {
+			BarUiPianoRelease (app);
 		}
-	} else {
-		BarStateSetNextStation(app, NULL);
 	}
-
-	BarInterruptSetTarget (&app->doQuit);
-
-	BarPlayerSetMode (&app->player, PLAYER_DEAD);
 }
+
 
 /*	print song duration
  */
@@ -455,16 +420,6 @@ static void BarMainPrintTime (BarApp_t *app) {
 /*	main loop
  */
 static void BarMainLoop (BarApp_t *app) {
-
-
-
-	pthread_t playerThread;
-
-
-
-
-
-
 	if (!BarMainGetLoginCredentials (app, &app->input)) {
 		return;
 	}
@@ -476,6 +431,10 @@ static void BarMainLoop (BarApp_t *app) {
 	if (!BarMainGetStations (app)) {
 		return;
 	}
+
+	/* Queue the autostart station before the playback manager starts so its
+	 * first pass already sees it. */
+	BarMainGetInitialStation (app);
 
 	if (!BarWsStartPlaybackManager(app)) {
 		return;
@@ -499,49 +458,13 @@ static void BarMainLoop (BarApp_t *app) {
 			promptedForStation = true;
 		}
 
-		#ifndef WEBSOCKET_ENABLED
-		/* Original playback state machine for non-WebSocket builds */
-		/* song finished playing, clean up things/scrobble song */
-		if (BarPlayerGetMode (player) == PLAYER_FINISHED) {
-			if (atomic_load_explicit (&player->interrupted, memory_order_relaxed) != 0) {
-				atomic_store_explicit (&app->doQuit, 1, memory_order_relaxed);
-			}
-			BarMainPlayerCleanup (app, &playerThread);
-		}
-
-		/* check whether player finished playing and start playing new
-		 * song */
-		if (BarPlayerGetMode (player) == PLAYER_DEAD) {
-			/* what's next? */
-			PianoSong_t *finished = BarStateAdvancePlaylist(app);
-			if (finished != NULL) {
-				BarUiHistoryPrepend (app, finished);
-			}
-			PianoSong_t *playlist = BarStateGetPlaylist(app);
-			PianoStation_t *nextStation = BarStateGetNextStation(app);
-			if (playlist == NULL && nextStation != NULL &&
-					!atomic_load_explicit (&app->doQuit, memory_order_relaxed)) {
-				PianoStation_t *curStation = BarStateGetCurrentStation(app);
-				if (nextStation != curStation) {
-					BarUiPrintStation (&app->settings, nextStation);
-				}
-				BarPlaybackFetchPlaylist (app);
-			}
-			/* song ready to play */
-			playlist = BarStateGetPlaylist(app);
-			if (playlist != NULL) {
-				BarPlaybackStartSong (app, &playerThread);
-			}
-		}
-		#else
-		/* WebSocket enabled: playback manager handles state machine */
+		/* Playback manager handles the state machine */
 		/* Web-only mode: just sleep, no CLI needed */
 		if (app->settings.uiMode == BAR_UI_MODE_WEB) {
 			sleep(BAR_WEBONLY_IDLE_LOOP_S);
 			continue;
 		}
 		/* In BOTH mode: CLI just handles input, playback manager runs independently */
-		#endif
 
 		if (!BarShouldSkipCliOutput(app)) {
 			BarMainHandleUserInput (app);
@@ -559,13 +482,6 @@ static void BarMainLoop (BarApp_t *app) {
 }
 
 	BarWsStopPlaybackManager(app);
-
-	#ifndef WEBSOCKET_ENABLED
-	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
-		BarPlayerRequestStop (player);
-		BarMainPlayerCleanup (app, &playerThread);
-	}
-	#endif
 }
 
 /* A returning test fatal hook cannot authorize shared-state destruction.
@@ -830,7 +746,6 @@ int main (int argc, char **argv) {
 	/* Daemonize if running in web-only mode - BEFORE player init
 	 * On macOS with --launched-as-daemon flag, we've already been relaunched via exec,
 	 * so we just need to perform daemonization steps without forking again. */
-#ifdef WEBSOCKET_ENABLED
 	if (BarIsWebOnlyMode (&app)) {
 #ifdef __APPLE__
 		if (launched_as_daemon) {
@@ -863,7 +778,6 @@ int main (int argc, char **argv) {
 		}
 #endif
 	}
-#endif
 
 
 	/* Initialize player AFTER daemonization */
@@ -971,7 +885,10 @@ int main (int argc, char **argv) {
 		close (app.input.fds[1]);
 	}
 
-	/* Stop the WebSocket service thread before shared app state is torn down. */
+	/* Stop the WebSocket command worker, then the service thread, before
+	 * shared app state is torn down. The other producers are gone by now:
+	 * BarMainLoop stopped the playback manager (and its player thread), and
+	 * the CLI runs on this thread. */
 	BarWsDestroy(&app);
 
 	/* write statefile */

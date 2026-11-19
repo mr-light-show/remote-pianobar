@@ -43,6 +43,16 @@ endif
 PIANOBAR_DIR:=src
 # Third-party miniaudio wrapper: omit from cppcheck (vendored, multi-config noise)
 PIANOBAR_LINT_C:=$(filter-out ${PIANOBAR_DIR}/miniaudio_impl.c,$(wildcard ${PIANOBAR_DIR}/*.c))
+# Every WebSocket source we own (lws itself is a system library, not linted)
+PIANOBAR_LINT_WS:=\
+		src/websocket/core/websocket.c \
+		src/websocket/core/websocket_lws_log.c \
+		src/websocket/core/outbox.c \
+		src/websocket/core/commands.c \
+		src/websocket/http/http_server.c \
+		src/websocket/protocol/socketio.c \
+		src/websocket/protocol/error_messages.c \
+		src/websocket/daemon/daemon.c
 LOCALE_YAML:=$(wildcard locale/*.yaml)
 LOCALE_GEN_MARKER:=${PIANOBAR_DIR}/l10n_defaults_gen.c
 # Updated when codegen runs; avoids re-running Python on every `make locale-codegen` (e.g. after
@@ -71,18 +81,17 @@ PIANOBAR_SRC:=\
 		${PIANOBAR_DIR}/websocket_bridge.c \
 		${PIANOBAR_DIR}/system_volume.c
 
-# WebSocket support (enabled by default, use NOWEBSOCKET=1 to disable)
+# WebSocket support
 WEBSOCKET_DIR:=src/websocket
-ifneq ($(NOWEBSOCKET),1)
-	PIANOBAR_SRC+=\
-		${WEBSOCKET_DIR}/core/websocket.c \
-		${WEBSOCKET_DIR}/core/websocket_lws_log.c \
-		${WEBSOCKET_DIR}/core/queue.c \
-		${WEBSOCKET_DIR}/http/http_server.c \
-		${WEBSOCKET_DIR}/protocol/socketio.c \
-		${WEBSOCKET_DIR}/protocol/error_messages.c \
-		${WEBSOCKET_DIR}/daemon/daemon.c
-endif
+PIANOBAR_SRC+=\
+	${WEBSOCKET_DIR}/core/websocket.c \
+	${WEBSOCKET_DIR}/core/websocket_lws_log.c \
+	${WEBSOCKET_DIR}/core/outbox.c \
+	${WEBSOCKET_DIR}/core/commands.c \
+	${WEBSOCKET_DIR}/http/http_server.c \
+	${WEBSOCKET_DIR}/protocol/socketio.c \
+	${WEBSOCKET_DIR}/protocol/error_messages.c \
+	${WEBSOCKET_DIR}/daemon/daemon.c
 
 PIANOBAR_OBJ:=${PIANOBAR_SRC:.c=.o}
 
@@ -132,13 +141,16 @@ else ifeq (${OS},Linux)
 	BLAS_LAPACK_LDFLAGS:=-lblas -llapack
 endif
 
-# WebSocket library flags (unless disabled)
-ifneq ($(NOWEBSOCKET),1)
-	LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
-	LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
+# WebSocket library flags
+# Fail early only for goals that compile or link; clean/lint/codegen need no libwebsockets.
+ifeq ($(filter-out clean distclean locale-codegen lint lint-test test-ci-local uninstall,$(or $(MAKECMDGOALS),pianobar)),)
+else ifneq ($(shell $(PKG_CONFIG) --exists libwebsockets openssl && echo yes),yes)
+$(error libwebsockets (4.0+) and openssl development files not found; install them, see DEVELOPMENT.md)
 endif
+LIBWEBSOCKETS_CFLAGS:=$(shell $(PKG_CONFIG) --cflags libwebsockets openssl)
+LIBWEBSOCKETS_LDFLAGS:=$(shell $(PKG_CONFIG) --libs libwebsockets openssl)
 
-# Check unit-test framework (always, so NOWEBSOCKET=1 tests can run)
+# Check unit-test framework
 CHECK_CFLAGS:=$(shell $(PKG_CONFIG) --cflags check 2>/dev/null)
 CHECK_LDFLAGS:=$(shell $(PKG_CONFIG) --libs check 2>/dev/null)
 
@@ -168,11 +180,9 @@ ALL_LDFLAGS:=${LDFLAGS} -lpthread -lm \
 		${LIBGCRYPT_LDFLAGS} ${LIBJSONC_LDFLAGS} \
 		${SYSVOLUME_LDFLAGS} ${BLAS_LAPACK_LDFLAGS}
 
-# Add WebSocket flags (unless disabled)
-ifneq ($(NOWEBSOCKET),1)
-	ALL_CFLAGS+=-DWEBSOCKET_ENABLED ${LIBWEBSOCKETS_CFLAGS}
-	ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
-endif
+# Add WebSocket flags
+ALL_CFLAGS+=${LIBWEBSOCKETS_CFLAGS}
+ALL_LDFLAGS+=${LIBWEBSOCKETS_LDFLAGS}
 
 # Be verbose if V=1 (gnu autotools’ --disable-silent-rules)
 SILENTCMD:=@
@@ -298,7 +308,7 @@ uninstall:
 TEST_DIR:=test
 TEST_BIN:=pianobar_test
 
-# Tests that build and run in both full and NOWEBSOCKET=1 configurations
+# Base tests (linked with websocket_bridge.o via BASE_TEST_LINK_OBJ)
 BASE_TEST_SRC:=\
 		${TEST_DIR}/test_main.c \
 		${TEST_DIR}/unit/test_l10n.c \
@@ -313,43 +323,41 @@ BASE_TEST_SRC:=\
 		${TEST_DIR}/unit/test_ui.c \
 		${TEST_DIR}/unit/test_station_sort.c \
 		${TEST_DIR}/unit/test_interrupt.c \
-		${TEST_DIR}/unit/test_libpiano_response.c
+		${TEST_DIR}/unit/test_libpiano_response.c \
+		${TEST_DIR}/unit/test_state_edge_paths.c
 
 # Tests that require WebSocket objects
 WS_TEST_SRC:=\
 		${TEST_DIR}/unit/test_websocket.c \
+		${TEST_DIR}/unit/test_ws_outbox.c \
+		${TEST_DIR}/unit/test_ws_outbox_faults.c \
+		${TEST_DIR}/unit/test_ws_service_edges.c \
+		${TEST_DIR}/unit/test_ws_commands.c \
+		${TEST_DIR}/unit/test_ws_failure_paths.c \
 		${TEST_DIR}/unit/test_http_server.c \
 		${TEST_DIR}/unit/test_daemon.c \
 		${TEST_DIR}/unit/test_socketio.c \
+		${TEST_DIR}/unit/test_socketio_station_failures.c \
 		${TEST_DIR}/unit/test_error_messages.c \
 		${TEST_DIR}/unit/test_ui_act_reconnect.c \
 		${TEST_DIR}/unit/test_ui_act_station.c \
+		${TEST_DIR}/unit/test_ws_edge_cases.c \
+		${TEST_DIR}/unit/test_cli_input_paths.c \
 		${TEST_DIR}/integration/fixture_http.c \
 		${TEST_DIR}/integration/test_playback_integration.c
 
-ifeq ($(NOWEBSOCKET),1)
-TEST_SRC:=${BASE_TEST_SRC}
-else
 TEST_SRC:=${BASE_TEST_SRC} ${WS_TEST_SRC}
-endif
 
 TEST_OBJ:=${TEST_SRC:.c=.o}
 -include $(TEST_OBJ:.o=.d)
 
-# Objects common to both test variants (no WebSocket objects)
+# Base objects (no WebSocket objects)
 BASE_TEST_LINK_OBJ:=src/interrupt.o src/playback_lifecycle.o src/log.o src/miniaudio_impl.o src/parse_utils.o src/bar_state.o src/playback_manager.o src/websocket_bridge.o src/ui.o src/ui_act.o src/ui_dispatch.o src/ui_readline.o src/terminal.o src/player.o src/settings.o src/station_display.o src/station_sort.o src/system_volume.o src/l10n.o src/l10n_defaults_gen.o ${LIBPIANO_OBJ}
 
-ifeq ($(NOWEBSOCKET),1)
-# NOWEBSOCKET=1: link only base objects (no websocket/socketio/daemon/queue/http)
-${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ}
+# Link all objects including WebSocket modules
+${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/outbox.o ${WEBSOCKET_DIR}/core/commands.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
 	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
-else
-# Full WebSocket build: link all objects including WebSocket modules
-${TEST_BIN}: locale-codegen ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o
-	${SILENTECHO} "  LINK  $@"
-	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/queue.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
-endif
+	${SILENTCMD}${CC} -o $@ ${TEST_OBJ} ${BASE_TEST_LINK_OBJ} ${WEBSOCKET_DIR}/core/websocket.o ${WEBSOCKET_DIR}/core/websocket_lws_log.o ${WEBSOCKET_DIR}/core/outbox.o ${WEBSOCKET_DIR}/core/commands.o ${WEBSOCKET_DIR}/http/http_server.o ${WEBSOCKET_DIR}/protocol/socketio.o ${WEBSOCKET_DIR}/protocol/error_messages.o ${WEBSOCKET_DIR}/daemon/daemon.o ${ALL_LDFLAGS} ${CHECK_LDFLAGS}
 
 # Run tests
 test: ${TEST_BIN}
@@ -369,12 +377,15 @@ test-ci-local:
 # Run static analysis (requires cppcheck)
 # Suppressions: .cppcheck-suppress (miniaudio.h and project-specific false positives)
 # PIANOBAR_LINT_C omits miniaudio_impl.c (vendored wrapper, noisy configs)
+# CPPCHECK_LENIENT=1: cppcheck < 2.18 (Ubuntu 24.04 apt) reports many existing suppressions as
+# unmatched; the default stays strict so stale suppressions are caught on current cppcheck.
 lint:
 	${SILENTECHO} "   LINT  Running static analysis..."
 	${SILENTCMD}cppcheck --enable=all --max-configs=3 --suppress=missingIncludeSystem --suppress=unusedFunction \
 		--suppress=toomanyconfigs --suppress=normalCheckLevelMaxBranches --suppress=checkersReport \
 		--inline-suppr --error-exitcode=1 --suppressions-list=.cppcheck-suppress \
-		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_LINT_C} ${LIBPIANO_DIR}/*.c
+		$(if $(CPPCHECK_LENIENT),--suppress=unmatchedSuppression) \
+		-I ${LIBPIANO_INCLUDE} ${PIANOBAR_LINT_C} ${PIANOBAR_LINT_WS} ${LIBPIANO_DIR}/*.c
 
 # Run linter on test files
 lint-test:
@@ -390,7 +401,7 @@ test-all: test lint
 # Build and run tests with coverage instrumentation
 test-coverage: clean
 	${SILENTECHO} "   TEST  Building with coverage instrumentation..."
-	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -g -O0" LDFLAGS="${LDFLAGS} --coverage"
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -fprofile-update=atomic -g -O0" LDFLAGS="${LDFLAGS} --coverage"
 	${SILENTECHO} "   TEST  Running test suite (CI parity: integration + headless audio)..."
 	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
 	${SILENTECHO} "   COV   Generating coverage report..."
@@ -414,20 +425,30 @@ test-clean:
 	${SILENTECHO} " CLEAN  tests"
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
 
-# Run tests with memory leak detection using AddressSanitizer
+# Run tests with AddressSanitizer (memory errors, leaks) and UndefinedBehaviorSanitizer.
 # Full clean required so all code linked into the test binary is built with ASan (cf. test-coverage).
+# -fno-sanitize-recover=undefined makes any UB finding abort the run with a non-zero exit.
+SANITIZE_FLAGS:=-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 test-asan: clean clean-test-asan
-	${SILENTECHO} "   TEST  Building with AddressSanitizer..."
-	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} -fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="${LDFLAGS} -fsanitize=address"
-	${SILENTECHO} "   TEST  Running test suite with memory leak detection..."
-	${SILENTCMD}./${TEST_BIN}
+	${SILENTECHO} "   TEST  Building with AddressSanitizer + UndefinedBehaviorSanitizer..."
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${SANITIZE_FLAGS} -g" LDFLAGS="${LDFLAGS} ${SANITIZE_FLAGS}"
+	${SILENTECHO} "   TEST  Running test suite with memory and undefined-behavior checks..."
+	${SILENTCMD}UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" ./${TEST_BIN}
 
 clean-test-asan:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
+
+# Run tests with ThreadSanitizer. Known third-party races are listed in test/tsan.supp.
+TSAN_FLAGS:=-fsanitize=thread -fno-omit-frame-pointer
+test-tsan: clean clean-test-asan
+	${SILENTECHO} "   TEST  Building with ThreadSanitizer..."
+	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${TSAN_FLAGS} -O1 -g" LDFLAGS="${LDFLAGS} ${TSAN_FLAGS}"
+	${SILENTECHO} "   TEST  Running test suite with data-race checks..."
+	${SILENTCMD}TSAN_OPTIONS="suppressions=test/tsan.supp:exitcode=66" ./${TEST_BIN}
 
 # Run tests with valgrind (Linux only, optional)
 test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-valgrind minimal all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen
