@@ -283,6 +283,119 @@ START_TEST (test_main_finalization_rejects_terminal_player)
 }
 END_TEST
 
+/* Two-station list fixture for startup autostart selection. */
+typedef struct {
+	BarApp_t app;
+	PianoStation_t a, b;
+	BarAccount_t acct;
+} AutostartFixture;
+
+static void autostart_fixture_init (AutostartFixture *f, BarUiMode_t mode,
+		const char *globalId) {
+	memset (f, 0, sizeof (*f));
+	f->app.settings.uiMode = mode;
+	f->app.settings.autostartStation = (char *) globalId;
+	f->a.id = (char *) "st-a";
+	f->a.name = (char *) "Station A";
+	f->b.id = (char *) "st-b";
+	f->b.name = (char *) "Station B";
+	f->a.head.next = &f->b.head;
+	f->app.ph.stations = &f->a;
+	BarStateInit (&f->app);
+}
+
+static void autostart_fixture_done (AutostartFixture *f) {
+	f->app.ph.stations = NULL;
+	BarStateDestroy (&f->app);
+}
+
+/* Regression: autostart_station was ignored because the startup call was
+ * dropped; the configured station must be queued before playback begins. */
+START_TEST (test_main_autostart_selects_configured_station)
+{
+	AutostartFixture f;
+	autostart_fixture_init (&f, BAR_UI_MODE_BOTH, "st-b");
+	BarMainGetInitialStation (&f.app);
+	ck_assert_ptr_eq (BarStateGetNextStation (&f.app), &f.b);
+	autostart_fixture_done (&f);
+}
+END_TEST
+
+/* Break caught: an unknown id must not select anything or block on a prompt,
+ * in every UI mode (stdin is never read). */
+START_TEST (test_main_autostart_unknown_station_does_not_block)
+{
+	const BarUiMode_t modes[] = {BAR_UI_MODE_CLI, BAR_UI_MODE_WEB, BAR_UI_MODE_BOTH};
+	for (size_t i = 0; i < sizeof (modes) / sizeof (*modes); i++) {
+		AutostartFixture f;
+		autostart_fixture_init (&f, modes[i], "no-such-station");
+		f.app.input.fds[0] = -1;
+		f.app.input.fds[1] = -1;
+		BarMainGetInitialStation (&f.app);
+		ck_assert_ptr_null (BarStateGetNextStation (&f.app));
+		ck_assert_ptr_null (BarStateGetCurrentStation (&f.app));
+		autostart_fixture_done (&f);
+	}
+}
+END_TEST
+
+/* Unset and empty autostart_station both leave the selection untouched; the
+ * empty value is the documented way to disable autostart (no error). */
+START_TEST (test_main_autostart_unset_or_empty_selects_nothing)
+{
+	const BarUiMode_t modes[] = {BAR_UI_MODE_CLI, BAR_UI_MODE_WEB};
+	const char *const ids[] = {NULL, ""};
+	for (size_t i = 0; i < sizeof (modes) / sizeof (*modes); i++) {
+		for (size_t j = 0; j < sizeof (ids) / sizeof (*ids); j++) {
+			AutostartFixture f;
+			autostart_fixture_init (&f, modes[i], ids[j]);
+			f.app.input.fds[0] = -1;
+			f.app.input.fds[1] = -1;
+			BarMainGetInitialStation (&f.app);
+			ck_assert_ptr_null (BarStateGetNextStation (&f.app));
+			autostart_fixture_done (&f);
+		}
+	}
+}
+END_TEST
+
+/* The active account's autostart wins over the global value (same rule as
+ * the Pandora reconnect path). */
+START_TEST (test_main_autostart_prefers_active_account)
+{
+	AutostartFixture f;
+	autostart_fixture_init (&f, BAR_UI_MODE_WEB, "st-b");
+	f.acct.id = (char *) "second";
+	f.acct.autostartStation = (char *) "st-a";
+	f.app.settings.accounts = &f.acct;
+	f.app.settings.accountCount = 1;
+	BarMainGetInitialStation (&f.app);
+	ck_assert_ptr_eq (BarStateGetNextStation (&f.app), &f.a);
+	f.app.settings.accounts = NULL;
+	autostart_fixture_done (&f);
+}
+END_TEST
+
+/* Global autostart_station belongs to the primary account only: an active
+ * account without its own value (or with an empty one) starts nothing. */
+START_TEST (test_main_autostart_account_without_value_selects_nothing)
+{
+	const char *const ids[] = {NULL, ""};
+	for (size_t j = 0; j < sizeof (ids) / sizeof (*ids); j++) {
+		AutostartFixture f;
+		autostart_fixture_init (&f, BAR_UI_MODE_WEB, "st-b");
+		f.acct.id = (char *) "second";
+		f.acct.autostartStation = (char *) ids[j];
+		f.app.settings.accounts = &f.acct;
+		f.app.settings.accountCount = 1;
+		BarMainGetInitialStation (&f.app);
+		ck_assert_ptr_null (BarStateGetNextStation (&f.app));
+		f.app.settings.accounts = NULL;
+		autostart_fixture_done (&f);
+	}
+}
+END_TEST
+
 typedef struct {
 	player_t *player;
 	pthread_mutex_t lock;
@@ -3346,6 +3459,14 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_lifecycle, test_player_destroy_requires_successful_join);
 	tcase_add_test (tc_lifecycle, test_player_production_fatal_shutdown_exits_failure);
 	suite_add_tcase (s, tc_lifecycle);
+	TCase *tc_autostart = tcase_create ("Startup autostart station");
+	tcase_set_timeout (tc_autostart, 10);
+	tcase_add_test (tc_autostart, test_main_autostart_selects_configured_station);
+	tcase_add_test (tc_autostart, test_main_autostart_unknown_station_does_not_block);
+	tcase_add_test (tc_autostart, test_main_autostart_unset_or_empty_selects_nothing);
+	tcase_add_test (tc_autostart, test_main_autostart_prefers_active_account);
+	tcase_add_test (tc_autostart, test_main_autostart_account_without_value_selects_nothing);
+	suite_add_tcase (s, tc_autostart);
 	TCase *tc_regression = tcase_create ("Concurrent regression guards");
 	tcase_set_timeout (tc_regression, 10);
 	tcase_add_test (tc_regression, test_player_release_build_reentrancy_rejects_without_waiting);
