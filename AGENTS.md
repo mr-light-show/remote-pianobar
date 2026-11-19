@@ -64,8 +64,6 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 
 **Note:** Local pre-push hook runs `make test-all`, or **`make distclean && PIANOBAR_INTEGRATION=1 make test-all`** when pushed commits touch `Makefile` or `test/**`. GitHub Actions C job runs `PIANOBAR_INTEGRATION=1 make test-coverage` (clean build). Run the CI-parity command when you change test infrastructure — see `.cursor/skills/pre-push-ci-parity/SKILL.md`.
 
-Tests are disabled when building with `NOWEBSOCKET=1`.
-
 **Git hooks (one-time):** `git config core.hooksPath .githooks` — pre-push runs `make test-all`.
 
 ---

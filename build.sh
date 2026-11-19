@@ -225,7 +225,7 @@ if [ "$1" = "debug" ]; then
     
     # Build with debug flags
     echo "Building with debug symbols..."
-    make DEBUG=1 CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+    make DEBUG=1 CFLAGS="-g -O0"
     echo ""
     
     echo "✓ Debug build complete!"

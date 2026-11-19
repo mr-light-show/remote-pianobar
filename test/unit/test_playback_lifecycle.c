@@ -57,9 +57,7 @@ static int failed_player_create (pthread_t *thread, const pthread_attr_t *attr,
 static void setup_playback_app (BarApp_t *app) {
 	memset (app, 0, sizeof (*app));
 	BarSettingsInit (&app->settings);
-#ifdef WEBSOCKET_ENABLED
 	app->settings.uiMode = BAR_UI_MODE_CLI;
-#endif
 	app->settings.npSongFormat = strdup ("%t");
 	app->settings.loveIcon = strdup ("+");
 	app->settings.banIcon = strdup ("-");
@@ -119,9 +117,7 @@ static void setup_playback_app_with_piano (BarApp_t *app) {
 	memset (app, 0, sizeof (*app));
 	BarSettingsInit (&app->settings);
 	BarSettingsRead (&app->settings);
-#ifdef WEBSOCKET_ENABLED
 	app->settings.uiMode = BAR_UI_MODE_CLI;
-#endif
 	ck_assert (BarL10nInit (&app->l10n, &app->settings));
 	BarStateInit (app);
 	setenv ("PIANOBAR_TEST_NO_DEVICE", "1", 1);

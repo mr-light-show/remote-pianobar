@@ -37,12 +37,7 @@ void BarMainGetPlaylist(BarApp_t *app) {
 	(void)app;
 }
 
-void BarMainStartPlayback(BarApp_t *app, pthread_t *playerThread) {
-	(void)app;
-	(void)playerThread;
-}
-
-/* Test suite declarations — base (run in all configurations) */
+/* Test suite declarations */
 Suite *settings_suite(void);
 Suite *player_suite(void);
 Suite *bar_state_suite(void);
@@ -57,8 +52,6 @@ Suite *station_sort_suite(void);
 Suite *interrupt_suite(void);
 Suite *libpiano_response_suite(void);
 
-/* Test suite declarations — WebSocket-only */
-#ifdef WEBSOCKET_ENABLED
 Suite *websocket_suite(void);
 Suite *http_server_suite(void);
 Suite *daemon_suite(void);
@@ -67,7 +60,6 @@ Suite *error_messages_suite(void);
 Suite *ui_act_suite(void);
 Suite *ui_act_station_suite(void);
 Suite *playback_integration_suite(void);
-#endif
 
 int main(void) {
 	int number_failed;
@@ -75,8 +67,6 @@ int main(void) {
 
 	TestTmpRootInit ();
 
-#ifdef WEBSOCKET_ENABLED
-	/* Start with WebSocket suite; add remaining WebSocket suites */
 	sr = srunner_create(websocket_suite());
 	srunner_add_suite(sr, http_server_suite());
 	srunner_add_suite(sr, daemon_suite());
@@ -85,15 +75,8 @@ int main(void) {
 	srunner_add_suite(sr, ui_act_suite());
 	srunner_add_suite(sr, ui_act_station_suite());
 	srunner_add_suite(sr, playback_integration_suite());
-#else
-	/* NOWEBSOCKET=1: no WebSocket suites — start with a base suite */
-	sr = srunner_create(settings_suite());
-#endif
 
-	/* Base suites always run */
-#ifdef WEBSOCKET_ENABLED
 	srunner_add_suite(sr, settings_suite());
-#endif
 	srunner_add_suite(sr, player_suite());
 	srunner_add_suite(sr, bar_state_suite());
 	srunner_add_suite(sr, playback_manager_suite());
