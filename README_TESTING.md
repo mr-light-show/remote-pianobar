@@ -115,7 +115,12 @@ PIANOBAR_INTEGRATION=1 ./pianobar_test
 CI runs them during `make test-coverage` (`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1`).
 
 Requirements:
-- `test/fixtures/tone.mp3` (committed; regenerate with ffmpeg if needed)
+- `test/fixtures/tone.mp3` (committed; regenerate with ffmpeg if needed). It is a deliberately near-silent 440 Hz sine (peak about -60 dBFS, amplitude 0.001) so a local run on speakers does not beep. It is not pure digital silence because `test_player.c` asserts decoded samples exceed `0.00001f`. Regenerate with:
+  ```sh
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t):s=44100:d=0.5:c=mono" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 1 test/fixtures/tone.mp3
+  ```
+  Keep duration (0.5 s), rate (44100 Hz), mono, and 64 kb/s so timing-based tests keep their assumptions. Verify with `ffmpeg -i test/fixtures/tone.mp3 -af astats -f null -`: the peak should be well above 0.00001 (about -100 dBFS) and below about -55 dBFS.
 - Headless CI uses `PIANOBAR_TEST_NO_DEVICE=1` (miniaudio `noDevice`); without it, audio tests skip if the engine cannot init
 - `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
 
