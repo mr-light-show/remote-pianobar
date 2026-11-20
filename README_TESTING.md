@@ -122,7 +122,9 @@ test/
 │   └── test_playback_integration.c
 └── fixtures/                # Test data files
     ├── test_config.ini
-    └── tone.mp3             # Short MP3 for player integration tests
+    ├── tone.mp3             # Short MP3 for player integration tests
+    ├── tone_stereo.mp3      # Stereo variant for channel-count tests
+    └── tone_channel_change.mp3  # Stereo then mono, for mid-stream changes
 ```
 
 ## Current Test Coverage
@@ -168,6 +170,16 @@ Requirements:
     -c:a libmp3lame -b:a 64k -ar 44100 -ac 1 test/fixtures/tone.mp3
   ```
   Keep duration (0.5 s), rate (44100 Hz), mono, and 64 kb/s so timing-based tests keep their assumptions. Verify with `ffmpeg -i test/fixtures/tone.mp3 -af astats -f null -`: the peak should be well above 0.00001 (about -100 dBFS) and below about -55 dBFS.
+- `test/fixtures/tone_stereo.mp3` and `test/fixtures/tone_channel_change.mp3` (committed) back the player channel-count tests. The first is the same tone in stereo (660 Hz on the right). The second is 0.25 s of stereo followed by 0.25 s of mono, concatenated without Xing or ID3 headers, so FFmpeg reports mono codec parameters while the first decoded frames are stereo:
+  ```sh
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t)|0.001*sin(2*PI*660*t):s=44100:d=0.5:c=stereo" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 test/fixtures/tone_stereo.mp3
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t)|0.001*sin(2*PI*660*t):s=44100:d=0.25:c=stereo" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 -write_xing 0 -id3v2_version 0 s.mp3
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t):s=44100:d=0.25:c=mono" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 1 -write_xing 0 -id3v2_version 0 m.mp3
+  cat s.mp3 m.mp3 > test/fixtures/tone_channel_change.mp3
+  ```
 - Headless CI uses `PIANOBAR_TEST_NO_DEVICE=1` (miniaudio `noDevice`); without it, audio tests skip if the engine cannot init
 - `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
 
