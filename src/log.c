@@ -192,8 +192,7 @@ static void log_to_file(logKind kind, const char *format, va_list args)
 	        tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec,
 	        (long)(ts.tv_nsec / 1000000),
 	        LOG_KIND_LABEL_FIELD_WIDTH, log_kind_prefix_label(kind));
-	/* A fixed ASCII format cannot fail; the comparison keeps len sane anyway. */
-	len = (size_t)(prefix > 0) * (size_t)prefix;
+	len = prefix > 0 ? (size_t)prefix : 0;
 #else
 	(void) kind;
 #endif
