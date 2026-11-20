@@ -194,6 +194,14 @@ void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook);
  * device thread without hardware). PIANOBAR_TEST_NULL_AUDIO=1 does the same.
  * Either takes precedence over PIANOBAR_TEST_NO_DEVICE. Set before BarPlayerInit. */
 void BarPlayerSetNullAudioTestBackend (bool enabled);
+/* Test-only: runs on the player thread after the stream and decoder open,
+ * before the filter graph and data source are built. Set before starting it. */
+typedef void (*BarPlayerStreamOpenedTestHook) (player_t *player);
+void BarPlayerSetStreamOpenedTestHook (BarPlayerStreamOpenedTestHook hook);
+/* Copy interleaved s16 frames from an inChannels buffer into an outChannels
+ * buffer. Copies the channels both have; extra output channels are zeroed. */
+void BarPlayerCopyPcmFrames (int16_t *out, unsigned int outChannels,
+		const int16_t *in, unsigned int inChannels, size_t frames);
 bool BarPlayerJoinThreadWithTimeout (player_t *player, pthread_t thread, void **retval, unsigned int timeoutSeconds);
 /* Leaves all shared resources intact, even when a test fatal hook returns. */
 void BarPlayerFatalShutdown (player_t *player, const char *operation);

@@ -3446,6 +3446,162 @@ START_TEST (test_ffmpeg_interrupt_cb_returns_0_after_song_start_reset)
 }
 END_TEST
 
+/* Break caught: the copy writes the source frame's channel count into a
+ * buffer sized for the device's, overrunning it when they differ. */
+START_TEST (test_player_copy_pcm_frames_bounds_channel_mismatch)
+{
+	const int16_t stereo[] = {1, 2, 3, 4, 5, 6};
+	const int16_t mono[] = {7, 8, 9};
+	int16_t *out = malloc (6 * sizeof (*out));
+	ck_assert_ptr_nonnull (out);
+
+	BarPlayerCopyPcmFrames (out, 2, stereo, 2, 3);
+	ck_assert_mem_eq (out, stereo, sizeof stereo);
+
+	/* Exactly three mono samples: a stride-2 write lands outside under ASan. */
+	int16_t *narrow = malloc (3 * sizeof (*narrow));
+	ck_assert_ptr_nonnull (narrow);
+	BarPlayerCopyPcmFrames (narrow, 1, stereo, 2, 3);
+	ck_assert_int_eq (narrow[0], 1);
+	ck_assert_int_eq (narrow[1], 3);
+	ck_assert_int_eq (narrow[2], 5);
+	free (narrow);
+
+	memset (out, 0x5a, 6 * sizeof (*out));
+	BarPlayerCopyPcmFrames (out, 2, mono, 1, 3);
+	const int16_t widened[] = {7, 0, 8, 0, 9, 0};
+	ck_assert_mem_eq (out, widened, sizeof widened);
+
+	BarPlayerCopyPcmFrames (out, 2, stereo, 2, 0);
+	ck_assert_mem_eq (out, widened, sizeof widened);
+	free (out);
+}
+END_TEST
+
+static bool player_fixture_url (const char *rel, char *buf, size_t len)
+{
+	char resolved[PATH_MAX];
+	if (realpath (rel, resolved) == NULL) {
+		return false;
+	}
+	return snprintf (buf, len, "file://%s", resolved) < (int) len;
+}
+
+/* Simulates a container whose codec parameters report fewer channels than
+ * the opened decoder (and so the filter graph) produces. */
+static void force_codecpar_mono (player_t *player)
+{
+	av_channel_layout_uninit (&player->st->codecpar->ch_layout);
+	av_channel_layout_default (&player->st->codecpar->ch_layout, 1);
+}
+
+typedef struct {
+	ma_uint32 channels;
+	int sinkChannels;
+	ma_uint64 frames;
+	bool guardIntact, nonSilent;
+} SourceChannelRead;
+
+enum { SOURCE_READ_FRAMES = 480, SOURCE_READ_GUARD = 256 };
+
+/* Plays a fixture on the player thread and reads its data source directly
+ * into heap buffers sized exactly from the source's reported format. */
+static void read_fixture_source (const char *rel, BarPlayerStreamOpenedTestHook hook,
+		SourceChannelRead *result)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	memset (result, 0, sizeof (*result));
+	result->guardIntact = true;
+	ck_assert (player_fixture_url (rel, url, sizeof url));
+	player_thread_test_setup (&player, &settings);
+	BarPlayerSetStreamOpenedTestHook (hook);
+	player.url = strdup (url);
+	BarPlayerSetMode (&player, PLAYER_WAITING);
+	player.threadJoinPending = true;
+	pthread_t worker;
+	ck_assert_int_eq (pthread_create (&worker, NULL, BarPlayerThread, &player), 0);
+	ck_assert (BarPlayerWaitForMode (&player, PLAYER_PLAYING, 5000));
+	ma_format format;
+	ma_uint32 sampleRate;
+	ck_assert_int_eq (ma_data_source_get_data_format (&player.dataSource, &format,
+		&result->channels, &sampleRate, NULL, 0), MA_SUCCESS);
+	ck_assert_int_eq (format, ma_format_s16);
+	pthread_mutex_lock (&player.decoderLock);
+	result->sinkChannels = av_buffersink_get_channels (player.fbufsink);
+	pthread_mutex_unlock (&player.decoderLock);
+	const size_t samples = (size_t) SOURCE_READ_FRAMES * result->channels;
+	for (unsigned read = 0; read < 200; ++read) {
+		int16_t *buffer = malloc ((samples + SOURCE_READ_GUARD) * sizeof (*buffer));
+		ck_assert_ptr_nonnull (buffer);
+		for (size_t i = 0; i < SOURCE_READ_GUARD; ++i) { buffer[samples + i] = 0x5a5a; }
+		ma_uint64 count = 0;
+		const ma_result ret = ma_data_source_read_pcm_frames (&player.dataSource, buffer,
+			SOURCE_READ_FRAMES, &count);
+		for (size_t i = 0; i < SOURCE_READ_GUARD; ++i) {
+			result->guardIntact &= buffer[samples + i] == 0x5a5a;
+		}
+		for (size_t i = 0; i < count * result->channels; ++i) {
+			result->nonSilent |= buffer[i] != 0;
+		}
+		free (buffer);
+		result->frames += count;
+		if (ret != MA_SUCCESS || count == 0) { break; }
+	}
+	BarPlayerRequestStop (&player);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&player, worker, NULL, 2));
+	BarPlayerSetStreamOpenedTestHook (NULL);
+	free (player.url);
+	player.url = NULL;
+	player_thread_test_teardown (&player, &settings);
+}
+
+/* Break caught: the data source (and so the miniaudio buffers) is sized from
+ * the container's codec parameters while the filter graph delivers the
+ * decoder's channel count; a stereo decode behind mono parameters overruns. */
+START_TEST (test_player_source_channels_follow_filter_output_not_codec_parameters)
+{
+	SourceChannelRead read;
+	read_fixture_source ("test/fixtures/tone_stereo.mp3", force_codecpar_mono, &read);
+	ck_assert_int_eq (read.sinkChannels, 2);
+	ck_assert_int_eq (read.channels, 2);
+	ck_assert_msg (read.guardIntact, "source read wrote past a buffer sized for its own format");
+	ck_assert (read.nonSilent);
+	ck_assert_uint_gt (read.frames, 0);
+}
+END_TEST
+
+/* Normal streams keep their channel count: mono stays mono, stereo stereo,
+ * and the whole 0.5 s fixture decodes within the reported format. */
+START_TEST (test_player_mono_and_stereo_fixtures_keep_channel_count)
+{
+	static const char *const fixtures[] = {"test/fixtures/tone.mp3", "test/fixtures/tone_stereo.mp3"};
+	SourceChannelRead read;
+	read_fixture_source (fixtures[_i], NULL, &read);
+	ck_assert_int_eq (read.channels, (ma_uint32) _i + 1);
+	ck_assert_int_eq (read.sinkChannels, _i + 1);
+	ck_assert (read.guardIntact);
+	ck_assert (read.nonSilent);
+	ck_assert_uint_ge (read.frames, 44100 / 2);
+}
+END_TEST
+
+/* A stream whose channel count changes mid-song (stereo frames first, mono
+ * codec parameters) must neither overrun nor abort; mismatched frames are
+ * rejected by the filter source and the rest plays in the opened format. */
+START_TEST (test_player_mid_stream_channel_change_stays_in_opened_format)
+{
+	SourceChannelRead read;
+	read_fixture_source ("test/fixtures/tone_channel_change.mp3", NULL, &read);
+	ck_assert_int_eq (read.channels, 1);
+	ck_assert_int_eq (read.sinkChannels, 1);
+	ck_assert (read.guardIntact);
+	ck_assert (read.nonSilent);
+	ck_assert_uint_gt (read.frames, 0);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -3570,6 +3726,13 @@ Suite *player_suite(void) {
 	tcase_set_timeout (tc_monitor, 10);
 	tcase_add_test (tc_monitor, test_player_paused_monitor_leaves_audio_available_for_volume);
 	suite_add_tcase (s, tc_monitor);
+	TCase *tc_channels = tcase_create ("Channel count");
+	tcase_set_timeout (tc_channels, 10);
+	tcase_add_test (tc_channels, test_player_copy_pcm_frames_bounds_channel_mismatch);
+	tcase_add_test (tc_channels, test_player_source_channels_follow_filter_output_not_codec_parameters);
+	tcase_add_loop_test (tc_channels, test_player_mono_and_stereo_fixtures_keep_channel_count, 0, 2);
+	tcase_add_test (tc_channels, test_player_mid_stream_channel_change_stays_in_opened_format);
+	suite_add_tcase (s, tc_channels);
 	
 	return s;
 }
