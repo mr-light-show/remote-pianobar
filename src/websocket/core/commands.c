@@ -37,23 +37,35 @@ _Static_assert (WS_CMD_MAX_BYTES >= WS_CMD_MAX_REQUEST_BYTES,
 
 typedef struct BarWsCommandItem BarWsCommandItem_t;
 
+/* Items are kept in one FIFO lane per requester (linked by next). The head
+ * item of a lane stands for the whole lane: it alone holds valid laneTail
+ * and laneNext fields, and the lanes form a circular list in service order,
+ * so no allocation beyond the item itself is needed. */
 struct BarWsCommandItem {
 	BarWsConnId_t requester;
 	char *bytes; /* owned, NUL-terminated copy */
 	size_t len;
-	BarWsCommandItem_t *next;
+	BarWsCommandItem_t *next;     /* next item of the same requester */
+	BarWsCommandItem_t *laneTail; /* lane heads only: last item of the lane */
+	BarWsCommandItem_t *laneNext; /* lane heads only: next lane (circular) */
 };
 
 /* Lock discipline: one mutex (lock) guards every field except the item
  * payloads, which are immutable once queued and owned by exactly one party
  * (the queue, then the popper). Nothing is called out of this module while
  * the mutex is held except pthread_cond_wait on notEmpty (which releases it);
- * allocation and free of payloads happen outside the critical section. */
+ * allocation and free of payloads happen outside the critical section.
+ *
+ * Fair queueing: Pop serves the lanes round-robin, one item per turn. lastLane
+ * is the back of the rotation (NULL when nothing is queued) and
+ * lastLane->laneNext the front, the lane served next. A served lane that
+ * still has items moves to the back; an emptied lane leaves the rotation;
+ * a requester with nothing queued joins at the back. With one requester this
+ * is a plain FIFO. */
 struct BarWsCommandQueue {
 	pthread_mutex_t lock;
 	pthread_cond_t notEmpty;
-	BarWsCommandItem_t *head;
-	BarWsCommandItem_t *tail;
+	BarWsCommandItem_t *lastLane;
 	size_t count;
 	size_t bytes;
 	bool closed;
@@ -71,6 +83,20 @@ static void item_list_free (BarWsCommandItem_t *it) {
 		BarWsCommandItem_t *next = it->next;
 		item_free (it);
 		it = next;
+	}
+}
+
+/* Free every item of the rotation whose back lane is last (may be NULL) */
+static void lanes_free (BarWsCommandItem_t *last) {
+	if (!last) {
+		return;
+	}
+	BarWsCommandItem_t *lane = last->laneNext;
+	last->laneNext = NULL; /* break the circle */
+	while (lane) {
+		BarWsCommandItem_t *nextLane = lane->laneNext;
+		item_list_free (lane);
+		lane = nextLane;
 	}
 }
 
@@ -95,7 +121,7 @@ void BarWsCommandQueueFree (BarWsCommandQueue_t *q) {
 	if (!q) {
 		return;
 	}
-	item_list_free (q->head);
+	lanes_free (q->lastLane);
 	pthread_cond_destroy (&q->notEmpty);
 	pthread_mutex_destroy (&q->lock);
 	free (q);
@@ -137,12 +163,28 @@ BarWsCommandResult_t BarWsCommandQueuePush (BarWsCommandQueue_t *q,
 	} else if (q->count >= WS_CMD_MAX_ITEMS || len > WS_CMD_MAX_BYTES - q->bytes) {
 		result = BAR_WS_CMD_FULL;
 	} else {
-		if (q->tail) {
-			q->tail->next = it;
-		} else {
-			q->head = it;
+		/* At most WS_CMD_MAX_ITEMS lanes, so the scan is short */
+		BarWsCommandItem_t *lane = q->lastLane;
+		if (lane) {
+			do {
+				lane = lane->laneNext;
+			} while (lane->requester != requester && lane != q->lastLane);
+			if (lane->requester != requester) {
+				lane = NULL;
+			}
 		}
-		q->tail = it;
+		if (lane) {
+			lane->laneTail->next = it;
+			lane->laneTail = it;
+		} else {
+			/* new lane at the back of the rotation */
+			it->laneTail = it;
+			it->laneNext = q->lastLane ? q->lastLane->laneNext : it;
+			if (q->lastLane) {
+				q->lastLane->laneNext = it;
+			}
+			q->lastLane = it;
+		}
 		q->count++;
 		q->bytes += len;
 		pthread_cond_signal (&q->notEmpty);
@@ -160,7 +202,7 @@ bool BarWsCommandQueuePop (BarWsCommandQueue_t *q, BarWsConnId_t *requester,
 		return false;
 	}
 	pthread_mutex_lock (&q->lock);
-	while (!q->closed && !q->head) {
+	while (!q->closed && !q->lastLane) {
 		q->waiting++;
 		pthread_cond_wait (&q->notEmpty, &q->lock);
 		q->waiting--;
@@ -169,10 +211,20 @@ bool BarWsCommandQueuePop (BarWsCommandQueue_t *q, BarWsConnId_t *requester,
 		pthread_mutex_unlock (&q->lock);
 		return false;
 	}
-	BarWsCommandItem_t *it = q->head;
-	q->head = it->next;
-	if (!q->head) {
-		q->tail = NULL;
+	BarWsCommandItem_t *it = q->lastLane->laneNext; /* front lane's head */
+	BarWsCommandItem_t *rest = it->next;
+	if (rest) {
+		/* the next item heads the lane, which moves to the back */
+		rest->laneTail = it->laneTail;
+		rest->laneNext = (it->laneNext == it) ? rest : it->laneNext;
+		if (q->lastLane != it) {
+			q->lastLane->laneNext = rest;
+		}
+		q->lastLane = rest;
+	} else if (q->lastLane == it) {
+		q->lastLane = NULL; /* that was the only lane */
+	} else {
+		q->lastLane->laneNext = it->laneNext; /* lane emptied: leave */
 	}
 	q->count--;
 	q->bytes -= it->len;
@@ -198,14 +250,13 @@ void BarWsCommandQueueClose (BarWsCommandQueue_t *q) {
 	}
 	pthread_mutex_lock (&q->lock);
 	q->closed = true;
-	BarWsCommandItem_t *dropped = q->head;
-	q->head = NULL;
-	q->tail = NULL;
+	BarWsCommandItem_t *dropped = q->lastLane;
+	q->lastLane = NULL;
 	q->count = 0;
 	q->bytes = 0;
 	pthread_cond_broadcast (&q->notEmpty);
 	pthread_mutex_unlock (&q->lock);
-	item_list_free (dropped);
+	lanes_free (dropped);
 }
 
 void BarWsCommandQueueBegin (BarWsCommandQueue_t *q, const char *bytes,

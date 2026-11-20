@@ -443,6 +443,220 @@ START_TEST (test_cmd_stats_depth_and_running) {
 }
 END_TEST
 
+/* Fair queueing: the worker serves requesters round-robin, each in its own
+ * FIFO order, so one client's burst delays another by at most one item. */
+
+/* Push "<prefix><i>" for i in 1..n as requester id */
+static void push_n (BarWsCommandQueue_t *q, BarWsConnId_t id, const char *prefix,
+		int n) {
+	for (int i = 1; i <= n; i++) {
+		char buf[32];
+		snprintf (buf, sizeof (buf), "%s%d", prefix, i);
+		ck_assert_int_eq (push_str (q, id, buf), BAR_WS_CMD_OK);
+	}
+}
+
+/* A burst from A queued first; B's single item runs right after A's first */
+START_TEST (test_cmd_fair_burst_then_single) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 1, "A", 5);
+	push_n (q, 2, "B", 1);
+	expect_pop (q, 1, "A1");
+	expect_pop (q, 2, "B1");
+	expect_pop (q, 1, "A2");
+	expect_pop (q, 1, "A3");
+	expect_pop (q, 1, "A4");
+	expect_pop (q, 1, "A5");
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (q, &st);
+	ck_assert_uint_eq (st.items, 0);
+	ck_assert_uint_eq (st.bytes, 0);
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* Each requester's items keep their order however pushes interleave */
+START_TEST (test_cmd_fair_per_requester_order) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	ck_assert_int_eq (push_str (q, 1, "A1"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 1, "A2"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 2, "B1"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 1, "A3"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 2, "B2"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 2, "B3"), BAR_WS_CMD_OK);
+	expect_pop (q, 1, "A1");
+	expect_pop (q, 2, "B1");
+	/* pushed while being served: joins the end of A's own FIFO */
+	ck_assert_int_eq (push_str (q, 1, "A4"), BAR_WS_CMD_OK);
+	expect_pop (q, 1, "A2");
+	expect_pop (q, 2, "B2");
+	expect_pop (q, 1, "A3");
+	expect_pop (q, 2, "B3");
+	expect_pop (q, 1, "A4");
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* Three requesters with bursts interleave A,B,C,A,B,C,... */
+START_TEST (test_cmd_fair_three_requesters_round_robin) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 10, "A", 3);
+	push_n (q, 20, "B", 3);
+	push_n (q, 30, "C", 3);
+	for (int i = 1; i <= 3; i++) {
+		char a[8], b[8], c[8];
+		snprintf (a, sizeof (a), "A%d", i);
+		snprintf (b, sizeof (b), "B%d", i);
+		snprintf (c, sizeof (c), "C%d", i);
+		expect_pop (q, 10, a);
+		expect_pop (q, 20, b);
+		expect_pop (q, 30, c);
+	}
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* A requester that runs out leaves the rotation; one that comes back joins
+ * the back of the rotation, behind every requester already waiting */
+START_TEST (test_cmd_fair_exhausted_requester_skipped) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 1, "A", 3);
+	push_n (q, 2, "B", 1);
+	push_n (q, 3, "C", 3);
+	expect_pop (q, 1, "A1");
+	expect_pop (q, 2, "B1"); /* B is now empty */
+	expect_pop (q, 3, "C1");
+	expect_pop (q, 1, "A2"); /* B skipped */
+	ck_assert_int_eq (push_str (q, 2, "B2"), BAR_WS_CMD_OK);
+	/* C and A were waiting before B came back */
+	expect_pop (q, 3, "C2");
+	expect_pop (q, 1, "A3");
+	expect_pop (q, 2, "B2");
+	expect_pop (q, 3, "C3");
+	/* drain completely, then the next push is served at once */
+	ck_assert_int_eq (push_str (q, 2, "B3"), BAR_WS_CMD_OK);
+	expect_pop (q, 2, "B3");
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* A newcomer waits behind at most one item per requester already queued */
+START_TEST (test_cmd_fair_newcomer_bounded_delay) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 1, "A", 10);
+	push_n (q, 2, "B", 10);
+	expect_pop (q, 1, "A1");
+	expect_pop (q, 2, "B1");
+	expect_pop (q, 1, "A2");
+	ck_assert_int_eq (push_str (q, 3, "C1"), BAR_WS_CMD_OK);
+	expect_pop (q, 2, "B2");
+	expect_pop (q, 1, "A3");
+	expect_pop (q, 3, "C1"); /* behind one item of B and one of A */
+	expect_pop (q, 2, "B3");
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* The item and byte caps are global, not per requester */
+START_TEST (test_cmd_fair_caps_are_global) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	for (int i = 0; i < WS_CMD_MAX_ITEMS; i++) {
+		ck_assert_int_eq (push_str (q, (BarWsConnId_t) (i % 4) + 1, "x"),
+				BAR_WS_CMD_OK);
+	}
+	/* full for everyone, including a requester with nothing queued */
+	ck_assert_int_eq (push_str (q, 1, "x"), BAR_WS_CMD_FULL);
+	ck_assert_int_eq (push_str (q, 99, "x"), BAR_WS_CMD_FULL);
+	expect_pop (q, 1, "x");
+	ck_assert_int_eq (push_str (q, 99, "x"), BAR_WS_CMD_OK);
+	ck_assert_int_eq (push_str (q, 2, "x"), BAR_WS_CMD_FULL);
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (q, &st);
+	ck_assert_uint_eq (st.items, WS_CMD_MAX_ITEMS);
+	ck_assert_uint_eq (st.bytes, WS_CMD_MAX_ITEMS);
+	BarWsCommandQueueFree (q);
+
+	/* byte cap shared across requesters */
+	q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'b', WS_CMD_MAX_REQUEST_BYTES);
+	int accepted = 0;
+	while (BarWsCommandQueuePush (q, (BarWsConnId_t) (accepted % 3) + 1, big,
+			WS_CMD_MAX_REQUEST_BYTES) == BAR_WS_CMD_OK) {
+		accepted++;
+		ck_assert_int_le (accepted, WS_CMD_MAX_ITEMS);
+	}
+	ck_assert_int_eq (accepted, WS_CMD_MAX_BYTES / WS_CMD_MAX_REQUEST_BYTES);
+	ck_assert_int_eq (BarWsCommandQueuePush (q, 42, big, 1), BAR_WS_CMD_FULL);
+	free (big);
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* The queue knows nothing about connections: a closed client's queued
+ * items are still delivered (the worker runs them and its replies are
+ * dropped by the outbox), in their fair turn. Closing the queue drops every
+ * requester's items. */
+START_TEST (test_cmd_fair_closed_connection_items_still_delivered) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 1, "A", 2);
+	push_n (q, 2, "B", 2); /* client 2 disconnects now: nothing to tell the queue */
+	expect_pop (q, 1, "A1");
+	expect_pop (q, 2, "B1");
+	expect_pop (q, 1, "A2");
+	expect_pop (q, 2, "B2");
+	push_n (q, 1, "A", 3);
+	push_n (q, 2, "B", 3);
+	push_n (q, 3, "C", 1);
+	expect_pop (q, 1, "A1");
+	BarWsCommandQueueClose (q);
+	ck_assert (!BarWsCommandQueuePop (q, NULL, NULL, NULL));
+	BarWsCommandQueueStats_t st;
+	BarWsCommandQueueStats (q, &st);
+	ck_assert_uint_eq (st.items, 0);
+	ck_assert_uint_eq (st.bytes, 0);
+	ck_assert_int_eq (push_str (q, 4, "late"), BAR_WS_CMD_CLOSED);
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
+/* Free with several requesters queued, one partly drained, releases all */
+START_TEST (test_cmd_fair_free_releases_all_lanes) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 1, "A", 3);
+	push_n (q, 2, "B", 2);
+	push_n (q, 3, "C", 1);
+	expect_pop (q, 1, "A1");
+	BarWsCommandQueueFree (q); /* leak detection under make test-asan */
+}
+END_TEST
+
+/* With one requester the order is plain FIFO */
+START_TEST (test_cmd_fair_single_requester_is_fifo) {
+	BarWsCommandQueue_t *q = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (q);
+	push_n (q, 5, "S", 4);
+	expect_pop (q, 5, "S1");
+	push_n (q, 5, "T", 2);
+	expect_pop (q, 5, "S2");
+	expect_pop (q, 5, "S3");
+	expect_pop (q, 5, "S4");
+	expect_pop (q, 5, "T1");
+	expect_pop (q, 5, "T2");
+	BarWsCommandQueueFree (q);
+}
+END_TEST
+
 Suite *ws_commands_suite (void) {
 	Suite *s = suite_create ("ws_commands");
 	TCase *tc = tcase_create ("Core");
@@ -461,6 +675,15 @@ Suite *ws_commands_suite (void) {
 	tcase_add_test (tc, test_cmd_empty_and_null_safe);
 	tcase_add_test (tc, test_cmd_stress_fifo_per_producer_no_loss);
 	tcase_add_test (tc, test_cmd_stats_depth_and_running);
+	tcase_add_test (tc, test_cmd_fair_burst_then_single);
+	tcase_add_test (tc, test_cmd_fair_per_requester_order);
+	tcase_add_test (tc, test_cmd_fair_three_requesters_round_robin);
+	tcase_add_test (tc, test_cmd_fair_exhausted_requester_skipped);
+	tcase_add_test (tc, test_cmd_fair_newcomer_bounded_delay);
+	tcase_add_test (tc, test_cmd_fair_caps_are_global);
+	tcase_add_test (tc, test_cmd_fair_closed_connection_items_still_delivered);
+	tcase_add_test (tc, test_cmd_fair_free_releases_all_lanes);
+	tcase_add_test (tc, test_cmd_fair_single_requester_is_fifo);
 	tcase_set_timeout (tc, 30);
 	suite_add_tcase (s, tc);
 	return s;
