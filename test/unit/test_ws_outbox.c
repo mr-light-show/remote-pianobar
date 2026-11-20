@@ -53,6 +53,23 @@ static void expect_pop (BarWsClientQueue_t *q, uint32_t gen, const char *expecte
 	BarWsFrameUnref (f);
 }
 
+/* A frame's payload is followed by a NUL (not part of len), so string
+ * functions and "%s" stop at the end of the payload. */
+START_TEST (test_frame_payload_is_nul_terminated) {
+	BarWsFrame_t *f = BarWsFrameNew ("2[\"abc\"]xyz", 8);
+	ck_assert_ptr_nonnull (f);
+	ck_assert_uint_eq (BarWsFrameLen (f), 8);
+	ck_assert_str_eq ((const char *) BarWsFrameData (f), "2[\"abc\"]");
+	BarWsFrameUnref (f);
+
+	BarWsFrame_t *empty = BarWsFrameNew (NULL, 0);
+	ck_assert_ptr_nonnull (empty);
+	ck_assert_uint_eq (BarWsFrameLen (empty), 0);
+	ck_assert_int_eq (BarWsFrameData (empty)[0], '\0');
+	BarWsFrameUnref (empty);
+}
+END_TEST
+
 START_TEST (test_queue_fifo_order) {
 	BarWsClientQueue_t q;
 	BarWsClientQueueInit (&q);
@@ -907,6 +924,7 @@ END_TEST
 Suite *ws_outbox_suite (void) {
 	Suite *s = suite_create ("ws_outbox");
 	TCase *tc = tcase_create ("Core");
+	tcase_add_test (tc, test_frame_payload_is_nul_terminated);
 	tcase_add_test (tc, test_queue_fifo_order);
 	tcase_add_test (tc, test_keyed_replaces_unsent_same_key);
 	tcase_add_test (tc, test_keyed_does_not_replace_across_ordered_event);
