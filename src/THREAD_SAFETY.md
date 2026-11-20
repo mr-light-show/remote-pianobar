@@ -212,6 +212,22 @@ released, again without `player.lock`. FFmpeg's second-interrupt callback uses
 this helper on the normal open/read worker, outside application locks and
 audio reservations. It is not the asynchronous signal or miniaudio callback.
 
+**Stalled-stream stop (`stopRequested`):** `BarPlayerRequestStop` also sets the
+`_Atomic bool stopRequested` (release store) in the same `player.lock` section
+as `doQuit` and the epoch bump; `BarPlayerReset` clears it next to `doQuit`,
+after its epoch check, so the writes are ordered with `doQuit` and a stop
+racing a new-song reset either supersedes the reset or aborts the new song.
+The only reader is `BarPlayerFfmpegInterruptCb`, with a lock-free acquire load:
+FFmpeg polls it in every blocking network slice and per packet, so taking
+`player.lock` there would contend with every control and could invert
+`player.lock` → `decoderLock` if an FFmpeg read ever ran under `decoderLock`.
+While set, the callback returns 1, so skip, disconnect and quit end a stalled
+`avformat_open_input`, `avformat_find_stream_info` or `av_read_frame` at once
+(`AVERROR_EXIT`) instead of waiting for the join timeout or the HTTP
+`timeout`. Such an abort is not a stream failure: no error message, no
+soft-fail or stale-URL result, no retry. Pause never sets it. `interrupted`
+keeps its meaning (1 = one-shot, 2 = forced stop from the playback manager).
+
 UI controls use the result-bearing pause/toggle helpers. Each captures immutable
 pause and controlEpoch under `player.lock` at successful commit, before releasing
 audio ownership; failed/superseded controls leave the result unchanged. After

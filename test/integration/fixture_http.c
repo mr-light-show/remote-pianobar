@@ -36,14 +36,29 @@ bool FixtureSendErrorExpected (int err, bool cancelExpected) {
 	return cancelExpected && (err == EPIPE || err == ECONNRESET);
 }
 
+/* The player may close mid-response (a stop aborts its open or read at
+ * once): a write to the closed socket must fail with EPIPE, not raise
+ * SIGPIPE and kill the test process. */
+static void fixture_write (int fd, const void *data, size_t size) {
+#ifdef MSG_NOSIGNAL
+	(void)send (fd, data, size, MSG_NOSIGNAL);
+#else
+	(void)write (fd, data, size);
+#endif
+}
+
 static void serve_client (BarFixtureHttp_t *srv, int client_fd) {
+#ifdef SO_NOSIGPIPE
+	const int noSigpipe = 1;
+	(void)setsockopt (client_fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe, sizeof noSigpipe);
+#endif
 	char request[4096];
 	(void)read (client_fd, request, sizeof (request) - 1);
 
 	if (srv->mode == BAR_FIXTURE_HTTP_NOT_FOUND) {
 		const char *not_found =
 		    "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n";
-		(void)write (client_fd, not_found, strlen (not_found));
+		fixture_write (client_fd, not_found, strlen (not_found));
 		close (client_fd);
 		return;
 	}
@@ -52,7 +67,7 @@ static void serve_client (BarFixtureHttp_t *srv, int client_fd) {
 	if (fp == NULL) {
 		const char *not_found =
 		    "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n";
-		(void)write (client_fd, not_found, strlen (not_found));
+		fixture_write (client_fd, not_found, strlen (not_found));
 		close (client_fd);
 		return;
 	}
@@ -68,12 +83,12 @@ static void serve_client (BarFixtureHttp_t *srv, int client_fd) {
 	    "Content-Length: %ld\r\n"
 	    "Connection: close\r\n\r\n",
 	    file_size);
-	(void)write (client_fd, header, (size_t)header_len);
+	fixture_write (client_fd, header, (size_t)header_len);
 
 	char chunk[4096];
 	size_t read_bytes;
 	while ((read_bytes = fread (chunk, 1, sizeof (chunk), fp)) > 0) {
-		(void)write (client_fd, chunk, read_bytes);
+		fixture_write (client_fd, chunk, read_bytes);
 	}
 	fclose (fp);
 	close (client_fd);
