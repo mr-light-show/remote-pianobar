@@ -136,6 +136,37 @@ def write_defaults_c(en_pairs: list[tuple[str, str]], path: Path) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+_SPEC_RE = re.compile(r"%(?:%|[-+ #0']*\d*(?:\.\d*)?([hlLqjzt]*)([A-Za-z*$]|$))")
+
+
+def printf_signature(value: str) -> list[str] | None:
+    """Ordered printf conversions of value (%% ignored, %i == %d); None if unsafe
+    (%n, '*', positional '$', unknown conversion), mirroring src/l10n.c."""
+    sig: list[str] = []
+    for m in _SPEC_RE.finditer(value):
+        if m.group(0) == "%%":
+            continue
+        mods, conv = m.group(1), m.group(2)
+        if conv == "i":
+            conv = "d"
+        if not conv or conv not in "douxXcspfFeEgGaA":
+            return None
+        sig.append(mods + conv)
+    return sig
+
+
+def check_specs(en_pairs: list[tuple[str, str]], pairs: list[tuple[str, str]], lang: str) -> list[str]:
+    en = dict(en_pairs)
+    errors = []
+    for k, v in pairs:
+        if k not in en:
+            continue
+        sig = printf_signature(v)
+        if sig is None or sig != printf_signature(en[k]):
+            errors.append(f"locale/{lang}.yaml: '{k}' printf specifiers do not match locale/en.yaml")
+    return errors
+
+
 def yaml_lang_name(path: Path) -> str:
     return path.stem
 
@@ -171,6 +202,10 @@ def main() -> int:
             print(f"{ypath}: root must be a mapping", file=sys.stderr)
             return 1
         pairs = flatten(raw)
+        spec_errors = check_specs(en_pairs, pairs, lang)
+        if spec_errors:
+            print("\n".join(spec_errors), file=sys.stderr)
+            return 1
         write_kv_file(pairs, root / "locale" / lang)
         write_json(pairs, root / "webui" / "src" / "locales" / f"{lang}.json")
 
