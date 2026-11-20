@@ -400,6 +400,14 @@ test-par: pianobar_test
 	${SILENTECHO} "   TEST  Running test suite in parallel shards..."
 	${SILENTCMD}${TEST_PAR}
 
+# One suite (and optionally one tcase) from the default build, for a fast
+# edit-test loop: make test-suite S=WebSocket [C=Core]. Fails when nothing
+# matches. Run the full gates before pushing.
+test-suite: pianobar_test
+	${SILENTCMD}if [ -z "$(S)" ]; then echo "test-suite: set S=<suite> (and optionally C=<tcase>)" >&2; exit 2; fi
+	${SILENTECHO} "   TEST  Suite $(S)$(if $(C), / $(C))..."
+	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 CK_RUN_SUITE="$(S)" $(if $(C),CK_RUN_CASE="$(C)") ./${TEST_BIN}
+
 # Integration tests (local HTTP audio fixture + mocked Pandora playlist)
 test-integration: pianobar_test
 	${SILENTECHO} "   TEST  Running integration tests..."
@@ -519,4 +527,4 @@ test-valgrind: ${TEST_BIN}
 gates: locale-codegen
 	${SILENTCMD}./scripts/gates.sh
 
-.PHONY: install install-libpiano uninstall test test-par test-scripts test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean
+.PHONY: install install-libpiano uninstall test test-par test-scripts test-suite test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean

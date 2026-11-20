@@ -51,6 +51,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Build player | `make` |
 | Minimal build (no runtime `debug=` support) | `make minimal` or `./build.sh minimal` |
 | C unit tests | `make test` |
+| One suite while iterating | `make test-suite S=<suite> [C=<tcase>]` (fails when nothing matches) |
 | C unit tests, one suite per process (parallel) | `make test-par` (`TEST_JOBS=N`; `make test-coverage`, `test-asan`, `test-tsan` run this way) |
 | **Pre-push gates** (Docker CI repro, coverage, `test-all`, ASan, TSan, concurrently) | `make gates` (`GATES_STEPS`, `GATES_JOBS`; logs in `build/gates/`) |
 | Tests + cppcheck (what the pre-push hook runs) | `make test-all` |
