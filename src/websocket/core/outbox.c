@@ -40,7 +40,7 @@ _Static_assert (WS_INGRESS_MAX_BYTES >= 4 * WS_FRAME_MAX_BYTES,
 struct BarWsFrame {
 	atomic_uint refs;
 	size_t len;
-	unsigned char buf[]; /* LWS_PRE padding, then len payload bytes */
+	unsigned char buf[]; /* LWS_PRE padding, len payload bytes, then a NUL */
 };
 
 struct BarWsQueueEntry {
@@ -54,7 +54,9 @@ BarWsFrame_t *BarWsFrameNew (const char *text, size_t len) {
 	if (len > WS_FRAME_MAX_BYTES || (!text && len > 0)) {
 		return NULL;
 	}
-	BarWsFrame_t *f = malloc (sizeof (*f) + LWS_PRE + len);
+	/* One byte past the payload is always NUL, so string functions on a frame
+	 * stop at its end (lws_write is still given exactly len bytes). */
+	BarWsFrame_t *f = malloc (sizeof (*f) + LWS_PRE + len + 1);
 	if (!f) {
 		return NULL;
 	}
@@ -63,6 +65,7 @@ BarWsFrame_t *BarWsFrameNew (const char *text, size_t len) {
 	if (len > 0) {
 		memcpy (f->buf + LWS_PRE, text, len);
 	}
+	f->buf[LWS_PRE + len] = '\0';
 	return f;
 }
 
