@@ -1,0 +1,30 @@
+# Build + test dependencies for the CI test image (Dockerfile.ci-test).
+#
+# SINGLE SOURCE OF TRUTH for the `make test-ci-local` Docker image: edit this
+# file to add or remove a test dependency. scripts/test-ci-local.sh rebuilds
+# the local image when this file changes (Docker layer cache).
+#
+# Installed with apt's default recommends, the same way the c-tests job on
+# ubuntu-24.04 installs its packages, so the toolchain (gcc, gcov, lcov)
+# matches CI.
+#
+# One package per line. Blank lines and lines starting with '#' are ignored.
+make
+gcc
+pkg-config
+check
+lcov
+python3
+python3-yaml
+libao-dev
+libavcodec-dev
+libavformat-dev
+libavutil-dev
+libavfilter-dev
+libjson-c-dev
+libgcrypt20-dev
+libcurl4-openssl-dev
+libwebsockets-dev
+libasound2-dev
+libblas-dev
+liblapack-dev

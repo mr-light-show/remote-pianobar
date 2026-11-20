@@ -205,7 +205,8 @@ static PianoSong_t g_song;
 static PianoSong_t g_song2;
 static char g_audio_url[256];
 static char g_audio_url2[256];
-static int g_playlist_fetch_count;
+/* Written by the playback manager thread, read by the test thread */
+static _Atomic int g_playlist_fetch_count;
 
 static void fill_mock_song (PianoSong_t *song, const char *title,
                             const char *audio_url) {
@@ -315,12 +316,12 @@ static bool mock_get_playlist_counted (BarApp_t * const barApp,
 	}
 
 	PianoRequestDataGetPlaylist_t *req = data;
-	++g_playlist_fetch_count;
+	const int fetch = atomic_fetch_add (&g_playlist_fetch_count, 1) + 1;
 
 	*pRet = PIANO_RET_OK;
 	*wRet = CURLE_OK;
 
-	if (g_playlist_fetch_count == 1) {
+	if (fetch == 1) {
 		req->retPlaylist = alloc_integration_song ("Integration Song",
 		                                           g_audio_url);
 		return true;

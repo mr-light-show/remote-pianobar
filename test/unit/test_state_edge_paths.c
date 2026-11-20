@@ -155,6 +155,10 @@ START_TEST (test_daemon_lock_path_falls_back_to_passwd_home)
 {
 	const struct passwd *pw = getpwuid (getuid ());
 	ck_assert_ptr_nonnull (pw);
+	/* getpwuid returns static storage that BarDaemonGetLockFilePath's own
+	 * getpwuid call may overwrite: build the expected path first. */
+	char want[1024];
+	snprintf (want, sizeof (want), "%s/.config/pianobar/pianobar.lock", pw->pw_dir);
 	char *savedHome = getenv ("HOME") ? strdup (getenv ("HOME")) : NULL;
 	unsetenv ("HOME");
 
@@ -165,8 +169,6 @@ START_TEST (test_daemon_lock_path_falls_back_to_passwd_home)
 	free (savedHome);
 
 	ck_assert_ptr_nonnull (path);
-	char want[1024];
-	snprintf (want, sizeof (want), "%s/.config/pianobar/pianobar.lock", pw->pw_dir);
 	ck_assert_str_eq (path, want);
 	free (path);
 }

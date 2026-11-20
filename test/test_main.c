@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <check.h>
 #include <signal.h>
@@ -111,6 +112,17 @@ int main(void) {
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);
 	number_failed = srunner_ntests_failed(sr);
+	/* Check silently runs nothing for an unknown CK_RUN_SUITE or CK_RUN_CASE
+	 * name; fail instead, so a typo or a renamed suite cannot drop tests
+	 * (scripts/test-parallel.sh runs one suite per process). */
+	if ((getenv ("CK_RUN_SUITE") != NULL || getenv ("CK_RUN_CASE") != NULL) &&
+			srunner_ntests_run (sr) == 0) {
+		fprintf (stderr, "pianobar_test: CK_RUN_SUITE=\"%s\" CK_RUN_CASE=\"%s\" "
+				"matched no tests\n",
+				getenv ("CK_RUN_SUITE") != NULL ? getenv ("CK_RUN_SUITE") : "",
+				getenv ("CK_RUN_CASE") != NULL ? getenv ("CK_RUN_CASE") : "");
+		number_failed = 1;
+	}
 	srunner_free(sr);
 	TestTmpRootCleanup ();
 
