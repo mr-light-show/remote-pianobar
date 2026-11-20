@@ -1,12 +1,16 @@
 # Build + test dependencies for the CI test image (Dockerfile.ci-test).
 #
-# SINGLE SOURCE OF TRUTH for the `make test-ci-local` Docker image: edit this
-# file to add or remove a test dependency. scripts/test-ci-local.sh rebuilds
-# the local image when this file changes (Docker layer cache).
+# SINGLE SOURCE OF TRUTH for the `make test-ci-local` Docker image and for the
+# ci-test-noble-amd64 GHCR image that test.yml's c-tests and c-asan jobs run
+# in: edit this file to add or remove a test dependency.
+# scripts/test-ci-local.sh rebuilds the local image when this file changes
+# (Docker layer cache); builder-images.yml republishes the GHCR image when it
+# changes on main. On a branch that changes it, dispatch builder-images.yml
+# for that branch so CI sees the new packages before the merge.
 #
-# Installed with apt's default recommends, the same way the c-tests job on
-# ubuntu-24.04 installs its packages, so the toolchain (gcc, gcov, lcov)
-# matches CI.
+# Installed with apt's default recommends (as the c-tests job installed them on
+# the ubuntu-24.04 runner before it moved into this image), so the toolchain
+# (gcc, gcov, lcov) is Ubuntu 24.04's.
 #
 # One package per line. Blank lines and lines starting with '#' are ignored.
 make
@@ -28,3 +32,9 @@ libwebsockets-dev
 libasound2-dev
 libblas-dev
 liblapack-dev
+# CI job tooling: actions/checkout needs git in the container, and
+# codecov/codecov-action downloads and verifies its uploader with curl + gpg.
+git
+ca-certificates
+curl
+gnupg

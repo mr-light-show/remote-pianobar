@@ -5,19 +5,28 @@ on:
     branches: [main]
   pull_request:
 
+# c-tests and c-asan run in the prebuilt test image (all build and test
+# dependencies baked in, no apt-get per run). It is built from
+# .github/docker/Dockerfile.ci-test + ci-test-deps.txt, the same files
+# `make test-ci-local` uses, by builder-images.yml. After changing either
+# file, dispatch builder-images.yml on the branch so its jobs see the new
+# packages.
+
 jobs:
   c-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mr-light-show/remote-pianobar-build:ci-test-noble-amd64
+      # tini as PID 1 reaps orphans (pianobar's daemon detaches to PID 1)
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
-            libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
-            libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
-            libblas-dev liblapack-dev check lcov
 
       # PR builds use -g -O0; all builds get HAVE_DEBUGLOG from the Makefile.
       - name: Debug-friendly C flags on pull requests
@@ -46,17 +55,19 @@ jobs:
   # AddressSanitizer + UBSan + LeakSanitizer (LSan is enabled explicitly on
   # Linux by `make test-asan`), in parallel with c-tests; no coverage output.
   c-asan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mr-light-show/remote-pianobar-build:ci-test-noble-amd64
+      # tini as PID 1 reaps orphans (pianobar's daemon detaches to PID 1)
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
-            libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
-            libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
-            libblas-dev liblapack-dev check
 
       - name: Build and test with ASan/UBSan/LSan
         env:
@@ -130,8 +141,23 @@ jobs:
             libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
             libblas-dev liblapack-dev openssl python3
 
+      # The Chromium download is cached (keyed on the lock file, which pins
+      # the Playwright version); its system packages are installed every run.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('webui/package-lock.json') }}
+
       - name: Install Playwright Chromium
-        run: cd webui && npm ci && npx playwright install --with-deps chromium
+        run: |
+          cd webui && npm ci
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
 
       - name: E2E against fake Pandora
         env:

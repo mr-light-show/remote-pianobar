@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# Test image for `make test-ci-local` (scripts/test-ci-local.sh): the c-tests
-# job's Ubuntu with every build and test dependency preinstalled, so a run
-# does not repeat apt-get. The package list is ci-test-deps.txt.
+# Test image for `make test-ci-local` (scripts/test-ci-local.sh) and for the
+# c-tests and c-asan CI jobs (published by builder-images.yml as
+# ghcr.io/<owner>/remote-pianobar-build:ci-test-noble-amd64): Ubuntu with every
+# build and test dependency preinstalled, so a run does not repeat apt-get.
+# The package list is ci-test-deps.txt.
 ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 
