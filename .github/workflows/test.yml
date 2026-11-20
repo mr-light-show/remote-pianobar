@@ -20,6 +20,8 @@ jobs:
       packages: read
     container:
       image: ghcr.io/mr-light-show/remote-pianobar-build:ci-test-noble-amd64
+      # tini as PID 1 reaps orphans (pianobar's daemon detaches to PID 1)
+      options: --init
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -59,6 +61,8 @@ jobs:
       packages: read
     container:
       image: ghcr.io/mr-light-show/remote-pianobar-build:ci-test-noble-amd64
+      # tini as PID 1 reaps orphans (pianobar's daemon detaches to PID 1)
+      options: --init
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
