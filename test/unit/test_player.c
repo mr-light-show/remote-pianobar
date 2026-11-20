@@ -3405,6 +3405,47 @@ START_TEST (test_player_ffmpeg_interrupt_cb_skip_and_quit)
 }
 END_TEST
 
+/* Break caught: skip, disconnect and quit publish doQuit, but a thread
+ * blocked in an FFmpeg network read only sees the interrupt callback. */
+START_TEST (test_ffmpeg_interrupt_cb_returns_1_when_stop_requested)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+	BarPlayerRequestStop (&player);
+	/* Not one-shot: every polling slice of the blocked read must abort. */
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert_int_eq (atomic_load (&player.interrupted), 0);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+/* Break caught: a skip carries over and aborts the next song's open, or a
+ * pause is mistaken for a stop and aborts a stalled read. */
+START_TEST (test_ffmpeg_interrupt_cb_returns_0_after_song_start_reset)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	BarPlayerRequestStop (&player);
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert (BarPlayerReset (&player));
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+	BarPlayerSetMode (&player, PLAYER_PLAYING);
+	ck_assert (BarPlayerSetPaused (&player, true));
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+	ck_assert (BarPlayerSetPaused (&player, false));
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -3448,6 +3489,8 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_thread, test_player_thread_double_interrupt_during_playback);
 	tcase_add_test (tc_thread, test_player_thread_truncated_mp3_fixture_fails_open);
 	tcase_add_test (tc_thread, test_player_ffmpeg_interrupt_cb_skip_and_quit);
+	tcase_add_test (tc_thread, test_ffmpeg_interrupt_cb_returns_1_when_stop_requested);
+	tcase_add_test (tc_thread, test_ffmpeg_interrupt_cb_returns_0_after_song_start_reset);
 	suite_add_tcase (s, tc_thread);
 	TCase *tc_audio = tcase_create ("Audio reservation");
 	TCase *tc_priming = tcase_create ("Startup priming");

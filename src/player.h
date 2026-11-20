@@ -136,6 +136,10 @@ struct player {
 	int streamIdx;
 	int64_t lastTimestamp;
 	_Atomic sig_atomic_t interrupted;
+	/* Written only under lock (set with doQuit by BarPlayerRequestStop,
+	 * cleared with doQuit by BarPlayerReset); read lock-free by the FFmpeg
+	 * interrupt callback so a stop ends a stalled network open or read. */
+	_Atomic bool stopRequested;
 
 	/* miniaudio - high-level engine and sound */
 	ma_engine engine;

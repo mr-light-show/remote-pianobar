@@ -924,6 +924,9 @@ bool BarPlayerReset(player_t * const p) {
 	p->streamIdx = -1;
 	p->lastTimestamp = 0;
 	p->interrupted = 0;
+	/* Same critical section and epoch check as doQuit: a stop racing this
+	 * reset either supersedes it above or aborts the new song. */
+	atomic_store_explicit (&p->stopRequested, false, memory_order_relaxed);
 	p->decodingFinished = false;
 	memset(&p->dataSource, 0, sizeof(p->dataSource));
 	audioCompleteLocked (p, PLAYER_AUDIO_NONE, true);
@@ -1004,7 +1007,26 @@ bool BarIsAvErrStaleCdnUrl(int av_err) {
 	return false;
 }
 
-/* ffmpeg callback for blocking functions */
+static bool stopWasRequested (player_t * const player) {
+	return atomic_load_explicit (&player->stopRequested, memory_order_acquire);
+}
+
+/* True when an FFmpeg call failed only because a requested stop aborted it. */
+static bool abortedByStop (player_t * const player, int ret) {
+	return ret == AVERROR_EXIT && stopWasRequested (player);
+}
+
+/* A stop aborts FFmpeg I/O with AVERROR_EXIT: a skip, not a stream failure. */
+static void printStreamError (player_t * const player, const char * const msg, int ret) {
+	if (abortedByStop (player, ret)) {
+		log_write (DEBUG_AUDIO, "Player: %s: aborted by stop request\n", msg);
+	} else {
+		printError (player->settings, msg, ret);
+	}
+}
+
+/* ffmpeg callback for blocking functions. FFmpeg polls it during network
+ * open/read (every polling slice) and per packet on the player thread. */
 int BarPlayerFfmpegInterruptCb (void * const data) {
 	player_t * const player = data;
 	assert (player != NULL);
@@ -1019,7 +1041,10 @@ int BarPlayerFfmpegInterruptCb (void * const data) {
 		atomic_compare_exchange_strong_explicit (&player->interrupted, &expected, 0, memory_order_relaxed, memory_order_relaxed);
 		return 1;
 	} else {
-		return 0;
+		/* Skip, disconnect and quit: lock-free, so this never contends with
+		 * controls or nests inside player.lock or decoderLock. Persistent
+		 * until the next song's reset, so every retry slice aborts too. */
+		return stopWasRequested (player) ? 1 : 0;
 	}
 }
 
@@ -1059,7 +1084,7 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 		snprintf(errSummary, sizeof errSummary, "error: %s",
 			avmsg[0] != '\0' ? avmsg : "unknown");
 		log_network_response(errSummary);
-		printError(player->settings, "Unable to open audio file", ret);
+		printStreamError (player, "Unable to open audio file", ret);
 		/* avformat_open_input frees fctx on failure (or it wasn't opened); clear the pointer */
 		if (player->fctx != NULL) {
 			avformat_free_context(player->fctx);
@@ -1072,7 +1097,7 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 	log_network_response("ok");
 
 	if ((ret = avformat_find_stream_info(player->fctx, NULL)) < 0) {
-		printError(player->settings, "find_stream_info", ret);
+		printStreamError (player, "find_stream_info", ret);
 		goto cleanup;
 	}
 
@@ -1539,6 +1564,8 @@ void BarPlayerRequestStop (player_t *player) {
 	/* Publish before waiting so the current owner cannot commit stale success. */
 	pthread_mutex_lock (&player->lock);
 	player->doQuit = true;
+	/* Wakes a decoder blocked in a stalled FFmpeg network open/read. */
+	atomic_store_explicit (&player->stopRequested, true, memory_order_release);
 	++player->controlEpoch;
 	pthread_cond_broadcast (&player->cond);
 	pthread_cond_broadcast (&player->audioCond);
@@ -1879,6 +1906,9 @@ void *BarPlayerThread(void *data) {
 				retry = (ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) &&
 						(atomic_load_explicit (&player->interrupted, memory_order_relaxed) == 0);
 			}
+		} else if (stopWasRequested (player)) {
+			/* Stopped while opening: no retry count, no playlist refresh. */
+			log_write (DEBUG_AUDIO, "Player: Stream open ended by stop request\n");
 		} else {
 			if (staleCdn403) {
 				pret = PLAYER_RET_STALE_URLS;
