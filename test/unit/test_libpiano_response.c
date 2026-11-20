@@ -5,6 +5,7 @@
  */
 
 #include <check.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -566,6 +567,70 @@ START_TEST (test_response_playlist_oom_frees_partial_list)
 }
 END_TEST
 
+/* One row per out-of-memory site: the request, a minimal payload and the
+ * number of callocs that succeed before the one that must fail */
+static const struct {
+	PianoRequestType_t type;
+	int callocsOk;
+	const char *json;
+} oomSites[] = {
+	{PIANO_REQUEST_GET_STATIONS, 0, "{\"stat\":\"ok\",\"result\":{\"stations\":["
+			"{\"stationName\":\"N\",\"stationToken\":\"t\"}]}}"},
+	{PIANO_REQUEST_SEARCH, 0, "{\"stat\":\"ok\",\"result\":{\"artists\":["
+			"{\"artistName\":\"A\"}]}}"},
+	{PIANO_REQUEST_SEARCH, 1, "{\"stat\":\"ok\",\"result\":{\"artists\":["
+			"{\"artistName\":\"A\"}],\"songs\":[{\"songName\":\"S\"}]}}"},
+	{PIANO_REQUEST_CREATE_STATION, 0, "{\"stat\":\"ok\",\"result\":{"
+			"\"stationName\":\"N\",\"stationToken\":\"t\"}}"},
+	{PIANO_REQUEST_GET_STATION_INFO, 0, "{\"stat\":\"ok\",\"result\":{"
+			"\"music\":{\"songs\":[{\"songName\":\"S\"}]}}}"},
+	{PIANO_REQUEST_GET_STATION_INFO, 1, "{\"stat\":\"ok\",\"result\":{"
+			"\"music\":{\"songs\":[{\"songName\":\"S\"}],"
+			"\"artists\":[{\"artistName\":\"B\"}]}}}"},
+	{PIANO_REQUEST_GET_STATION_INFO, 2, "{\"stat\":\"ok\",\"result\":{"
+			"\"music\":{\"songs\":[{\"songName\":\"S\"}],"
+			"\"artists\":[{\"artistName\":\"B\"}]},"
+			"\"feedback\":{\"thumbsUp\":[{\"songName\":\"U\"}]}}}"},
+	{PIANO_REQUEST_GET_STATION_MODES, 0, "{\"stat\":\"ok\",\"result\":{"
+			"\"availableModes\":[{\"modeId\":1}]}}"},
+};
+
+/* Out of memory at each site returns the error and frees everything built */
+START_TEST (test_response_oom_sites_free_everything)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	max_align_t data[64]; /* big enough for any request's data struct */
+
+	memset (data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = oomSites[_i].type;
+	req.data = data;
+	req.responseData = (char *) oomSites[_i].json;
+	g_callocOk = oomSites[_i].callocsOk;
+	PianoResponseSetCallocTestHook (failing_calloc);
+	PianoReturn_t ret = PianoResponse (&ph, &req);
+	PianoResponseSetCallocTestHook (NULL);
+	ck_assert_int_eq (ret, PIANO_RET_OUT_OF_MEMORY);
+
+	switch (req.type) {
+		case PIANO_REQUEST_SEARCH:
+			PianoDestroySearchResult (&((PianoRequestDataSearch_t *) data)->searchResult);
+			break;
+		case PIANO_REQUEST_GET_STATION_INFO:
+			PianoDestroyStationInfo (&((PianoRequestDataGetStationInfo_t *) data)->info);
+			break;
+		case PIANO_REQUEST_GET_STATION_MODES:
+			PianoDestroyStationMode (((PianoRequestDataGetStationModes_t *) data)->retModes);
+			break;
+		default:
+			break;
+	}
+	PianoDestroy (&ph);
+}
+END_TEST
+
 /* Out of memory on a genre (or its category) frees what was built so far */
 START_TEST (test_response_genre_oom_frees_partial_category)
 {
@@ -857,6 +922,8 @@ Suite *libpiano_response_suite (void) {
 	tcase_add_test (tc, test_destroy_genre_category_frees_nested);
 	tcase_add_test (tc, test_response_playlist_oom_frees_partial_list);
 	tcase_add_loop_test (tc, test_response_genre_oom_frees_partial_category, 0, 2);
+	tcase_add_loop_test (tc, test_response_oom_sites_free_everything, 0,
+	        (int) (sizeof (oomSites) / sizeof (*oomSites)));
 	tcase_add_test (tc, test_response_missing_stat_field);
 	tcase_add_test (tc, test_response_invalid_json_does_not_crash);
 	tcase_add_test (tc, test_response_fail_missing_code_field);

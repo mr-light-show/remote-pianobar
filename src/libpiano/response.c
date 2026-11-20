@@ -264,7 +264,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 				PianoStation_t *tmpStation;
 				json_object *s = json_object_array_get_idx (stations, i);
 
-				if ((tmpStation = calloc (1, sizeof (*tmpStation))) == NULL) {
+				if ((tmpStation = PianoCalloc (1, sizeof (*tmpStation))) == NULL) {
 					ret = PIANO_RET_OUT_OF_MEMORY;
 					goto cleanup;
 				}
@@ -449,7 +449,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					json_object *a = json_object_array_get_idx (artists, i);
 					PianoArtist_t *artist;
 
-					if ((artist = calloc (1, sizeof (*artist))) == NULL) {
+					if ((artist = PianoCalloc (1, sizeof (*artist))) == NULL) {
 						ret = PIANO_RET_OUT_OF_MEMORY;
 						goto cleanup;
 					}
@@ -469,7 +469,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					json_object *s = json_object_array_get_idx (songs, i);
 					PianoSong_t *song;
 
-					if ((song = calloc (1, sizeof (*song))) == NULL) {
+					if ((song = PianoCalloc (1, sizeof (*song))) == NULL) {
 						ret = PIANO_RET_OUT_OF_MEMORY;
 						goto cleanup;
 					}
@@ -489,7 +489,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 			/* create station, insert new station into station list on success */
 			PianoStation_t *tmpStation;
 
-			if ((tmpStation = calloc (1, sizeof (*tmpStation))) == NULL) {
+			if ((tmpStation = PianoCalloc (1, sizeof (*tmpStation))) == NULL) {
 				ret = PIANO_RET_OUT_OF_MEMORY;
 				goto cleanup;
 			}
@@ -665,7 +665,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 						json_object *s = json_object_array_get_idx (songs, i);
 						PianoSong_t *seedSong;
 
-						seedSong = calloc (1, sizeof (*seedSong));
+						seedSong = PianoCalloc (1, sizeof (*seedSong));
 						if (seedSong == NULL) {
 							ret = PIANO_RET_OUT_OF_MEMORY;
 							goto cleanup;
@@ -687,7 +687,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 						json_object *a = json_object_array_get_idx (artists, i);
 						PianoArtist_t *seedArtist;
 
-						seedArtist = calloc (1, sizeof (*seedArtist));
+						seedArtist = PianoCalloc (1, sizeof (*seedArtist));
 						if (seedArtist == NULL) {
 							ret = PIANO_RET_OUT_OF_MEMORY;
 							goto cleanup;
@@ -715,7 +715,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 						json_object *s = json_object_array_get_idx (val, i);
 						PianoSong_t *feedbackSong;
 
-						feedbackSong = calloc (1, sizeof (*feedbackSong));
+						feedbackSong = PianoCalloc (1, sizeof (*feedbackSong));
 						if (feedbackSong == NULL) {
 							ret = PIANO_RET_OUT_OF_MEMORY;
 							goto cleanup;
@@ -763,7 +763,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					}
 
 					PianoStationMode_t *mode;
-					if ((mode = calloc (1, sizeof (*mode))) == NULL) {
+					if ((mode = PianoCalloc (1, sizeof (*mode))) == NULL) {
 						ret = PIANO_RET_OUT_OF_MEMORY;
 						goto cleanup;
 					}
