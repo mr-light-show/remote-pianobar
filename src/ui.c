@@ -190,7 +190,10 @@ typedef struct {
 	size_t pos;
 } buffer;
 
-static size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
+/*	libcurl write callback. Not static so unit tests can drive it directly
+ *	(same as progressCb).
+ */
+size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
 		void *userdata) {
 	buffer * const buffer = userdata;
 	size_t recvSize = size * nmemb;
@@ -204,7 +207,11 @@ static size_t httpFetchCb (char *ptr, size_t size, size_t nmemb,
 		char *newbuf;
 		if ((newbuf = realloc (buffer->data, sizeof (*buffer->data) *
 				(buffer->pos + recvSize + 1))) == NULL) {
+			/* realloc left the old block intact; free it and reset so the
+			 * caller never sees (or frees) a dangling pointer */
 			free (buffer->data);
+			buffer->data = NULL;
+			buffer->pos = 0;
 			return 0;
 		}
 		buffer->data = newbuf;
