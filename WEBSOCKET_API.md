@@ -195,7 +195,10 @@ consumers. Add a compatibility assertion test before renaming anything.
 
 ## Server-to-Client Events
 
-These events are broadcast from the server to connected clients.
+Most of these events are broadcast to every connected client. The replies to a
+client's own request (`genres`, `searchResults`, `stationModes`, `stationInfo`,
+`query.upcoming.result`, `song.explanation`, and the answers to `query`) go to
+that client only.
 
 ### `process` - Full Application State
 
@@ -486,7 +489,7 @@ Sent in response to a `query.upcoming` action. Contains list of upcoming songs i
 
 ### `genres` - Genre Categories
 
-Sent in response to a `station.getGenres` event. Contains hierarchical list of genre categories and their stations.
+Sent to the requesting client only, in response to a `station.getGenres` event. Contains hierarchical list of genre categories and their stations.
 
 **Payload:**
 
@@ -546,7 +549,7 @@ Sent in response to a `station.getGenres` event. Contains hierarchical list of g
 
 ### `searchResults` - Music Search Results
 
-Sent in response to a `music.search` event. Contains categorized search results for artists and songs.
+Sent to the requesting client only, in response to a `music.search` event. Contains categorized search results for artists and songs.
 
 **Payload:**
 
@@ -604,7 +607,7 @@ Sent in response to a `music.search` event. Contains categorized search results 
 
 ### `stationModes` - Station Playback Modes
 
-Sent in response to a `station.getModes` event. Contains available playback modes for a station.
+Sent to the requesting client only, in response to a `station.getModes` event. Contains available playback modes for a station.
 
 **Payload:**
 
@@ -658,12 +661,13 @@ Sent in response to a `station.getModes` event. Contains available playback mode
 
 ### `stationInfo` - Station Seeds and Feedback
 
-Sent in response to a `station.getInfo` event. Contains the seeds and feedback history for a station.
+Sent to the requesting client only, in response to a `station.getInfo` event. Contains the seeds and feedback history for a station.
 
 **Payload:**
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `stationId` | string | Station these seeds belong to (the `stationId` of the request) |
 | `artistSeeds` | array | Artists used as seeds for this station |
 | `songSeeds` | array | Songs used as seeds for this station |
 | `stationSeeds` | array | Other stations used as seeds |
@@ -1339,6 +1343,7 @@ Used in `stationInfo` event.
 
 ```typescript
 interface StationInfo {
+  stationId: string;       // Station the request named
   artistSeeds: ArtistSeed[];
   songSeeds: SongSeed[];
   stationSeeds: StationSeed[];

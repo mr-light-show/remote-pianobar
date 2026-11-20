@@ -113,9 +113,10 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, struct json_object *data)
 /* Handle 'query' event: full state and stations to `requester` only */
 void BarSocketIoHandleQuery (BarApp_t *app, BarWsConnId_t requester);
 
-/* Fetch genres and emit to client */
-void BarSocketIoHandleGetGenres(BarApp_t *app);
-void BarSocketIoEmitGenres(BarApp_t *app);
+/* Fetch genres and emit them to `requester` only (a BAR_WS_DEST_BROADCAST
+ * requester, as when called without a client, broadcasts) */
+void BarSocketIoHandleGetGenres(BarApp_t *app, BarWsConnId_t requester);
+void BarSocketIoEmitGenres(BarApp_t *app, BarWsConnId_t dest);
 
 /* Handle 'station.addGenre' with musicId */
 void BarSocketIoHandleAddGenre(BarApp_t *app, struct json_object *data);
@@ -123,8 +124,9 @@ void BarSocketIoHandleAddGenre(BarApp_t *app, struct json_object *data);
 /* Handle 'station.addShared' with stationId */
 void BarSocketIoHandleAddShared(BarApp_t *app, struct json_object *data);
 
-/* Handle music search and emit results */
-void BarSocketIoHandleSearchMusic(BarApp_t *app, struct json_object *data);
+/* Handle music search and emit results to `requester` only */
+void BarSocketIoHandleSearchMusic(BarApp_t *app, struct json_object *data,
+                                  BarWsConnId_t requester);
 
 /* Handle 'station.addMusic' with musicId and stationId */
 void BarSocketIoHandleAddMusic(BarApp_t *app, struct json_object *data);
@@ -132,13 +134,16 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, struct json_object *data);
 /* Handle 'station.rename' with stationId and newName */
 void BarSocketIoHandleRenameStation(BarApp_t *app, struct json_object *data);
 
-/* Handle 'station.getModes' - fetch available modes for a station */
-void BarSocketIoHandleGetStationModes(BarApp_t *app, struct json_object *data);
+/* Handle 'station.getModes' - fetch available modes for a station; the
+ * reply goes to `requester` only */
+void BarSocketIoHandleGetStationModes(BarApp_t *app, struct json_object *data,
+                                      BarWsConnId_t requester);
 
 /* Handle 'station.setMode' - set station mode */
 void BarSocketIoHandleSetStationMode(BarApp_t *app, struct json_object *data);
 
-/* Handle 'station.getInfo' - fetch station info for seed/feedback management */
+/* Handle 'station.getInfo' - fetch station info for seed/feedback management;
+ * the reply (or its too-large error) goes to `requester` only */
 void BarSocketIoHandleGetStationInfo(BarApp_t *app, struct json_object *data,
                                      BarWsConnId_t requester);
 

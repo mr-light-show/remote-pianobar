@@ -226,7 +226,7 @@ static void evtEmitStations(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	BarSocketIoEmitStations(a);
 }
 static void evtGetGenres(BarApp_t *a, json_object *d, BarWsConnId_t r) {
-	(void)d; (void)r; BarSocketIoHandleGetGenres(a);
+	(void)d; BarSocketIoHandleGetGenres(a, r);
 }
 static void evtPingNoop(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)a; (void)d; (void)r; /* client keepalive; no response needed */
@@ -244,7 +244,7 @@ static void evtAddGenre(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)r; BarSocketIoHandleAddGenre(a, d);
 }
 static void evtSearchMusic(BarApp_t *a, json_object *d, BarWsConnId_t r) {
-	(void)r; BarSocketIoHandleSearchMusic(a, d);
+	BarSocketIoHandleSearchMusic(a, d, r);
 }
 static void evtAddMusic(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)r; BarSocketIoHandleAddMusic(a, d);
@@ -256,7 +256,7 @@ static void evtRenameStation(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)r; BarSocketIoHandleRenameStation(a, d);
 }
 static void evtGetStationModes(BarApp_t *a, json_object *d, BarWsConnId_t r) {
-	(void)r; BarSocketIoHandleGetStationModes(a, d);
+	BarSocketIoHandleGetStationModes(a, d, r);
 }
 static void evtSetStationMode(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)r; BarSocketIoHandleSetStationMode(a, d);
@@ -742,8 +742,8 @@ bool BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, int maxSongs)
 	return true;
 }
 
-/* Emit 'genres' event (genre categories and stations) */
-void BarSocketIoEmitGenres(BarApp_t *app) {
+/* Emit 'genres' event (genre categories and stations) to `dest` */
+void BarSocketIoEmitGenres(BarApp_t *app, BarWsConnId_t dest) {
 	json_object *data, *categories, *genreObj;
 	PianoGenreCategory_t *category;
 	PianoGenre_t *genre;
@@ -785,12 +785,12 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 	
 	json_object_object_add(data, "categories", categories);
 	
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "genres", data);
+	BarSocketIoEmit(app, dest, "genres", data);
 	json_object_put(data);
 }
 
 /* Handle 'station.getGenres' event from client */
-void BarSocketIoHandleGetGenres(BarApp_t *app) {
+void BarSocketIoHandleGetGenres(BarApp_t *app, BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	
@@ -815,7 +815,7 @@ void BarSocketIoHandleGetGenres(BarApp_t *app) {
 	}
 	
 	/* Emit genres to client */
-	BarSocketIoEmitGenres(app);
+	BarSocketIoEmitGenres(app, requester);
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
@@ -1028,10 +1028,12 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	}
 }
 
-static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData);
+static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData,
+                                        BarWsConnId_t requester);
 
 /* Handle 'station.getModes' event - fetch available modes for a station */
-void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
+void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data,
+                                      BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataGetStationModes_t reqData;
@@ -1078,14 +1080,15 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
 			&reqData, "Fetching station modes", "station.getStationModes", &pRet, &wRet);
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (fetched) {
-		BarSocketIoEmitStationModes(app, &reqData);
+		BarSocketIoEmitStationModes(app, &reqData, requester);
 	}
 	
 	PianoDestroyStationMode(reqData.retModes);
 }
 
 /* Emit station modes to client */
-static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData) {
+static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData,
+                                        BarWsConnId_t requester) {
 	json_object *data, *modesArray;
 	const PianoStationMode_t *mode;
 	int i = 0;
@@ -1110,7 +1113,7 @@ static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStatio
 	
 	json_object_object_add(data, "modes", modesArray);
 	
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "stationModes", data);
+	BarSocketIoEmit(app, requester, "stationModes", data);
 	json_object_put(data);
 }
 
@@ -1159,7 +1162,8 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
-static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData,
+static void BarSocketIoEmitStationInfo(BarApp_t *app, const char *stationId,
+                                       PianoRequestDataGetStationInfo_t *reqData,
                                        BarWsConnId_t requester);
 
 /* Handle 'station.getInfo' event - fetch station info for seed/feedback management */
@@ -1202,14 +1206,15 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data,
 			&reqData, "Fetching station info", "station.getStationInfo", &pRet, &wRet);
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (fetched) {
-		BarSocketIoEmitStationInfo(app, &reqData, requester);
+		BarSocketIoEmitStationInfo(app, stationId, &reqData, requester);
 	}
 	
 	PianoDestroyStationInfo(&reqData.info);
 }
 
 /* Emit station info (seeds and feedback) to client */
-static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData,
+static void BarSocketIoEmitStationInfo(BarApp_t *app, const char *stationId,
+                                       PianoRequestDataGetStationInfo_t *reqData,
                                        BarWsConnId_t requester) {
 	json_object *data, *artistsArray, *songsArray, *stationsArray, *feedbackArray;
 	json_object *itemObj;
@@ -1222,6 +1227,10 @@ static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStation
 	}
 	
 	data = json_object_new_object();
+	
+	/* Which station this describes: replies go to the requester only, but a
+	 * client with several requests in flight still needs to match them */
+	json_object_object_add(data, "stationId", BarJsonStringOrEmpty (stationId));
 	
 	/* Artist seeds */
 	artistsArray = json_object_new_array();
@@ -1283,7 +1292,7 @@ static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStation
 		return;
 	}
 	/* Takes ownership of message (NULL if formatting failed: not sent) */
-	BarWebsocketSend(app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, message);
+	BarWebsocketSend(app, requester, BAR_WS_KEY_NONE, message);
 }
 
 /* Handle 'station.deleteSeed' event */
@@ -1446,7 +1455,8 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 }
 
 /* Emit 'searchResults' event (music search results) */
-static void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResult) {
+static void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResult,
+                                         BarWsConnId_t requester) {
 	json_object *data, *categories, *categoryObj, *resultsArray, *resultObj;
 	PianoArtist_t *artist;
 	PianoSong_t *song;
@@ -1507,14 +1517,16 @@ static void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *sea
 	
 	json_object_object_add(data, "categories", categories);
 	
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "searchResults", data);
+	BarSocketIoEmit(app, requester, "searchResults", data);
 	json_object_put(data);
 }
 
-static void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searchResult);
+static void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searchResult,
+                                         BarWsConnId_t requester);
 
 /* Handle 'music.search' event from client */
-void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
+void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data,
+                                  BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataSearch_t reqData;
@@ -1548,7 +1560,7 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
 	/* Perform the search */
 	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SEARCH, &reqData,
 			"Searching", "music.search", &pRet, &wRet)) {
-		BarSocketIoEmitSearchResults(app, &reqData.searchResult);
+		BarSocketIoEmitSearchResults(app, &reqData.searchResult, requester);
 		PianoDestroySearchResult(&reqData.searchResult);
 	}
 }

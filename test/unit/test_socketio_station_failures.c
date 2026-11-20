@@ -133,6 +133,12 @@ typedef void (*Handler_t) (BarApp_t *, json_object *);
 /* Requester-aware handlers, adapted to Handler_t: no requester, so replies
  * are broadcast */
 static void
+handle_get_station_modes (BarApp_t *app, json_object *data)
+{
+	BarSocketIoHandleGetStationModes (app, data, BAR_WS_DEST_BROADCAST);
+}
+
+static void
 handle_get_station_info (BarApp_t *app, json_object *data)
 {
 	BarSocketIoHandleGetStationInfo (app, data, BAR_WS_DEST_BROADCAST);
@@ -148,7 +154,7 @@ START_TEST (test_station_handlers_ignore_unknown_station)
 	} cases[] = {
 		{BarSocketIoHandleAddMusic, "{\"musicId\":\"M\",\"stationId\":\"nope\"}"},
 		{BarSocketIoHandleRenameStation, "{\"stationId\":\"nope\",\"newName\":\"N\"}"},
-		{BarSocketIoHandleGetStationModes, "{\"stationId\":\"nope\"}"},
+		{handle_get_station_modes, "{\"stationId\":\"nope\"}"},
 		{BarSocketIoHandleSetStationMode, "{\"stationId\":\"nope\",\"modeId\":1}"},
 		{handle_get_station_info, "{\"stationId\":\"nope\"}"},
 		{BarSocketIoHandleDeleteSeed,
@@ -203,7 +209,7 @@ START_TEST (test_station_handlers_report_failed_pandora_calls)
 	expect_failure_reported (&f, BarSocketIoHandleRenameStation,
 			"{\"stationId\":\"S2\",\"newName\":\"New\"}",
 			PIANO_REQUEST_RENAME_STATION, "station.rename");
-	expect_failure_reported (&f, BarSocketIoHandleGetStationModes,
+	expect_failure_reported (&f, handle_get_station_modes,
 			"{\"stationId\":\"S2\"}", PIANO_REQUEST_GET_STATION_MODES,
 			"station.getStationModes");
 	expect_failure_reported (&f, handle_get_station_info,

@@ -1448,7 +1448,7 @@ START_TEST (test_socketio_emit_genres_from_cached_categories)
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoEmitGenres (&app);
+	BarSocketIoEmitGenres (&app, BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull (test_last_broadcast ());
 	ck_assert (strstr (test_last_broadcast (), "genres") != NULL);
@@ -1480,7 +1480,7 @@ START_TEST (test_socketio_handle_get_genres_emits_cached_payload)
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoHandleGetGenres (&app);
+	BarSocketIoHandleGetGenres (&app, BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull (test_last_broadcast ());
 	ck_assert (strstr (test_last_broadcast (), "genres") != NULL);
@@ -1519,7 +1519,7 @@ START_TEST (test_socketio_handle_get_genres_auth_failure_notifies_disconnect)
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoHandleGetGenres (&app);
+	BarSocketIoHandleGetGenres (&app, BAR_WS_DEST_BROADCAST);
 
 	ck_assert_ptr_nonnull (test_last_broadcast ());
 	ck_assert (strstr (test_last_broadcast (), "error") != NULL);
@@ -1956,7 +1956,7 @@ START_TEST (test_socketio_handle_get_station_modes_success)
 	BarUiPianoCallSetTestHook (mock_get_station_modes_ok);
 	data = json_object_new_object ();
 	json_object_object_add (data, "stationId", json_object_new_string ("S1"));
-	BarSocketIoHandleGetStationModes (&app, data);
+	BarSocketIoHandleGetStationModes (&app, data, BAR_WS_DEST_BROADCAST);
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
@@ -1987,7 +1987,7 @@ START_TEST (test_socketio_handle_get_station_modes_skips_quickmix)
 	clearBroadcastMock ();
 	data = json_object_new_object ();
 	json_object_object_add (data, "stationId", json_object_new_string ("QM"));
-	BarSocketIoHandleGetStationModes (&app, data);
+	BarSocketIoHandleGetStationModes (&app, data, BAR_WS_DEST_BROADCAST);
 	json_object_put (data);
 	ck_assert_ptr_null (test_last_broadcast ());
 	clearBroadcastMock ();
@@ -2226,7 +2226,7 @@ START_TEST (test_socketio_handle_search_music_success)
 	BarUiPianoCallSetTestHook (mock_search_music_ok);
 	data = json_object_new_object ();
 	json_object_object_add (data, "query", json_object_new_string ("beatles"));
-	BarSocketIoHandleSearchMusic (&app, data);
+	BarSocketIoHandleSearchMusic (&app, data, BAR_WS_DEST_BROADCAST);
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
@@ -2384,6 +2384,113 @@ START_TEST (test_capture_playback_start_stop_broadcast) {
 	json_object_put (stop);
 
 	capture_app_destroy (&app);
+}
+END_TEST
+
+/* One mock answering every request a data reply needs */
+static bool
+mock_data_replies_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
+                      PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	switch (type) {
+		case PIANO_REQUEST_GET_STATION_MODES: {
+			PianoRequestDataGetStationModes_t *req = data;
+			req->retModes = calloc (1, sizeof (*req->retModes));
+			ck_assert_ptr_nonnull (req->retModes);
+			req->retModes->name = strdup ("Mode");
+			req->retModes->description = strdup ("Desc");
+			return true;
+		}
+		case PIANO_REQUEST_GET_STATION_INFO: {
+			PianoRequestDataGetStationInfo_t *req = data;
+			req->info.artistSeeds = calloc (1, sizeof (*req->info.artistSeeds));
+			ck_assert_ptr_nonnull (req->info.artistSeeds);
+			req->info.artistSeeds->name = strdup ("Seed Artist");
+			return true;
+		}
+		case PIANO_REQUEST_SEARCH: {
+			PianoRequestDataSearch_t *req = data;
+			req->searchResult.songs = calloc (1, sizeof (*req->searchResult.songs));
+			ck_assert_ptr_nonnull (req->searchResult.songs);
+			req->searchResult.songs->title = strdup ("Found Song");
+			return true;
+		}
+		case PIANO_REQUEST_GET_GENRE_STATIONS:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/* Send `message` as client 1 and check that only client 1 got `event` (once)
+ * and that client 0 got nothing at all */
+static void expect_reply_to_requester_only (InfoFixture_t *f, const char *message,
+		const char *event) {
+	char needle[64];
+	snprintf (needle, sizeof (needle), "\"%s\"", event);
+	TestWsCaptureClear ();
+	BarSocketIoHandleMessage (&f->app, message, test_ws_cap.ids[1]);
+	TestWsCaptureFlush ();
+	ck_assert_msg (TestWsCaptureCount (1, needle) == 1, "%s did not reach the requester", event);
+	ck_assert_msg (TestWsCaptureCount (0, "") == 0, "%s reached another client", event);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+}
+
+/* S4: replies to station.getGenres, station.getModes, station.getInfo and
+ * music.search go to the asking client only (one client's reply must not
+ * satisfy another client's wait) */
+START_TEST (test_data_replies_go_to_requester_only)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	BarUiPianoCallSetTestHook (mock_data_replies_ok);
+
+	expect_reply_to_requester_only (&f, "2[\"station.getGenres\",{}]", "genres");
+	expect_reply_to_requester_only (&f, "2[\"station.getModes\",{\"stationId\":\"S1\"}]",
+			"stationModes");
+	expect_reply_to_requester_only (&f, "2[\"station.getInfo\",{\"stationId\":\"S1\"}]",
+			"stationInfo");
+	expect_reply_to_requester_only (&f, "2[\"music.search\",{\"query\":\"q\"}]",
+			"searchResults");
+
+	/* The same requests from client 0 reach client 0 only */
+	TestWsCaptureClear ();
+	BarSocketIoHandleMessage (&f.app, "2[\"station.getInfo\",{\"stationId\":\"S1\"}]",
+			test_ws_cap.ids[0]);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"stationInfo\""), 1);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+
+	BarUiPianoCallClearTestHook ();
+	/* The genre list is owned by the app once fetched */
+	info_fixture_destroy (&f);
+}
+END_TEST
+
+/* S4: stationInfo says which station it describes, so a client can tell its
+ * own reply from one for another station */
+START_TEST (test_station_info_carries_station_id)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	BarUiPianoCallSetTestHook (mock_data_replies_ok);
+	BarSocketIoHandleMessage (&f.app, "2[\"station.getInfo\",{\"stationId\":\"S1\"}]",
+			test_ws_cap.ids[0]);
+	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	json_object *arr = json_tokener_parse (test_ws_cap.frames[0] + 1);
+	ck_assert_ptr_nonnull (arr);
+	json_object *payload = json_object_array_get_idx (arr, 1);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (payload, "stationId", &field));
+	ck_assert_str_eq (json_object_get_string (field), "S1");
+	ck_assert (json_object_object_get_ex (payload, "artistSeeds", &field));
+	json_object_put (arr);
+	info_fixture_destroy (&f);
 }
 END_TEST
 
@@ -2638,7 +2745,9 @@ START_TEST (test_message_events_dispatch_from_requester) {
 	BarUiPianoCallSetTestHook (mock_get_station_modes_ok);
 	BarSocketIoHandleMessage (&app, "2[\"station.getModes\",{\"stationId\":\"S1\"}]", sender);
 	BarUiPianoCallClearTestHook ();
-	assert_broadcast_frame ("stationModes");
+	/* The reply goes to the asking client only */
+	assert_frame (0, 0, "stationModes");
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert (strstr (test_ws_cap.frames[0], "My Mode") != NULL);
 
 	TestWsCaptureClear ();
@@ -2700,6 +2809,9 @@ typedef void (*BarTestStationHandler_fn) (BarApp_t *, json_object *);
 static void test_info_handler (BarApp_t *app, json_object *data) {
 	BarSocketIoHandleGetStationInfo (app, data, BAR_WS_DEST_BROADCAST);
 }
+static void test_modes_handler (BarApp_t *app, json_object *data) {
+	BarSocketIoHandleGetStationModes (app, data, BAR_WS_DEST_BROADCAST);
+}
 
 static void run_station_handler_under_probe (BarApp_t *app,
 		BarTestStationHandler_fn handler, const char *json, const char *name) {
@@ -2730,7 +2842,7 @@ START_TEST (test_station_handlers_hold_piano_mutex_across_station_use) {
 			"{\"musicId\":\"M1\",\"stationId\":\"S1\"}", "addMusic");
 	run_station_handler_under_probe (&app, BarSocketIoHandleRenameStation,
 			"{\"stationId\":\"S1\",\"newName\":\"New\"}", "rename");
-	run_station_handler_under_probe (&app, BarSocketIoHandleGetStationModes,
+	run_station_handler_under_probe (&app, test_modes_handler,
 			"{\"stationId\":\"S1\"}", "getModes");
 	run_station_handler_under_probe (&app, BarSocketIoHandleSetStationMode,
 			"{\"stationId\":\"S1\",\"modeId\":1}", "setMode");
@@ -2807,7 +2919,7 @@ START_TEST (test_get_genres_fetch_holds_piano_mutex) {
 	g_pianoCallsLocked = 0;
 	g_pianoCallsUnlocked = 0;
 	BarUiPianoCallSetTestHook (mock_piano_call_records_mutex);
-	BarSocketIoHandleGetGenres (&app);
+	BarSocketIoHandleGetGenres (&app, BAR_WS_DEST_BROADCAST);
 	BarUiPianoCallClearTestHook ();
 	ck_assert_uint_eq (g_pianoCallsLocked, 1);
 	ck_assert_uint_eq (g_pianoCallsUnlocked, 0);
@@ -2996,6 +3108,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_modes_skips_quickmix);
 	tcase_add_test(tc_handle, test_socketio_handle_set_station_mode_success);
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_info_success);
+	tcase_add_test(tc_handle, test_data_replies_go_to_requester_only);
+	tcase_add_test(tc_handle, test_station_info_carries_station_id);
 	tcase_add_test(tc_handle, test_station_info_at_frame_limit_is_sent);
 	tcase_add_test(tc_handle, test_station_info_over_frame_limit_errors_requester_only);
 	tcase_add_test(tc_handle, test_socketio_handle_search_music_success);

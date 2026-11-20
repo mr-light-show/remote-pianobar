@@ -661,7 +661,11 @@ BarUiActCallback(BarUiActMyNewAction) {
 Handlers run on the command worker, never on the service thread. They may
 block (Pandora HTTP), but every later command waits for them. Reply with an
 explicit destination (`BarSocketIoEmit*To (app, requester, ...)`) or a
-broadcast; never touch the connection table (service thread only).
+broadcast; never touch the connection table (service thread only). A reply
+to a request goes to its requester only (`genres`, `stationModes`,
+`stationInfo`, `searchResults`, the not-implemented action errors), so one
+client's reply can never satisfy another client's wait; broadcast only state
+every client shows (`stations`, `process`, `start`, ...).
 
 ```c
 // Template for thread-safe WebSocket handler
