@@ -65,6 +65,18 @@ jobs:
           ASAN_OPTIONS: "detect_leaks=1"
         run: make -j"$(nproc)" test-asan
 
+      # Same binary again with every DEBUG_* log kind on, so debug-only log
+      # statements run under the sanitizers. Only failing shards are printed.
+      - name: Test with ASan/UBSan/LSan and all debug logging on
+        env:
+          PIANOBAR_INTEGRATION: "1"
+          PIANOBAR_TEST_NO_DEVICE: "1"
+          PIANOBAR_TEST_DEBUG_ALL: "1"
+          TEST_PAR_LOGS: failed
+          ASAN_OPTIONS: "detect_leaks=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: ./scripts/test-parallel.sh ./build/asan/pianobar_test
+
   web-tests:
     runs-on: ubuntu-latest
     defaults:
