@@ -12,8 +12,10 @@
 # container-local directory before building, so the run never writes to the
 # host tree and no Linux objects or .gcda files land in it.
 #
+# The default run is test-coverage with CFLAGS="-g -O0" (asserts on), as the
+# c-tests job does on pull requests.
 # PIANOBAR_CI_TARGET=<make target> runs that target instead of the default
-#   coverage run (e.g. PIANOBAR_CI_TARGET=test-asan).
+#   coverage run (e.g. PIANOBAR_CI_TARGET=test-asan), with the Makefile CFLAGS.
 # PIANOBAR_CI_JOBS=N  in-container make -j (default: nproc of the Docker VM;
 #   1 for a serial, non-interleaved build).
 # PIANOBAR_CI_OUT=<dir>  copy coverage.info (coverage run) out to <dir>.
@@ -67,6 +69,12 @@ docker run --rm -i -e PIANOBAR_CI_TARGET="${TARGET}" -e PIANOBAR_CI_JOBS="${JOBS
 		export PIANOBAR_INTEGRATION=1
 		export PIANOBAR_TEST_NO_DEVICE=1
 		JOBS="${PIANOBAR_CI_JOBS:-$(nproc)}"
+		# The default coverage run uses the CFLAGS the c-tests job sets on pull
+		# requests (-g -O0, asserts enabled); a PIANOBAR_CI_TARGET run keeps the
+		# Makefile default, like the c-asan job.
+		if [ -z "${PIANOBAR_CI_TARGET}" ]; then
+			export CFLAGS="-g -O0"
+		fi
 		make -j"${JOBS}" "${PIANOBAR_CI_TARGET:-test-coverage}"
 		if [ -z "${PIANOBAR_CI_TARGET}" ]; then
 			lcov --summary coverage.info --rc lcov_branch_coverage=1 \

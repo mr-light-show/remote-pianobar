@@ -8,7 +8,8 @@
 #
 # Steps (GATES_STEPS, space-separated, run in this order):
 #   docker       make test-ci-local                 (Linux coverage, = CI c-tests)
-#   coverage     make test-coverage                 (build/coverage)
+#   coverage     CFLAGS="-g -O0" make test-coverage (build/coverage; CI c-tests flags,
+#                asserts on)
 #   test-all     make test-all: -O2 tests + lint    (build/default)
 #   docker-asan  PIANOBAR_CI_TARGET=test-asan make test-ci-local
 #                                                   (Linux ASan + LSan, = CI c-asan)
@@ -96,8 +97,14 @@ make locale-codegen >/dev/null || exit 1
 run_step () { # step logsuffix
 	local s="$1" log="$LOGS/$1$2.log" start rc
 	start=$(now)
+	# coverage builds with the c-tests job's CFLAGS (asserts on); the other
+	# steps keep the Makefile default (an empty CFLAGS would override it)
 	# shellcheck disable=SC2046
-	$(step_cmd "$s") >"$log" 2>&1
+	if [ "$s" = coverage ]; then
+		CFLAGS="-g -O0" $(step_cmd "$s") >"$log" 2>&1
+	else
+		$(step_cmd "$s") >"$log" 2>&1
+	fi
 	rc=$?
 	echo "$rc $(( $(now) - start ))" >"$LOGS/$1$2.rc"
 	return "$rc"

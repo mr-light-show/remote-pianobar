@@ -228,13 +228,12 @@ void PianoDestroyRequest (PianoRequest_t *req) {
 /*	get station from list by id
  *	@param search here
  *	@param search for this
- *	@return the first station structure matching the given id
+ *	@return the first station structure matching the given id, or NULL (also
+ *	for an empty list or a NULL id)
  */
 PianoStation_t *PianoFindStationById (PianoStation_t * const stations,
 		const char * const searchStation) {
-	assert (stations != NULL);
-
-	if (searchStation == NULL) {
+	if (stations == NULL || searchStation == NULL) {
 		return NULL;
 	}
 

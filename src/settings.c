@@ -485,18 +485,16 @@ static bool BarSettingsReadAccountFile (BarAccount_t *acct, const char *filepath
 		++val;
 
 		/* trim key */
-		char *keyend = &key[strlen (key) - 1];
-		while (keyend >= key && isspace ((unsigned char) *keyend)) {
-			*keyend = '\0';
-			--keyend;
+		size_t keylen = strlen (key);
+		while (keylen > 0 && isspace ((unsigned char) key[keylen - 1])) {
+			key[--keylen] = '\0';
 		}
 
 		/* strip leading space, trim trailing cr/lf */
 		if (isspace ((unsigned char) val[0])) ++val;
-		char *valend = &val[strlen (val) - 1];
-		while (valend >= val && (*valend == '\r' || *valend == '\n')) {
-			*valend = '\0';
-			--valend;
+		size_t vallen = strlen (val);
+		while (vallen > 0 && (val[vallen - 1] == '\r' || val[vallen - 1] == '\n')) {
+			val[--vallen] = '\0';
 		}
 
 		if (streq ("user", key)) {
@@ -816,10 +814,9 @@ void BarSettingsRead (BarSettings_t *settings) {
 			++val;
 
 			/* drop spaces at the end */
-			char *keyend = &key[strlen (key)-1];
-			while (keyend >= key && isspace ((unsigned char) *keyend)) {
-				*keyend = '\0';
-				--keyend;
+			size_t keylen = strlen (key);
+			while (keylen > 0 && isspace ((unsigned char) key[keylen-1])) {
+				key[--keylen] = '\0';
 			}
 
 			/* strip at most one space, legacy cruft, required for values with
@@ -828,14 +825,13 @@ void BarSettingsRead (BarSettings_t *settings) {
 				++val;
 			}
 			/* drop trailing cr/lf */
-			char *valend = &val[strlen (val)-1];
-			while (valend >= val && (*valend == '\r' || *valend == '\n')) {
-				*valend = '\0';
-				--valend;
+			size_t vallen = strlen (val);
+			while (vallen > 0 && (val[vallen-1] == '\r' || val[vallen-1] == '\n')) {
+				val[--vallen] = '\0';
 			}
 
 			/* act_* keyboard shortcuts (prefix-based, not exact match) */
-			if (memcmp ("act_", key, 4) == 0) {
+			if (strncmp (key, "act_", 4) == 0) {
 				for (size_t i = 0; i < BAR_KS_COUNT; i++) {
 					if (streq (dispatchActions[i].configKey, key)) {
 						settings->keys[i] = streq (val, "disabled") ?
