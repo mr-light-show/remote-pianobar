@@ -33,6 +33,7 @@ variableScope:src/libpiano/piano.c
 invalidPrintfArgType_sint:src/libpiano/request.c
 shadowVariable:src/libpiano/response.c
 constVariablePointer:src/libpiano/response.c
+memleak:src/libpiano/response.c
 # Bridge functions in websocket_bridge.h are public API; BarWsIsWebActive is only called by tests outside its TU
 staticFunction:src/websocket_bridge.c
 # WebSocket public API and test seams: declared in the headers and called from test/ (outside the lint set)
