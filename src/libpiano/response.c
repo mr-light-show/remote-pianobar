@@ -33,20 +33,42 @@ THE SOFTWARE.
 #include "piano_private.h"
 #include "crypt.h"
 
-static char *PianoJsonStrdup (json_object *j, const char *key) {
-	/* j may be NULL (JSON null array element); get_ex treats that as missing */
+/* calloc for the objects whose out-of-memory cleanup is tested; unit tests
+ * install a hook to make an allocation fail (see PianoResponseSetCallocTestHook). */
+static void *(*pianoCallocHook) (size_t nmemb, size_t size) = NULL;
+
+void PianoResponseSetCallocTestHook (void *(*hook) (size_t nmemb, size_t size)) {
+	pianoCallocHook = hook;
+}
+
+static void *PianoCalloc (size_t nmemb, size_t size) {
+	return pianoCallocHook != NULL ? pianoCallocHook (nmemb, size) :
+			calloc (nmemb, size);
+}
+
+/* Scalar value of key, or NULL.  j may be NULL (JSON null array element);
+ * get_ex treats that as missing.  json-c represents JSON null as a NULL object
+ * and has no string for containers worth keeping; both are treated like a
+ * missing key. */
+static json_object *PianoJsonScalar (json_object *j, const char *key) {
 	assert (key != NULL);
 
-	/* json-c represents JSON null as a NULL object and has no string for
-	 * containers worth keeping; both are treated like a missing key. */
 	json_object *v;
 	if (json_object_object_get_ex (j, key, &v) && v != NULL &&
 			!json_object_is_type (v, json_type_object) &&
 			!json_object_is_type (v, json_type_array)) {
-		return strdup (json_object_get_string (v));
-	} else {
-		return NULL;
+		return v;
 	}
+	return NULL;
+}
+
+static bool PianoJsonHasString (json_object *j, const char *key) {
+	return PianoJsonScalar (j, key) != NULL;
+}
+
+static char *PianoJsonStrdup (json_object *j, const char *key) {
+	json_object * const v = PianoJsonScalar (j, key);
+	return v != NULL ? strdup (json_object_get_string (v)) : NULL;
 }
 
 /*	Length of a JSON array; anything that is not an array (including JSON
@@ -242,8 +264,9 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 				PianoStation_t *tmpStation;
 				json_object *s = json_object_array_get_idx (stations, i);
 
-				if ((tmpStation = calloc (1, sizeof (*tmpStation))) == NULL) {
-					return PIANO_RET_OUT_OF_MEMORY;
+				if ((tmpStation = PianoCalloc (1, sizeof (*tmpStation))) == NULL) {
+					ret = PIANO_RET_OUT_OF_MEMORY;
+					goto cleanup;
 				}
 
 				PianoJsonParseStation (s, tmpStation);
@@ -299,13 +322,17 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 				json_object *s = json_object_array_get_idx (items, i);
 				PianoSong_t *song;
 
-				if ((song = calloc (1, sizeof (*song))) == NULL) {
-					return PIANO_RET_OUT_OF_MEMORY;
+				/* Title and artist are consumed unchecked (UI formats,
+				 * eventcmd): an item lacking either is unplayable data */
+				if (!PianoJsonHasString (s, "songName") ||
+						!PianoJsonHasString (s, "artistName")) {
+					continue;
 				}
 
-				if (!json_object_object_get_ex (s, "artistName", NULL)) {
-					free (song);
-					continue;
+				if ((song = PianoCalloc (1, sizeof (*song))) == NULL) {
+					PianoDestroyPlaylist (playlist);
+					ret = PIANO_RET_OUT_OF_MEMORY;
+					goto cleanup;
 				}
 
 				/* get audio url based on selected quality */
@@ -340,6 +367,10 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 				json_object *v;
 				song->artist = PianoJsonStrdup (s, "artistName");
 				song->album = PianoJsonStrdup (s, "albumName");
+				if (song->album == NULL) {
+					/* printed unchecked by UI and eventcmd */
+					song->album = strdup ("");
+				}
 				song->title = PianoJsonStrdup (s, "songName");
 				song->trackToken = PianoJsonStrdup (s, "trackToken");
 				song->stationId = PianoJsonStrdup (s, "stationId");
@@ -418,8 +449,9 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					json_object *a = json_object_array_get_idx (artists, i);
 					PianoArtist_t *artist;
 
-					if ((artist = calloc (1, sizeof (*artist))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+					if ((artist = PianoCalloc (1, sizeof (*artist))) == NULL) {
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 
 					artist->name = PianoJsonStrdup (a, "artistName");
@@ -437,8 +469,9 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					json_object *s = json_object_array_get_idx (songs, i);
 					PianoSong_t *song;
 
-					if ((song = calloc (1, sizeof (*song))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+					if ((song = PianoCalloc (1, sizeof (*song))) == NULL) {
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 
 					song->title = PianoJsonStrdup (s, "songName");
@@ -456,8 +489,9 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 			/* create station, insert new station into station list on success */
 			PianoStation_t *tmpStation;
 
-			if ((tmpStation = calloc (1, sizeof (*tmpStation))) == NULL) {
-				return PIANO_RET_OUT_OF_MEMORY;
+			if ((tmpStation = PianoCalloc (1, sizeof (*tmpStation))) == NULL) {
+				ret = PIANO_RET_OUT_OF_MEMORY;
+				goto cleanup;
 			}
 
 			PianoJsonParseStation (result, tmpStation);
@@ -505,10 +539,12 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					json_object *c = json_object_array_get_idx (categories, i);
 					PianoGenreCategory_t *tmpGenreCategory;
 
-					if ((tmpGenreCategory = calloc (1,
+					if ((tmpGenreCategory = PianoCalloc (1,
 							sizeof (*tmpGenreCategory))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
+					/* not yet linked into ph: any early return must free it */
 
 					tmpGenreCategory->name = PianoJsonStrdup (c,
 							"categoryName");
@@ -522,9 +558,11 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 									json_object_array_get_idx (stations, k);
 							PianoGenre_t *tmpGenre;
 
-							if ((tmpGenre = calloc (1,
+							if ((tmpGenre = PianoCalloc (1,
 									sizeof (*tmpGenre))) == NULL) {
-								return PIANO_RET_OUT_OF_MEMORY;
+								PianoDestroyGenreCategory (tmpGenreCategory);
+								ret = PIANO_RET_OUT_OF_MEMORY;
+								goto cleanup;
 							}
 
 							/* get genre attributes */
@@ -627,9 +665,10 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 						json_object *s = json_object_array_get_idx (songs, i);
 						PianoSong_t *seedSong;
 
-						seedSong = calloc (1, sizeof (*seedSong));
+						seedSong = PianoCalloc (1, sizeof (*seedSong));
 						if (seedSong == NULL) {
-							return PIANO_RET_OUT_OF_MEMORY;
+							ret = PIANO_RET_OUT_OF_MEMORY;
+							goto cleanup;
 						}
 
 						seedSong->title = PianoJsonStrdup (s, "songName");
@@ -648,9 +687,10 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 						json_object *a = json_object_array_get_idx (artists, i);
 						PianoArtist_t *seedArtist;
 
-						seedArtist = calloc (1, sizeof (*seedArtist));
+						seedArtist = PianoCalloc (1, sizeof (*seedArtist));
 						if (seedArtist == NULL) {
-							return PIANO_RET_OUT_OF_MEMORY;
+							ret = PIANO_RET_OUT_OF_MEMORY;
+							goto cleanup;
 						}
 
 						seedArtist->name = PianoJsonStrdup (a, "artistName");
@@ -675,9 +715,10 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 						json_object *s = json_object_array_get_idx (val, i);
 						PianoSong_t *feedbackSong;
 
-						feedbackSong = calloc (1, sizeof (*feedbackSong));
+						feedbackSong = PianoCalloc (1, sizeof (*feedbackSong));
 						if (feedbackSong == NULL) {
-							return PIANO_RET_OUT_OF_MEMORY;
+							ret = PIANO_RET_OUT_OF_MEMORY;
+							goto cleanup;
 						}
 
 						feedbackSong->title = PianoJsonStrdup (s, "songName");
@@ -722,8 +763,9 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					}
 
 					PianoStationMode_t *mode;
-					if ((mode = calloc (1, sizeof (*mode))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+					if ((mode = PianoCalloc (1, sizeof (*mode))) == NULL) {
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 
 					json_object *modeId;

@@ -165,6 +165,17 @@ static void PianoDestroyGenres (PianoGenre_t *genres) {
 	}
 }
 
+/*	destroy a single genre category (name and nested genres); NULL is ignored
+ */
+void PianoDestroyGenreCategory (PianoGenreCategory_t *cat) {
+	if (cat == NULL) {
+		return;
+	}
+	PianoDestroyGenres (cat->genres);
+	free (cat->name);
+	free (cat);
+}
+
 /*	destroy user information
  */
 void PianoDestroyUserInfo (PianoUserInfo_t *user) {
@@ -205,13 +216,11 @@ void PianoDestroy (PianoHandle_t *ph) {
 	PianoDestroyStations (ph->stations);
 	PianoDestroyPartner (&ph->partner);
 	/* destroy genre stations */
-	PianoGenreCategory_t *curGenreCat = ph->genreStations, *lastGenreCat;
+	PianoGenreCategory_t *curGenreCat = ph->genreStations;
 	while (curGenreCat != NULL) {
-		PianoDestroyGenres (curGenreCat->genres);
-		free (curGenreCat->name);
-		lastGenreCat = curGenreCat;
+		PianoGenreCategory_t * const lastGenreCat = curGenreCat;
 		curGenreCat = (PianoGenreCategory_t *) curGenreCat->head.next;
-		free (lastGenreCat);
+		PianoDestroyGenreCategory (lastGenreCat);
 	}
 	memset (ph, 0, sizeof (*ph));
 }

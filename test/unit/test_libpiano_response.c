@@ -5,6 +5,7 @@
  */
 
 #include <check.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include <piano.h>
 
 #include "crypt.h"
+#include "piano_private.h"
 
 /* Helper: set up a zeroed PianoHandle + PianoRequest, call PianoResponse,
  * return the result.  Caller must call PianoDestroy(&ph) afterwards. */
@@ -482,6 +484,191 @@ START_TEST (test_response_playlist_unknown_encoding)
 }
 END_TEST
 
+/* Helper: run GET_PLAYLIST on a response body; caller destroys the playlist */
+static PianoSong_t *parsePlaylist (const char *json) {
+	static PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) json;
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	return data.retPlaylist;
+}
+
+/* Items without a usable songName or artistName are skipped */
+START_TEST (test_response_playlist_skips_missing_title_or_artist)
+{
+	PianoSong_t *pl = parsePlaylist ("{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"artistName\":\"A\",\"songName\":null},"
+	        "{\"artistName\":\"A\"},"
+	        "{\"artistName\":null,\"songName\":\"S\"},"
+	        "{\"artistName\":{\"x\":1},\"songName\":\"S\"},"
+	        "null]}}");
+	ck_assert_ptr_null (pl);
+}
+END_TEST
+
+/* A good item next to bad ones survives; a missing album becomes "" */
+START_TEST (test_response_playlist_keeps_good_item_beside_bad)
+{
+	PianoSong_t *pl = parsePlaylist ("{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"artistName\":\"A\",\"songName\":null},"
+	        "{\"artistName\":\"B\",\"songName\":\"T\"},"
+	        "{\"songName\":\"U\"}]}}");
+	ck_assert_ptr_nonnull (pl);
+	ck_assert_ptr_null (pl->head.next);
+	ck_assert_str_eq (pl->title, "T");
+	ck_assert_str_eq (pl->artist, "B");
+	ck_assert_ptr_nonnull (pl->album);
+	ck_assert_str_eq (pl->album, "");
+	PianoDestroyPlaylist (pl);
+}
+END_TEST
+
+/* A destroyed category frees its name and nested genres */
+/* calloc that succeeds for the first g_callocOk calls, then fails */
+static int g_callocOk;
+static void *failing_calloc (size_t nmemb, size_t size) {
+	if (g_callocOk-- > 0) {
+		return calloc (nmemb, size);
+	}
+	return NULL;
+}
+
+/* Out of memory while building the second playlist item frees the first */
+START_TEST (test_response_playlist_oom_frees_partial_list)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"artistName\":\"A\",\"songName\":\"S1\"},"
+	        "{\"artistName\":\"B\",\"songName\":\"S2\"}]}}";
+	g_callocOk = 1;
+	PianoResponseSetCallocTestHook (failing_calloc);
+	PianoReturn_t ret = PianoResponse (&ph, &req);
+	PianoResponseSetCallocTestHook (NULL);
+	ck_assert_int_eq (ret, PIANO_RET_OUT_OF_MEMORY);
+	ck_assert_ptr_null (data.retPlaylist);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* One row per out-of-memory site: the request, a minimal payload and the
+ * number of callocs that succeed before the one that must fail */
+static const struct {
+	PianoRequestType_t type;
+	int callocsOk;
+	const char *json;
+} oomSites[] = {
+	{PIANO_REQUEST_GET_STATIONS, 0, "{\"stat\":\"ok\",\"result\":{\"stations\":["
+			"{\"stationName\":\"N\",\"stationToken\":\"t\"}]}}"},
+	{PIANO_REQUEST_SEARCH, 0, "{\"stat\":\"ok\",\"result\":{\"artists\":["
+			"{\"artistName\":\"A\"}]}}"},
+	{PIANO_REQUEST_SEARCH, 1, "{\"stat\":\"ok\",\"result\":{\"artists\":["
+			"{\"artistName\":\"A\"}],\"songs\":[{\"songName\":\"S\"}]}}"},
+	{PIANO_REQUEST_CREATE_STATION, 0, "{\"stat\":\"ok\",\"result\":{"
+			"\"stationName\":\"N\",\"stationToken\":\"t\"}}"},
+	{PIANO_REQUEST_GET_STATION_INFO, 0, "{\"stat\":\"ok\",\"result\":{"
+			"\"music\":{\"songs\":[{\"songName\":\"S\"}]}}}"},
+	{PIANO_REQUEST_GET_STATION_INFO, 1, "{\"stat\":\"ok\",\"result\":{"
+			"\"music\":{\"songs\":[{\"songName\":\"S\"}],"
+			"\"artists\":[{\"artistName\":\"B\"}]}}}"},
+	{PIANO_REQUEST_GET_STATION_INFO, 2, "{\"stat\":\"ok\",\"result\":{"
+			"\"music\":{\"songs\":[{\"songName\":\"S\"}],"
+			"\"artists\":[{\"artistName\":\"B\"}]},"
+			"\"feedback\":{\"thumbsUp\":[{\"songName\":\"U\"}]}}}"},
+	{PIANO_REQUEST_GET_STATION_MODES, 0, "{\"stat\":\"ok\",\"result\":{"
+			"\"availableModes\":[{\"modeId\":1}]}}"},
+};
+
+/* Out of memory at each site returns the error and frees everything built */
+START_TEST (test_response_oom_sites_free_everything)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	max_align_t data[64]; /* big enough for any request's data struct */
+
+	memset (data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = oomSites[_i].type;
+	req.data = data;
+	req.responseData = (char *) oomSites[_i].json;
+	g_callocOk = oomSites[_i].callocsOk;
+	PianoResponseSetCallocTestHook (failing_calloc);
+	PianoReturn_t ret = PianoResponse (&ph, &req);
+	PianoResponseSetCallocTestHook (NULL);
+	ck_assert_int_eq (ret, PIANO_RET_OUT_OF_MEMORY);
+
+	switch (req.type) {
+		case PIANO_REQUEST_SEARCH:
+			PianoDestroySearchResult (&((PianoRequestDataSearch_t *) data)->searchResult);
+			break;
+		case PIANO_REQUEST_GET_STATION_INFO:
+			PianoDestroyStationInfo (&((PianoRequestDataGetStationInfo_t *) data)->info);
+			break;
+		case PIANO_REQUEST_GET_STATION_MODES:
+			PianoDestroyStationMode (((PianoRequestDataGetStationModes_t *) data)->retModes);
+			break;
+		default:
+			break;
+	}
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* Out of memory on a genre (or its category) frees what was built so far */
+START_TEST (test_response_genre_oom_frees_partial_category)
+{
+	static const char *const json = "{\"stat\":\"ok\",\"result\":{\"categories\":[{"
+	        "\"categoryName\":\"Rock\",\"stations\":[{"
+	        "\"stationName\":\"Classic\",\"stationToken\":\"g1\"}]}]}}";
+	/* _i = successful callocs before the failure: 0 = the category itself,
+	 * 1 = the first genre of that category */
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	g_callocOk = _i;
+	PianoResponseSetCallocTestHook (failing_calloc);
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_GENRE_STATIONS, json);
+	PianoResponseSetCallocTestHook (NULL);
+	ck_assert_int_eq (ret, PIANO_RET_OUT_OF_MEMORY);
+	ck_assert_ptr_null (ph.genreStations);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_destroy_genre_category_frees_nested)
+{
+	PianoGenreCategory_t *cat = calloc (1, sizeof (*cat));
+	ck_assert_ptr_nonnull (cat);
+	cat->name = strdup ("Rock");
+	for (int i = 0; i < 2; i++) {
+		PianoGenre_t *g = calloc (1, sizeof (*g));
+		ck_assert_ptr_nonnull (g);
+		g->name = strdup ("n");
+		g->musicId = strdup ("id");
+		cat->genres = PianoListAppendP (cat->genres, g);
+	}
+	PianoDestroyGenreCategory (cat);
+	PianoDestroyGenreCategory (NULL);
+}
+END_TEST
+
 /* A genre category's stations become its genres */
 START_TEST (test_response_genre_stations_parsed)
 {
@@ -730,6 +917,13 @@ Suite *libpiano_response_suite (void) {
 	Suite *s = suite_create ("libpiano_response");
 	TCase *tc = tcase_create ("JSON parsing");
 	tcase_add_test (tc, test_response_fail_maps_error_code);
+	tcase_add_test (tc, test_response_playlist_skips_missing_title_or_artist);
+	tcase_add_test (tc, test_response_playlist_keeps_good_item_beside_bad);
+	tcase_add_test (tc, test_destroy_genre_category_frees_nested);
+	tcase_add_test (tc, test_response_playlist_oom_frees_partial_list);
+	tcase_add_loop_test (tc, test_response_genre_oom_frees_partial_category, 0, 2);
+	tcase_add_loop_test (tc, test_response_oom_sites_free_everything, 0,
+	        (int) (sizeof (oomSites) / sizeof (*oomSites)));
 	tcase_add_test (tc, test_response_missing_stat_field);
 	tcase_add_test (tc, test_response_invalid_json_does_not_crash);
 	tcase_add_test (tc, test_response_fail_missing_code_field);
