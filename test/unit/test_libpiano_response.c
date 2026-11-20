@@ -325,6 +325,24 @@ START_TEST (test_request_login_step1_null_partner_token)
 }
 END_TEST
 
+/* With a partner token, the userLogin request is built (token URL-encoded) */
+START_TEST (test_request_login_step1_with_partner_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 1);
+	login.user = "u";
+	login.password = "p";
+	ph.partner.authToken = strdup ("tok/+=");
+	ck_assert_int_eq (PianoRequest (&ph, &req, PIANO_REQUEST_LOGIN), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (strstr (req.urlPath, "auth_token=tok%2F%2B%3D"));
+	free (req.postData);
+	PianoDestroy (&ph);
+}
+END_TEST
+
 START_TEST (test_request_standard_null_user_token)
 {
 	PianoHandle_t ph;
@@ -410,6 +428,20 @@ START_TEST (test_find_station_by_id_empty_list_or_null_id)
 }
 END_TEST
 
+START_TEST (test_response_create_station_null_name)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_CREATE_STATION,
+	        "{\"stat\":\"ok\",\"result\":{\"stationName\":null,"
+	        "\"stationToken\":\"tok\"}}");
+	ck_assert_int_eq (ret, PIANO_RET_INVALID_RESPONSE);
+	ck_assert_ptr_null (ph.stations);
+	PianoDestroy (&ph);
+}
+END_TEST
+
 START_TEST (test_response_create_station_ok)
 {
 	PianoHandle_t ph;
@@ -425,6 +457,51 @@ START_TEST (test_response_create_station_ok)
 END_TEST
 
 /* "encoding":null in the audio map must not reach strcmp */
+/* An encoding no format matches leaves the song's format unknown */
+START_TEST (test_response_playlist_unknown_encoding)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"items\":[{"
+	        "\"artistName\":\"A\",\"songName\":\"S\","
+	        "\"audioUrlMap\":{\"highQuality\":{\"encoding\":\"nope\","
+	        "\"audioUrl\":\"http://x/y\"}}}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.retPlaylist);
+	ck_assert_int_eq (data.retPlaylist->audioFormat, PIANO_AF_UNKNOWN);
+	PianoDestroyPlaylist (data.retPlaylist);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* A genre category's stations become its genres */
+START_TEST (test_response_genre_stations_parsed)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_GENRE_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"categories\":[{"
+	        "\"categoryName\":\"Rock\",\"stations\":[{"
+	        "\"stationName\":\"Classic\",\"stationToken\":\"g1\"}]}]}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	ck_assert_ptr_nonnull (ph.genreStations);
+	ck_assert_str_eq (ph.genreStations->name, "Rock");
+	ck_assert_ptr_nonnull (ph.genreStations->genres);
+	ck_assert_str_eq (ph.genreStations->genres->name, "Classic");
+	ck_assert_str_eq (ph.genreStations->genres->musicId, "g1");
+	PianoDestroy (&ph);
+}
+END_TEST
+
 START_TEST (test_response_playlist_null_encoding)
 {
 	PianoHandle_t ph;
@@ -670,6 +747,10 @@ Suite *libpiano_response_suite (void) {
 	tcase_add_test (tc, test_response_login_step1_ok);
 	tcase_add_test (tc, test_request_login_step1_null_partner_token);
 	tcase_add_test (tc, test_request_standard_null_user_token);
+	tcase_add_test (tc, test_request_login_step1_with_partner_token);
+	tcase_add_test (tc, test_response_create_station_null_name);
+	tcase_add_test (tc, test_response_playlist_unknown_encoding);
+	tcase_add_test (tc, test_response_genre_stations_parsed);
 	tcase_add_test (tc, test_response_lists_not_arrays);
 	tcase_add_test (tc, test_response_station_container_name_skipped);
 	tcase_add_test (tc, test_response_stations_null_and_null_entry);
