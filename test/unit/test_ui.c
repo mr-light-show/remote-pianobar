@@ -53,6 +53,15 @@ THE SOFTWARE.
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
 
+/* httpFetchCb is non-static (like progressCb) so tests can reach it; the
+ * buffer layout mirrors the private struct in src/ui.c. */
+typedef struct {
+	char *data;
+	size_t pos;
+} HttpFetchBuffer_t;
+
+size_t httpFetchCb (char *ptr, size_t size, size_t nmemb, void *userdata);
+
 static char *read_tmpfile (FILE *stream)
 {
 	char *buf = NULL;
@@ -1014,6 +1023,54 @@ START_TEST (test_ui_piano_call_error_stays_on_stdout_in_both)
 }
 END_TEST
 
+START_TEST (test_http_fetch_cb_accumulates_chunks)
+{
+	HttpFetchBuffer_t buf = {NULL, 0};
+	char a[] = "abc";
+	char b[] = "def";
+
+	ck_assert_uint_eq (httpFetchCb (a, 1, 3, &buf), 3);
+	ck_assert_uint_eq (httpFetchCb (b, 1, 3, &buf), 3);
+	ck_assert_ptr_nonnull (buf.data);
+	ck_assert_str_eq (buf.data, "abcdef");
+	ck_assert_uint_eq (buf.pos, 6);
+	free (buf.data);
+}
+END_TEST
+
+/* A failed realloc must not leave a dangling buffer behind: the caller
+ * (BarPianoHttpRequest) hands buffer.data to the response/cleanup path,
+ * which would otherwise read and free freed memory. */
+START_TEST (test_http_fetch_cb_realloc_failure_clears_buffer)
+{
+	HttpFetchBuffer_t buf = {NULL, 0};
+	char a[] = "abc";
+	char b[] = "x";
+
+	ck_assert_uint_eq (httpFetchCb (a, 1, 3, &buf), 3);
+	/* size*nmemb is far beyond what realloc can satisfy */
+	ck_assert_uint_eq (httpFetchCb (b, SIZE_MAX / 2, 1, &buf), 0);
+	ck_assert_ptr_null (buf.data);
+	ck_assert_uint_eq (buf.pos, 0);
+
+	/* buffer is reusable after the failure */
+	ck_assert_uint_eq (httpFetchCb (a, 1, 3, &buf), 3);
+	ck_assert_str_eq (buf.data, "abc");
+	free (buf.data);
+}
+END_TEST
+
+START_TEST (test_http_fetch_cb_initial_alloc_failure_returns_zero)
+{
+	HttpFetchBuffer_t buf = {NULL, 0};
+	char b[] = "x";
+
+	ck_assert_uint_eq (httpFetchCb (b, SIZE_MAX / 2, 1, &buf), 0);
+	ck_assert_ptr_null (buf.data);
+	ck_assert_uint_eq (buf.pos, 0);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -1047,6 +1104,9 @@ Suite *ui_suite (void)
 #ifdef HAVE_DEBUGLOG
 	tcase_add_test (tc, test_ui_piano_call_error_logged_once_with_debug_cli_in_web_only);
 #endif
+	tcase_add_test (tc, test_http_fetch_cb_accumulates_chunks);
+	tcase_add_test (tc, test_http_fetch_cb_realloc_failure_clears_buffer);
+	tcase_add_test (tc, test_http_fetch_cb_initial_alloc_failure_returns_zero);
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
