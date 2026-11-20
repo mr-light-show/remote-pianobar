@@ -102,6 +102,12 @@ void BarPlayerSetNullAudioTestBackend (bool enabled) {
 	nullAudioTestBackend = enabled;
 }
 
+static BarPlayerStreamOpenedTestHook streamOpenedTestHook;
+
+void BarPlayerSetStreamOpenedTestHook (BarPlayerStreamOpenedTestHook hook) {
+	streamOpenedTestHook = hook;
+}
+
 void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook) {
 	joinTestHook = hook;
 }
@@ -489,6 +495,21 @@ static void printError(const BarSettings_t * const settings,
  * ============================================================================
  */
 
+void BarPlayerCopyPcmFrames (int16_t *out, unsigned int outChannels,
+		const int16_t *in, unsigned int inChannels, size_t frames) {
+	if (outChannels == inChannels) {
+		memcpy (out, in, frames * inChannels * sizeof (int16_t));
+		return;
+	}
+	const unsigned int common = outChannels < inChannels ? outChannels : inChannels;
+	for (size_t frame = 0; frame < frames; ++frame) {
+		int16_t *dst = out + frame * outChannels;
+		const int16_t *src = in + frame * inChannels;
+		memcpy (dst, src, common * sizeof (int16_t));
+		memset (dst + common, 0, (outChannels - common) * sizeof (int16_t));
+	}
+}
+
 /* Read PCM frames from ffmpeg filter chain with proper partial frame buffering */
 static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource, 
 		void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead) {
@@ -533,10 +554,11 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 				samplesToCopy = (int)(frameCount - framesRead);
 			}
 			
-			/* Copy from the offset position in the buffered frame */
-			memcpy(output + (framesRead * numChannels),
-			       frameData + (pFFmpeg->bufferedFrameOffset * numChannels),
-			       samplesToCopy * numChannels * sizeof(int16_t));
+			/* Copy from the offset position in the buffered frame. The output
+			 * holds pFFmpeg->channels per frame; never index it by the frame's. */
+			BarPlayerCopyPcmFrames(output + (framesRead * pFFmpeg->channels), pFFmpeg->channels,
+			       frameData + (pFFmpeg->bufferedFrameOffset * numChannels), numChannels,
+			       (size_t)samplesToCopy);
 			
 			framesRead += samplesToCopy;
 			pFFmpeg->cursor += samplesToCopy;
@@ -716,9 +738,11 @@ static ma_result ffmpeg_data_source_init(ffmpeg_data_source_t* pFFmpeg, player_t
 	pFFmpeg->bufferedFrame = NULL;
 	pFFmpeg->bufferedFrameOffset = 0;
 	
-	/* Get format info from the stream */
+	/* Get format info from the stream. Channels come from the configured
+	 * filter output, which is what the read callback copies; codecpar may
+	 * disagree with the decoder (e.g. parametric stereo signalled as mono). */
 	const AVCodecParameters* cp = player->st->codecpar;
-	pFFmpeg->channels = cp->ch_layout.nb_channels;
+	pFFmpeg->channels = (ma_uint32)av_buffersink_get_channels(player->fbufsink);
 	pFFmpeg->sampleRate = player->settings->sampleRate != 0 ? 
 	                      player->settings->sampleRate : cp->sample_rate;
 	
@@ -1203,9 +1227,11 @@ static bool openFilter(player_t * const player) {
 		goto cleanup;
 	}
 
-	/* Create aformat filter (sample format conversion) */
-	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d",
-			av_get_sample_fmt_name(avformat), getSampleRate(player));
+	/* Create aformat filter (sample format conversion). Pin the output layout
+	 * to the source's so the sink, and the device sized from it, have one
+	 * fixed channel count. */
+	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d:channel_layouts=%s",
+			av_get_sample_fmt_name(avformat), getSampleRate(player), channelLayout);
 	if ((ret = avfilter_graph_create_filter(&fafmt,
 					avfilter_get_by_name("aformat"), "format", strbuf, NULL,
 					player->fgraph)) < 0) {
@@ -1396,7 +1422,12 @@ static int decode(player_t * const player) {
 			
 			pthread_mutex_lock(&player->decoderLock);
 			ret = av_buffersrc_write_frame(player->fabuf, frame);
-			assert(ret >= 0);
+			if (ret < 0) {
+				/* Network data: a mid-stream format change is rejected by the
+				 * source filter. Drop the frame; keep the opened format. */
+				log_write(DEBUG_AUDIO, "Filter rejected decoded frame (%d channels): %d\n",
+				          frame->ch_layout.nb_channels, ret);
+			}
 			pthread_cond_broadcast(&player->decoderCond);
 			pthread_mutex_unlock(&player->decoderLock);
 		}
@@ -1822,6 +1853,7 @@ void *BarPlayerThread(void *data) {
 		bool staleCdn403 = false;
 		if (openStream(player, &staleCdn403)) {
 			logRSSAudio("after openStream");
+			if (streamOpenedTestHook != NULL) { streamOpenedTestHook (player); }
 
 			pthread_mutex_lock (&player->lock);
 			uint64_t setupEpoch = player->controlEpoch;
