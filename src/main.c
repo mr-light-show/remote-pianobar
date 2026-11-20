@@ -495,6 +495,16 @@ static int BarMainFinalizationStatus (const BarApp_t *app) {
 	return EXIT_SUCCESS;
 }
 
+/* Copy log lines to log_file in ui_mode both/cli, where the process never
+ * detaches and the setting would otherwise be ignored. The web-only daemon
+ * points stderr at log_file itself (BarDaemonizeSteps). */
+static bool BarMainOpenLogFile (const BarApp_t *app) {
+	if (app->settings.logFile == NULL || BarIsWebOnlyMode (app)) {
+		return false;
+	}
+	return log_set_file (app->settings.logFile);
+}
+
 static void intHandler (int signal) {
 	(void) signal;
 	log_write(DEBUG_UI, "Received ^C\n");
@@ -684,6 +694,7 @@ int main (int argc, char **argv) {
 
 	/* Output web-only startup on stderr (journal) after debug mask is ready */
 	log_init(app.settings.debug);
+	BarMainOpenLogFile (&app);
 	BarWsPrintStartupInfo(&app);
 
 	/* NOW do other initialization (after relaunch check, if any) */

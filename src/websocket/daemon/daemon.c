@@ -43,6 +43,60 @@ THE SOFTWARE.
 #include <sys/wait.h>
 #include <pwd.h>
 
+/* Keep fds 0/1/2 open for the daemon's whole life. A closed fd 0 is reused by
+ * the next open() (lws's /dev/urandom, an audio device) and then inherited by
+ * every child as "stdin". When the process starts with some standard fds
+ * already closed, open() itself returns 0, 1 or 2: such a descriptor must be
+ * kept, so temporaries are closed only when above STDERR_FILENO. */
+bool BarDaemonRedirectStdio (const char *logFile) {
+	const int nullFd = open ("/dev/null", O_RDWR);
+	if (nullFd < 0) {
+		log_write (LOG_ERROR, "Daemon: Failed to open /dev/null: %s\n",
+				strerror (errno));
+		return false;
+	}
+
+	int logFd = -1;
+	if (logFile != NULL) {
+		logFd = open (logFile, O_WRONLY | O_CREAT | O_APPEND, 0644);
+		if (logFd < 0) {
+			log_write (LOG_ERROR, "Daemon: Failed to open log file %s: %s\n",
+					logFile, strerror (errno));
+		}
+	}
+
+	/* Order matters: nullFd and logFd may themselves be 0, 1 or 2, so stdin is
+	 * placed first and the log descriptor is moved last. */
+	if (nullFd != STDIN_FILENO) {
+		(void) dup2 (nullFd, STDIN_FILENO);
+	}
+	if (logFd >= 0) {
+		if (logFd != STDOUT_FILENO) {
+			(void) dup2 (logFd, STDOUT_FILENO);
+		}
+		if (logFd != STDERR_FILENO) {
+			(void) dup2 (logFd, STDERR_FILENO);
+		}
+	} else {
+		/* Discard stdout; keep stderr (e.g. systemd journal) unless it is closed */
+		if (nullFd != STDOUT_FILENO) {
+			(void) dup2 (nullFd, STDOUT_FILENO);
+		}
+		/* (If nullFd is 2, stderr is open and this test is false.) */
+		if (fcntl (STDERR_FILENO, F_GETFD) == -1) {
+			(void) dup2 (nullFd, STDERR_FILENO);
+		}
+	}
+
+	if (nullFd > STDERR_FILENO) {
+		close (nullFd);
+	}
+	if (logFd > STDERR_FILENO) {
+		close (logFd);
+	}
+	return true;
+}
+
 /* Perform daemonization steps without forking (for relaunched processes) */
 bool BarDaemonizeSteps(BarApp_t *app) {
 	pid_t sid;
@@ -72,27 +126,9 @@ bool BarDaemonizeSteps(BarApp_t *app) {
 	}
 	
 
-	/* Close standard file descriptors */
-	close(STDIN_FILENO);
-	
-
-	/* Redirect stdout and stderr to log file if configured */
-	if (app->settings.logFile) {
-		int fd = open(app->settings.logFile,
-		              O_WRONLY | O_CREAT | O_APPEND, 0644);
-		if (fd >= 0) {
-			dup2(fd, STDOUT_FILENO);
-			dup2(fd, STDERR_FILENO);
-			close(fd);
-		}
-	} else {
-		/* Discard stdout; keep stderr (e.g. systemd journal) */
-		int fd = open("/dev/null", O_RDWR);
-		if (fd >= 0) {
-			dup2(fd, STDOUT_FILENO);
-			close(fd);
-		}
-	}
+	/* Keep stdin on /dev/null and stdout/stderr on the log file or /dev/null.
+	 * Failure is logged by the helper and is not fatal (no worse than closing). */
+	(void) BarDaemonRedirectStdio (app->settings.logFile);
 	
 
 	/* Write PID file */

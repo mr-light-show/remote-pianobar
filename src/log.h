@@ -65,3 +65,15 @@ void log_network_response(const char *summary);
 /* Atomically set or get the debug mask (normally set once by log_init). */
 void         log_set_debug_mask (unsigned int mask);
 unsigned int log_get_debug_mask (void);
+
+/* Also append every emitted log line (LOG_ERROR and enabled DEBUG_* kinds) to
+ * path, as plain text without colour codes, in addition to stderr. Used for
+ * ui_mode both/cli, where log_file would otherwise be ignored. Opens the file
+ * in append mode (0644); a previously set file is closed. Returns false (and
+ * logs one LOG_ERROR to stderr) when path is NULL/empty or cannot be opened,
+ * leaving the previous file, if any, in place. Call before threads start. */
+bool log_set_file (const char *path);
+
+/* Stop copying lines to the log file and close it. Call only after every
+ * thread that may call log_write has stopped (or before they were started). */
+void log_close_file (void);

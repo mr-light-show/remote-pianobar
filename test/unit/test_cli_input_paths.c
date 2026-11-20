@@ -878,6 +878,94 @@ START_TEST (test_reconnect_keeps_queued_station_over_saved_one)
 }
 END_TEST
 
+/* ------------------------------------------------------------------------
+ * main.c: log_file in the non-daemon UI modes
+ * ------------------------------------------------------------------------ */
+
+/* Open (or not) the log file for one mode, log one error line, and return
+ * what reached the file ("" when the file was not created). */
+static char *
+log_file_after_open (BarUiMode_t mode, bool withLogFile, bool *opened)
+{
+	char dir[256], path[300];
+	BarApp_t app;
+	char *text = NULL;
+
+	memset (&app, 0, sizeof (app));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = mode;
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "main_logfile"));
+	snprintf (path, sizeof (path), "%s/pianobar.log", dir);
+	free (app.settings.logFile);
+	app.settings.logFile = withLogFile ? strdup (path) : NULL;
+
+	log_set_debug_mask (0);
+	fflush (stderr);
+	const int saved = dup (STDERR_FILENO);
+	const int nullFd = open ("/dev/null", O_WRONLY);
+	ck_assert (saved >= 0 && nullFd >= 0);
+	ck_assert (dup2 (nullFd, STDERR_FILENO) >= 0);
+	close (nullFd);
+
+	*opened = BarMainOpenLogFile (&app);
+	log_write (LOG_ERROR, "main-log-probe\n");
+	log_close_file ();
+
+	fflush (stderr);
+	ck_assert (dup2 (saved, STDERR_FILENO) >= 0);
+	close (saved);
+
+	FILE *f = fopen (path, "r");
+	if (f != NULL) {
+		char buf[512] = "";
+		size_t n = fread (buf, 1, sizeof (buf) - 1, f);
+		buf[n] = '\0';
+		fclose (f);
+		text = strdup (buf);
+		unlink (path);
+	} else {
+		text = strdup ("");
+	}
+	rmdir (dir);
+	BarSettingsDestroy (&app.settings);
+	return text;
+}
+
+START_TEST (test_main_open_log_file_in_both_and_cli_modes)
+{
+	const BarUiMode_t modes[] = {BAR_UI_MODE_BOTH, BAR_UI_MODE_CLI};
+
+	for (size_t i = 0; i < sizeof (modes) / sizeof (modes[0]); i++) {
+		bool opened = false;
+		char *text = log_file_after_open (modes[i], true, &opened);
+		ck_assert (opened);
+		ck_assert_ptr_nonnull (strstr (text, "main-log-probe"));
+		free (text);
+	}
+}
+END_TEST
+
+/* The web-only daemon redirects stderr to log_file itself (BarDaemonizeSteps). */
+START_TEST (test_main_open_log_file_skipped_in_web_mode)
+{
+	bool opened = true;
+	char *text = log_file_after_open (BAR_UI_MODE_WEB, true, &opened);
+	ck_assert (!opened);
+	ck_assert_str_eq (text, "");
+	free (text);
+}
+END_TEST
+
+START_TEST (test_main_open_log_file_skipped_without_setting)
+{
+	bool opened = true;
+	char *text = log_file_after_open (BAR_UI_MODE_BOTH, false, &opened);
+	ck_assert (!opened);
+	ck_assert_str_eq (text, "");
+	free (text);
+}
+END_TEST
+
 Suite *
 cli_input_paths_suite (void)
 {
@@ -887,6 +975,9 @@ cli_input_paths_suite (void)
 	tcase_add_test (tc, test_main_get_stations_runs_eventcmd_and_releases_hold);
 	tcase_add_test (tc, test_main_user_input_runs_song_action_inside_hold);
 	tcase_add_test (tc, test_main_user_input_ignores_unbound_key);
+	tcase_add_test (tc, test_main_open_log_file_in_both_and_cli_modes);
+	tcase_add_test (tc, test_main_open_log_file_skipped_in_web_mode);
+	tcase_add_test (tc, test_main_open_log_file_skipped_without_setting);
 #ifdef NDEBUG
 	tcase_add_test (tc, test_piano_release_without_hold_is_ignored);
 #endif

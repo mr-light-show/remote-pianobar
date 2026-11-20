@@ -270,7 +270,7 @@ The FIFO allows external programs to control pianobar. See `contrib/remote.sh` f
 | `websocket_host` | `0.0.0.0` | WebSocket bind address (use `127.0.0.1` for localhost only) |
 | `webui_path` | (none) | Custom path to web UI files (defaults to built-in) |
 | `pid_file` | (none) | Path to PID file for daemon mode |
-| `log_file` | (none) | Path to log file for daemon mode |
+| `log_file` | (none) | Path to log file. In `web` (daemon) mode all output goes here; in `both`/`cli` mode the error and debug log lines are also appended here (plain text, no colour codes) while the terminal output stays unchanged |
 
 **Security Note:** By default, `websocket_host` is set to `0.0.0.0`, which binds the web interface to all network interfaces, making it accessible from remote machines. The web interface has no built-in authentication. For localhost-only access, set `websocket_host = 127.0.0.1` in your config. Consider using a firewall to restrict access to trusted IP addresses when exposing the interface remotely.
 

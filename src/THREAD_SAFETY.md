@@ -849,11 +849,13 @@ Pianobar uses a single logging API for diagnostics and errors.
 
 - **User-facing messages:** Use `BarUiMsg(settings, level, format, ...)` for messages shown to the user in the UI (CLI or Web).
 - **Diagnostics and errors:** Use `log_write(kind, format, ...)` from [log.h](log.h):
-  - **LOG_ERROR** (0): Always logs. Use for errors, warnings, and important startup/info messages. Writes to stderr (and to the configured log file when the daemon redirects stderr).
+  - **LOG_ERROR** (0): Always logs. Use for errors, warnings, and important startup/info messages. Writes to stderr (and to the configured log file when the daemon redirects stderr; in `both`/`cli` mode `log_set_file` also appends a plain-text copy, see below).
   - **DEBUG_*** (DEBUG_NETWORK, DEBUG_AUDIO, DEBUG_UI, DEBUG_STATE, DEBUG_WEBSOCKET, DEBUG_WEBSOCKET_PROGRESS): Log only when the corresponding bit is set in the `PIANOBAR_DEBUG` environment variable (e.g. `PIANOBAR_DEBUG=8` for WebSocket, `64` for state rwlock). Call `log_init()` once at startup (main.c does this); the debug mask is read from the environment and kept inside the log module.
   - **DEBUG_CLI**: Kind label for [`BarUiMsg`](ui.c) lines on stderr. `log_init` ORs `DEBUG_CLI` into the internal mask whenever any `PIANOBAR_DEBUG` bit is non-zero, so `log_write(DEBUG_CLI, …)` follows the same `(debug_mask & kind)` rule as other DEBUG kinds; only in **web** / **both** UI modes. When that path is taken, `BarUiMsg` does **not** also print the same text to stdout (avoids duplicate lines when merging streams). Do not call `log_write(DEBUG_CLI, …)` by hand except from `BarUiMsg` unless you intentionally match that format.
 
 Do not use raw `fprintf(stderr, ...)` for diagnostics or errors; use `log_write(LOG_ERROR, ...)` or the appropriate DEBUG_* kind so that output is consistent (timestamps, optional color) and can be directed to the log file when configured.
+
+**Log file copy (`both`/`cli`):** `log_set_file()` (called from `main` after `log_init`) opens `log_file` with `O_APPEND`; `log_write` then formats each emitted line into one buffer and writes it with a single `write()`, so concurrent threads never interleave within a line and no lock is taken (the descriptor is an atomic). Call `log_set_file` before other threads start and `log_close_file` only after they have stopped. `main` never closes it: the descriptor lives until process exit, so lines logged during teardown are still captured. The web-only daemon does not use it: `BarDaemonizeSteps` redirects stderr to `log_file` instead.
 
 When `HAVE_DEBUGLOG` is enabled, each line is prefixed with a colored timestamp and a **kind label** matching the `logKind` (same color as the timestamp); do not repeat that label in the format string (e.g. omit a leading `WebSocket:` when using `DEBUG_WEBSOCKET`). Subsystem tags such as `Socket.IO:` or `PlaybackMgr:` remain in the message body.
 

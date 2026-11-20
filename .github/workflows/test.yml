@@ -24,6 +24,11 @@ jobs:
         if: github.event_name == 'pull_request'
         run: echo 'CFLAGS=-g -O0' >> $GITHUB_ENV
 
+      # Real binary, throw-away HOME; must run before test-coverage, which
+      # leaves coverage-instrumented objects behind.
+      - name: Web-only startup smoke test
+        run: make -j"$(nproc)" test-startup-smoke
+
       - name: Build and test with coverage
         env:
           PIANOBAR_INTEGRATION: "1"

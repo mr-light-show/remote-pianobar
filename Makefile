@@ -375,6 +375,12 @@ test-e2e-fake: pianobar
 	${SILENTECHO} "   TEST  Running web UI E2E against fake Pandora..."
 	${SILENTCMD}chmod +x scripts/e2e-fake.sh && PIANOBAR_BIN=./pianobar ./scripts/e2e-fake.sh
 
+# Web-only daemon startup smoke test against the real binary (no account,
+# network or sound card needed): fds 0/1/2 stay valid and the failure is shown
+test-startup-smoke: pianobar
+	${SILENTECHO} "   TEST  Running web-only startup smoke test..."
+	${SILENTCMD}PIANOBAR_BIN=./pianobar ./test/integration/web_mode_startup.sh
+
 # Reproduce GitHub Actions c-tests in Docker (headless Ubuntu, no sound card)
 test-ci-local:
 	${SILENTECHO} "   TEST  Running CI-local Docker repro..."
@@ -456,4 +462,4 @@ test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-e2e-fake test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen
+.PHONY: install install-libpiano uninstall test test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen

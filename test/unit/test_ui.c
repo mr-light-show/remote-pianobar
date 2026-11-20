@@ -40,12 +40,15 @@ THE SOFTWARE.
 #include <stdint.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <time.h>
 #include "../test_tmp.h"
 #include "../../src/interrupt.h"
+#include "../../src/log.h"
 
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
@@ -652,6 +655,365 @@ START_TEST (test_ui_eventcmd_wait_releases_piano_hold)
 }
 END_TEST
 
+/* Capture what is written to stdout and stderr between begin and end. */
+typedef struct {
+	char *out;
+	char *err;
+	FILE *outFile;
+	FILE *errFile;
+	int savedOut;
+	int savedErr;
+} UiCapture_t;
+
+static void ui_capture_begin (UiCapture_t *cap)
+{
+	cap->outFile = tmpfile ();
+	cap->errFile = tmpfile ();
+	ck_assert_ptr_nonnull (cap->outFile);
+	ck_assert_ptr_nonnull (cap->errFile);
+	fflush (stdout);
+	fflush (stderr);
+	cap->savedOut = dup (STDOUT_FILENO);
+	cap->savedErr = dup (STDERR_FILENO);
+	ck_assert (cap->savedOut >= 0 && cap->savedErr >= 0);
+	ck_assert (dup2 (fileno (cap->outFile), STDOUT_FILENO) >= 0);
+	ck_assert (dup2 (fileno (cap->errFile), STDERR_FILENO) >= 0);
+}
+
+static void ui_capture_end (UiCapture_t *cap)
+{
+	fflush (stdout);
+	fflush (stderr);
+	ck_assert (dup2 (cap->savedOut, STDOUT_FILENO) >= 0);
+	ck_assert (dup2 (cap->savedErr, STDERR_FILENO) >= 0);
+	close (cap->savedOut);
+	close (cap->savedErr);
+	cap->out = read_tmpfile (cap->outFile);
+	cap->err = read_tmpfile (cap->errFile);
+	fclose (cap->outFile);
+	fclose (cap->errFile);
+}
+
+static void ui_capture_msg (const BarSettings_t *settings, BarUiMsg_t type,
+		const char *text, UiCapture_t *cap)
+{
+	ui_capture_begin (cap);
+	BarUiMsg (settings, type, "%s", text);
+	ui_capture_end (cap);
+}
+
+static void ui_capture_free (UiCapture_t *cap)
+{
+	free (cap->out);
+	free (cap->err);
+}
+
+/* The web-only daemon's stdout is /dev/null: without a log_file its fatal
+ * MSG_ERR text would be lost, so it goes to stderr (the journal). */
+START_TEST (test_ui_msg_err_goes_to_stderr_in_web_only_without_log_file)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = NULL;
+
+	ui_capture_msg (&settings, MSG_ERR, "boom\n", &cap);
+	ck_assert_ptr_nonnull (strstr (cap.err, "boom"));
+	ck_assert_ptr_null (strstr (cap.err, "\033[2K"));
+	ck_assert_str_eq (cap.out, "");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_err_in_web_only_uses_configured_format)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = NULL;
+	free (settings.msgFormat[MSG_ERR].prefix);
+	free (settings.msgFormat[MSG_ERR].postfix);
+	settings.msgFormat[MSG_ERR].prefix = strdup ("PRE<");
+	settings.msgFormat[MSG_ERR].postfix = strdup (">POST");
+
+	ui_capture_msg (&settings, MSG_ERR, "boom", &cap);
+	ck_assert_str_eq (cap.err, "PRE<boom>POST");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_info_stays_on_stdout_in_web_only)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = NULL;
+
+	ui_capture_msg (&settings, MSG_INFO, "hello\n", &cap);
+	ck_assert_ptr_nonnull (strstr (cap.out, "hello"));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_err_stays_on_stdout_with_log_file)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = strdup ("/nonexistent/pianobar-test.log");
+
+	ui_capture_msg (&settings, MSG_ERR, "boom\n", &cap);
+	ck_assert_ptr_nonnull (strstr (cap.out, "boom"));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_err_stays_on_stdout_in_cli_and_both)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+	const BarUiMode_t modes[] = {BAR_UI_MODE_CLI, BAR_UI_MODE_BOTH};
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	free (settings.logFile);
+	settings.logFile = NULL;
+	for (size_t i = 0; i < sizeof (modes) / sizeof (modes[0]); i++) {
+		settings.uiMode = modes[i];
+		ui_capture_msg (&settings, MSG_ERR, "boom\n", &cap);
+		ck_assert_ptr_nonnull (strstr (cap.out, "boom"));
+		ck_assert_str_eq (cap.err, "");
+		ui_capture_free (&cap);
+	}
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+/* One-shot HTTP server on loopback in a forked child: answers the first
+ * request with a 200 and body, then exits. Returns the port. */
+static int ui_fake_http_server (const char *body, pid_t *pid)
+{
+	struct sockaddr_in addr;
+	socklen_t addrLen = sizeof (addr);
+	const int lfd = socket (AF_INET, SOCK_STREAM, 0);
+
+	ck_assert (lfd >= 0);
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	ck_assert_int_eq (bind (lfd, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	ck_assert_int_eq (listen (lfd, 1), 0);
+	ck_assert_int_eq (getsockname (lfd, (struct sockaddr *) &addr, &addrLen), 0);
+
+	fflush (NULL);
+	*pid = fork ();
+	ck_assert (*pid >= 0);
+	if (*pid == 0) {
+		char req[8192], resp[1024];
+		size_t have = 0;
+		const int cfd = (alarm (10), accept (lfd, NULL, NULL));
+
+		/* Read the headers and the whole body before answering. */
+		while (cfd >= 0 && have < sizeof (req) - 1) {
+			const ssize_t n = read (cfd, req + have, sizeof (req) - 1 - have);
+			if (n <= 0) {
+				break;
+			}
+			have += (size_t) n;
+			req[have] = '\0';
+			const char *end = strstr (req, "\r\n\r\n");
+			if (end != NULL) {
+				const char *cl = strstr (req, "Content-Length: ");
+				const size_t want = (size_t) (end + 4 - req) +
+						(cl != NULL ? (size_t) atol (cl + 16) : 0);
+				if (have >= want) {
+					break;
+				}
+			}
+		}
+		snprintf (resp, sizeof (resp), "HTTP/1.1 200 OK\r\n"
+				"Content-Type: text/plain\r\nContent-Length: %zu\r\n"
+				"Connection: close\r\n\r\n%s", strlen (body), body);
+		if (cfd >= 0 && write (cfd, resp, strlen (resp)) < 0) {
+			_exit (1);
+		}
+		_exit (0);
+	}
+	close (lfd);
+	return ntohs (addr.sin_port);
+}
+
+/* Run a real login against a closed loopback port, so BarUiPianoCall reports
+ * a network error, and capture where that text goes. With proxyPort set,
+ * run a plain-HTTP GET_SETTINGS through that proxy instead, so the request
+ * succeeds and whatever the proxy answers is the Pandora response. */
+static void ui_piano_call_run (BarUiMode_t mode, unsigned int debugMask,
+		int proxyPort, UiCapture_t *cap)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t loginData;
+	PianoReturn_t pRet = PIANO_RET_OK;
+	CURLcode wRet = CURLE_OK;
+
+	log_set_debug_mask (debugMask);
+	memset (&app, 0, sizeof (app));
+	memset (&loginData, 0, sizeof (loginData));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = mode;
+	free (app.settings.logFile);
+	app.settings.logFile = NULL;
+	free (app.settings.rpcHost);
+	free (app.settings.rpcTlsPort);
+	app.settings.rpcHost = strdup ("127.0.0.1");
+	app.settings.rpcTlsPort = strdup ("1");
+	app.settings.timeout = 1;
+	app.settings.maxRetry = 1;
+	app.settings.username = strdup ("user");
+	app.settings.password = strdup ("pass");
+
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	app.http = curl_easy_init ();
+	ck_assert_ptr_nonnull (app.http);
+	ck_assert_int_eq (PianoInit (&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	loginData.user = app.settings.username;
+	loginData.password = app.settings.password;
+	loginData.step = 0;
+	BarUiPianoCallClearTestHook ();
+
+	if (proxyPort > 0) {
+		char proxy[64];
+
+		snprintf (proxy, sizeof (proxy), "http://127.0.0.1:%d", proxyPort);
+		app.settings.controlProxy = strdup (proxy);
+		free (app.settings.rpcHost);
+		app.settings.rpcHost = strdup ("pandora.test.invalid");
+		app.ph.user.authToken = strdup ("token");
+		app.ph.user.listenerId = strdup ("listener");
+	}
+
+	ui_capture_begin (cap);
+	if (proxyPort > 0) {
+		ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_GET_SETTINGS, NULL,
+				&pRet, &wRet));
+		ck_assert_int_eq (wRet, CURLE_OK);
+		ck_assert_int_eq (pRet, PIANO_RET_P_CALL_NOT_ALLOWED);
+	} else {
+		ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &loginData,
+				&pRet, &wRet));
+	}
+	ui_capture_end (cap);
+	log_set_debug_mask (0);
+
+	curl_easy_cleanup (app.http);
+	app.http = NULL;
+	PianoDestroy (&app.ph);
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+
+/* The login/network failure that ends a web-only startup is reported with
+ * MSG_NONE; without a log_file it must still reach stderr. */
+START_TEST (test_ui_piano_call_error_reaches_stderr_in_web_only_without_log_file)
+{
+	UiCapture_t cap;
+
+	ui_piano_call_run (BAR_UI_MODE_WEB, 0, 0, &cap);
+	ck_assert_ptr_nonnull (strstr (cap.err, "Network error:"));
+	ck_assert_str_eq (cap.out, "");
+	ui_capture_free (&cap);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+/* With the debug CLI mirror on, the error is logged once, not twice. */
+START_TEST (test_ui_piano_call_error_logged_once_with_debug_cli_in_web_only)
+{
+	UiCapture_t cap;
+	const char *first;
+
+	ui_piano_call_run (BAR_UI_MODE_WEB, DEBUG_CLI, 0, &cap);
+	first = strstr (cap.err, "Network error:");
+	ck_assert_ptr_nonnull (first);
+	ck_assert_ptr_null (strstr (first + 1, "Network error:"));
+	ui_capture_free (&cap);
+}
+END_TEST
+#endif
+
+/* A Pandora error response (HTTP fine, API says no) is reported the same
+ * way: stderr in a log-file-less web-only daemon, stdout otherwise. */
+START_TEST (test_ui_piano_call_api_error_reaches_stderr_in_web_only)
+{
+	UiCapture_t cap;
+	pid_t server;
+	int status;
+	const int port = ui_fake_http_server (
+			"{\"stat\":\"fail\",\"message\":\"no\",\"code\":1008}", &server);
+
+	ui_piano_call_run (BAR_UI_MODE_WEB, 0, port, &cap);
+	ck_assert_int_eq (waitpid (server, &status, 0), server);
+	ck_assert (WIFEXITED (status) && WEXITSTATUS (status) == 0);
+	ck_assert_ptr_nonnull (strstr (cap.err, "Error: "));
+	ck_assert_ptr_nonnull (strstr (cap.err,
+			PianoErrorToStr (PIANO_RET_P_CALL_NOT_ALLOWED)));
+	ck_assert_str_eq (cap.out, "");
+	ui_capture_free (&cap);
+}
+END_TEST
+
+START_TEST (test_ui_piano_call_api_error_stays_on_stdout_in_both)
+{
+	UiCapture_t cap;
+	pid_t server;
+	int status;
+	const int port = ui_fake_http_server (
+			"{\"stat\":\"fail\",\"message\":\"no\",\"code\":1008}", &server);
+
+	ui_piano_call_run (BAR_UI_MODE_BOTH, 0, port, &cap);
+	ck_assert_int_eq (waitpid (server, &status, 0), server);
+	ck_assert (WIFEXITED (status) && WEXITSTATUS (status) == 0);
+	ck_assert_ptr_nonnull (strstr (cap.out, "Error: "));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+}
+END_TEST
+
+START_TEST (test_ui_piano_call_error_stays_on_stdout_in_both)
+{
+	UiCapture_t cap;
+
+	ui_piano_call_run (BAR_UI_MODE_BOTH, 0, 0, &cap);
+	ck_assert_ptr_nonnull (strstr (cap.out, "Network error:"));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -673,6 +1035,18 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
 	tcase_add_test (tc, test_ui_select_station_id_returns_copied_id);
 	tcase_add_test (tc, test_ui_eventcmd_wait_releases_piano_hold);
+	tcase_add_test (tc, test_ui_msg_err_goes_to_stderr_in_web_only_without_log_file);
+	tcase_add_test (tc, test_ui_msg_err_in_web_only_uses_configured_format);
+	tcase_add_test (tc, test_ui_msg_info_stays_on_stdout_in_web_only);
+	tcase_add_test (tc, test_ui_msg_err_stays_on_stdout_with_log_file);
+	tcase_add_test (tc, test_ui_msg_err_stays_on_stdout_in_cli_and_both);
+	tcase_add_test (tc, test_ui_piano_call_error_reaches_stderr_in_web_only_without_log_file);
+	tcase_add_test (tc, test_ui_piano_call_error_stays_on_stdout_in_both);
+	tcase_add_test (tc, test_ui_piano_call_api_error_reaches_stderr_in_web_only);
+	tcase_add_test (tc, test_ui_piano_call_api_error_stays_on_stdout_in_both);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test (tc, test_ui_piano_call_error_logged_once_with_debug_cli_in_web_only);
+#endif
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;
