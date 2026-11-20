@@ -19,9 +19,9 @@ Player protocol strings and shared concepts start here (`locale/en.yaml`), then 
 2. Make a **minimal** change: match surrounding module style; no drive-by refactors.
 3. Run the **verification commands** below for every surface you touched.
 4. **User-facing text:** edit `locale/en.yaml`, then `make locale-codegen`. Do not hand-edit generated locale artifacts.
-5. **Before `git push`:** run `make test-all` from the repo root (allow ≥120s). Do not push if it fails.
-   - If **`Makefile`**, **`test/**`**, or **`.github/workflows/test.yml`** changed: run **`make test-ci-local`** (Docker) or **`make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all`**. See `.cursor/skills/pre-push-ci-parity/SKILL.md`.
-   - If **`src/**`**, **`src/libpiano/**`**, **`src/websocket/**`**, or **`webui/src/**`** changed: run **`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage`** (or web UI coverage) and confirm **≥90% patch coverage** on your diff before push. See `.cursor/skills/pre-push-coverage/SKILL.md` and [codecov.yml](codecov.yml).
+5. **Before `git push`:** run **`make gates`** from the repo root (allow ≥300s; about 2 minutes from a clean tree). It runs, at most three at a time and each in its own build directory: `make test-ci-local` (Docker, = CI `c-tests`), `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1` `make test-coverage`, `make test-all` (`-O2` tests + lint), `PIANOBAR_CI_TARGET=test-asan make test-ci-local` (= CI `c-asan`), `make test-asan` and `make test-tsan`. A failed step is rerun alone once; do not push if `make gates` exits non-zero. Without Docker, run `GATES_STEPS="coverage test-all asan tsan" make gates`; the minimum is `make test-all`.
+   - If **`Makefile`**, **`test/**`**, or **`.github/workflows/test.yml`** changed: `make gates` covers CI parity (its Docker steps build a fresh copy of the tree). Without Docker: **`make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all`**. See `.cursor/skills/pre-push-ci-parity/SKILL.md`.
+   - If **`src/**`**, **`src/libpiano/**`**, **`src/websocket/**`**, or **`webui/src/**`** changed: also confirm **≥90% patch coverage** on your diff from a standalone **`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage`** (or web UI coverage); under `make gates` load a few timing-dependent lines can differ. See `.cursor/skills/pre-push-coverage/SKILL.md` and [codecov.yml](codecov.yml).
 6. **Commits and pushes** only when the user explicitly asks.
 
 ---
@@ -52,9 +52,10 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Minimal build (no runtime `debug=` support) | `make minimal` or `./build.sh minimal` |
 | C unit tests | `make test` |
 | C unit tests, one suite per process (parallel) | `make test-par` (`TEST_JOBS=N`; `make test-coverage`, `test-asan`, `test-tsan` run this way) |
-| **Pre-push gate** (tests + cppcheck) | `make test-all` |
+| **Pre-push gates** (Docker CI repro, coverage, `test-all`, ASan, TSan, concurrently) | `make gates` (`GATES_STEPS`, `GATES_JOBS`; logs in `build/gates/`) |
+| Tests + cppcheck (what the pre-push hook runs) | `make test-all` |
 | **Pre-push patch coverage** (after `src/**` or `webui/src/**` changes) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` — target ≥90% on diff ([codecov.yml](codecov.yml)); see `.cursor/skills/pre-push-coverage/SKILL.md` |
-| **Pre-push CI parity** (after `Makefile` / `test/**` changes) | `make test-ci-local` or `make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` |
+| **Pre-push CI parity** (after `Makefile` / `test/**` changes) | `make gates`, or `make test-ci-local`, or `make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` |
 | C coverage (CI-style) | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage` (requires `lcov`) |
 | Docker CI repro | `make test-ci-local` |
 | Web UI E2E against real pianobar + fake Pandora (no account) | `make test-e2e-fake` |
@@ -65,7 +66,7 @@ locale/*.yaml           # Canonical i18n source (en.yaml is canonical English)
 | Web UI coverage | `cd webui && npm test -- --run --coverage` |
 | Unified build + test | `./build.sh --test` |
 
-**Note:** Local pre-push hook runs `make test-all`, or **`make distclean && PIANOBAR_INTEGRATION=1 make test-all`** when pushed commits touch `Makefile` or `test/**`. GitHub Actions C job runs `PIANOBAR_INTEGRATION=1 make test-coverage` (clean build). Run the CI-parity command when you change test infrastructure — see `.cursor/skills/pre-push-ci-parity/SKILL.md`.
+**Note:** Local pre-push hook runs `make test-all`, or **`make distclean && PIANOBAR_INTEGRATION=1 make test-all`** when pushed commits touch `Makefile` or `test/**`. GitHub Actions C jobs run `PIANOBAR_INTEGRATION=1 make test-coverage` (`c-tests`) and `make test-asan` (`c-asan`) from a fresh checkout. `make gates` runs both in Docker plus the host variants. Run the CI-parity command when you change test infrastructure — see `.cursor/skills/pre-push-ci-parity/SKILL.md`.
 
 **Git hooks (one-time):** `git config core.hooksPath .githooks` — pre-push runs `make test-all`.
 

@@ -284,6 +284,10 @@ make test
 
 `make test-ci-local` builds a local image (`pianobar-ci:ubuntu-24.04`, from `.github/docker/Dockerfile.ci-test` and `ci-test-deps.txt`) once and reuses it; Docker's layer cache rebuilds it when the package list changes, and `PIANOBAR_CI_REBUILD=1` forces a fresh `apt-get` against the current base image. The host tree is mounted read-only and copied into the container, so the run never writes objects, `.gcda` files or `coverage.info` into the host tree, and no `make distclean` is needed after it. `PIANOBAR_CI_OUT=<dir>` copies the container's `coverage.info` out.
 
+#### All gates at once
+
+`make gates` (`scripts/gates.sh`) runs the pre-push gates concurrently from one tree: `make test-ci-local` (Docker, CI `c-tests`), `make test-coverage`, `make test-all` (`-O2` tests and lint), `PIANOBAR_CI_TARGET=test-asan make test-ci-local` (Docker, CI `c-asan` with LeakSanitizer), `make test-asan` and `make test-tsan`, all with `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1`. Each step builds in its own directory, so none needs `make clean`. At most `GATES_JOBS` (default 3) run at once, each with `make -j(ncpu/3)` and `TEST_JOBS=3` (`GATES_MAKE_JOBS`, `GATES_TEST_JOBS`), because the playback suites use real-time waits and flake on an oversubscribed host. A failed step is rerun alone once and reported as "passed on rerun"; a second failure fails the gate. `GATES_STEPS="coverage test-all asan tsan"` picks steps (for example without Docker). Logs are in `build/gates/<step>.log`, and the summary lists each step's exit status, duration and `Checks:` count. For a patch-coverage number, run `make test-coverage` on its own: under gate load a few timing-dependent lines can differ.
+
 #### Static analysis
 
 `make lint` runs cppcheck and is strict: a suppression that matches nothing fails the run, so stale ones are caught on current cppcheck. cppcheck older than 2.18 (for example Ubuntu 24.04's apt package) reports many existing suppressions as unmatched; run `make lint CPPCHECK_LENIENT=1` there.

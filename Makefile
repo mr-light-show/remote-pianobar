@@ -508,4 +508,10 @@ test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-par test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen clean distclean
+# Pre-push gates at the same time from this tree (scripts/gates.sh): Docker
+# (make test-ci-local), test-coverage, test-all, test-asan and test-tsan, at
+# most GATES_JOBS (default 3) at once; a failed step is rerun alone once.
+gates: locale-codegen
+	${SILENTCMD}./scripts/gates.sh
+
+.PHONY: install install-libpiano uninstall test test-par test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean
