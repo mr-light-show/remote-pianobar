@@ -329,6 +329,31 @@ describe('PianobarApp', () => {
     expect(document.querySelector('toast-notification')).toBeTruthy();
   });
 
+  it.each([
+    ['station.getGenres', 'genreLoading'],
+    ['station.getStationModes', 'modesLoading'],
+    ['music.search', 'searchLoading'],
+  ])('%s error stops only the %s spinner', async (operation, flag) => {
+    const el = await mountConnectedApp();
+    const loading = el as unknown as Record<string, boolean>;
+    const flags = ['genreLoading', 'modesLoading', 'searchLoading', 'infoLoading'];
+    for (const name of flags) loading[name] = true;
+    hoisted.fire('error', { operation, message: 'Failed' });
+    await el.updateComplete;
+    for (const name of flags) expect(loading[name]).toBe(name !== flag);
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
+  it('an error for another operation leaves the loading spinners alone', async () => {
+    const el = await mountConnectedApp();
+    const loading = el as unknown as Record<string, boolean>;
+    const flags = ['genreLoading', 'modesLoading', 'searchLoading', 'infoLoading'];
+    for (const name of flags) loading[name] = true;
+    hoisted.fire('error', { operation: 'station.rename', message: 'Failed' });
+    await el.updateComplete;
+    for (const name of flags) expect(loading[name]).toBe(true);
+  });
+
   it('error event uses generic message when message is omitted', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('error', { operation: 'volume.set' });
