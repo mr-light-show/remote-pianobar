@@ -3587,15 +3587,17 @@ START_TEST (test_player_mono_and_stereo_fixtures_keep_channel_count)
 }
 END_TEST
 
-/* A stream whose channel count changes mid-song (stereo frames first, mono
- * codec parameters) must neither overrun nor abort; mismatched frames are
+/* A stream whose channel count changes mid-song (stereo frames first, then
+ * mono) must neither overrun nor abort; mismatched frames are
  * rejected by the filter source and the rest plays in the opened format. */
 START_TEST (test_player_mid_stream_channel_change_stays_in_opened_format)
 {
 	SourceChannelRead read;
 	read_fixture_source ("test/fixtures/tone_channel_change.mp3", NULL, &read);
-	ck_assert_int_eq (read.channels, 1);
-	ck_assert_int_eq (read.sinkChannels, 1);
+	/* Which layout the probe picks depends on the FFmpeg version (8 opens it
+	 * mono, 6.1 stereo); the source must match the filter output either way. */
+	ck_assert (read.channels == 1 || read.channels == 2);
+	ck_assert_int_eq (read.channels, read.sinkChannels);
 	ck_assert (read.guardIntact);
 	ck_assert (read.nonSilent);
 	ck_assert_uint_gt (read.frames, 0);
