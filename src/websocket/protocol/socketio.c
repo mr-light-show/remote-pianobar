@@ -144,6 +144,14 @@ static void BarSocketIoEmitNotImplemented (BarApp_t *app, const char *operation,
 	BarSocketIoEmitErrorTo (app, requester, operation, message);
 }
 
+/* Tell the requester (or everyone, for BAR_WS_DEST_BROADCAST) that a request
+ * could not be served, with the localized text `key`: a client waiting for a
+ * reply must not be left to its own timeout */
+static void BarSocketIoEmitRequestRejected (BarApp_t *app, BarWsConnId_t requester,
+                                            const char *operation, const char *key) {
+	BarSocketIoEmitErrorTo (app, requester, operation, BarL10nGet (app ? &app->l10n : NULL, key));
+}
+
 /* Parse Socket.IO protocol message format */
 static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName, 
                                           json_object **data) {
@@ -1058,20 +1066,29 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data,
 	const char *stationId;
 	PianoStation_t *station;
 	
-	if (!app || !data) {
+	if (!app) {
+		return;
+	}
+	if (!data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid parameters\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	/* Extract stationId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - missing stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	stationId = json_object_get_string(stationIdObj);
 	if (!stationId) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
@@ -1081,12 +1098,16 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data,
 	if (!station) {
 		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - station not found\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_not_found");
 		return;
 	}
 	
 	if (station->isQuickMix) {
 		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - QuickMix not supported\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_modes_quickmix");
 		return;
 	}
 	
@@ -1194,18 +1215,31 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data,
 	const char *stationId;
 	PianoStation_t *station;
 	
-	if (!app || !data) {
+	if (!app) {
+		return;
+	}
+	if (!data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid parameters\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	/* Extract stationId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - missing stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	stationId = json_object_get_string(stationIdObj);
+	if (!stationId) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_id_missing");
+		return;
+	}
 	
 	/* Resolve and use the station inside pianoHttpMutex */
 	pthread_mutex_lock(&app->pianoHttpMutex);
@@ -1213,6 +1247,8 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data,
 	if (!station) {
 		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_not_found");
 		return;
 	}
 	
@@ -1564,21 +1600,30 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data,
 	json_object *queryObj;
 	const char *query;
 	
-	if (!app || !data) {
+	if (!app) {
+		return;
+	}
+	if (!data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid parameters\n");
+		BarSocketIoEmitRequestRejected(app, requester, "music.search",
+				"web.socket.invalid_search");
 		return;
 	}
 	
 	/* Extract query from data */
 	if (!json_object_object_get_ex(data, "query", &queryObj)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - missing query\n");
+		BarSocketIoEmitRequestRejected(app, requester, "music.search",
+				"web.socket.invalid_search");
 		return;
 	}
 	
 	query = json_object_get_string(queryObj);
 	
-	if (!query) {
+	if (!query || !*query) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid query\n");
+		BarSocketIoEmitRequestRejected(app, requester, "music.search",
+				"web.socket.invalid_search");
 		return;
 	}
 	

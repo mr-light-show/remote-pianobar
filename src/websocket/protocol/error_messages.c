@@ -79,9 +79,17 @@ const char* BarWsGetFriendlyErrorMessage(const BarL10nContext_t *l10n,
 
 	/* Already specific and localized by the sender: the per-operation
 	 * fallback below would replace it with a generic failure text */
-	const char *tooLarge = BarL10nGet (l10n, "web.socket.response_too_large");
-	if (strcmp (originalError, tooLarge) == 0) {
-		return originalError;
+	static const char *const keptKeys[] = {
+		"web.socket.response_too_large",
+		"web.socket.station_not_found",
+		"web.socket.station_id_missing",
+		"web.socket.station_modes_quickmix",
+		"web.socket.invalid_search",
+	};
+	for (size_t i = 0; i < sizeof (keptKeys) / sizeof (keptKeys[0]); i++) {
+		if (strcmp (originalError, BarL10nGet (l10n, keptKeys[i])) == 0) {
+			return originalError;
+		}
 	}
 
 	if (strstr (originalError, "Call not allowed") != NULL ||

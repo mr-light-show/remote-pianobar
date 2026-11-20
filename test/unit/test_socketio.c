@@ -1993,7 +1993,10 @@ START_TEST (test_socketio_handle_get_station_modes_skips_quickmix)
 	json_object_object_add (data, "stationId", json_object_new_string ("QM"));
 	BarSocketIoHandleGetStationModes (&app, data, BAR_WS_DEST_BROADCAST);
 	json_object_put (data);
-	ck_assert_ptr_null (test_last_broadcast ());
+	/* No modes reply, and no Pandora request: the requester is told instead */
+	ck_assert_ptr_nonnull (test_last_broadcast ());
+	ck_assert (strstr (test_last_broadcast (), "\"error\"") != NULL);
+	ck_assert (strstr (test_last_broadcast (), "station.getStationModes") != NULL);
 	clearBroadcastMock ();
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
@@ -2543,6 +2546,102 @@ START_TEST (test_data_reply_errors_broadcast_without_requester)
 	ck_assert_uint_eq (test_ws_cap.frameCount, 8);
 	ck_assert_uint_eq (TestWsCaptureCount (0, "\"error\""), 4);
 	ck_assert_uint_eq (TestWsCaptureCount (1, "\"error\""), 4);
+	info_fixture_destroy (&f);
+}
+END_TEST
+
+static int g_unservedPandoraCalls;
+
+static bool
+mock_count_pandora_calls (BarApp_t *app, const PianoRequestType_t type, void *data,
+                          PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) type;
+	(void) data;
+	g_unservedPandoraCalls++;
+	*pRet = PIANO_RET_ERR;
+	*wRet = CURLE_OK;
+	return false;
+}
+
+/* A request that cannot be served (the lookup fails before Pandora is asked)
+ * is answered with exactly one localized `error` for `operation` to the
+ * requester, nothing to other clients, and no Pandora request */
+static void expect_unserved_error (InfoFixture_t *f, const char *message,
+		const char *operation, const char *l10nKey) {
+	g_unservedPandoraCalls = 0;
+	expect_error_to_requester_only (f, message, operation);
+	ck_assert_msg (g_unservedPandoraCalls == 0, "%s: Pandora was asked", message);
+	ck_assert_msg (TestWsCaptureCount (1, BarL10nGet (&f->app.l10n, l10nKey)) == 1,
+			"%s: wrong message (wanted %s)", message, l10nKey);
+}
+
+/* A request that cannot be served must not leave its requester waiting
+ * until its own timeout */
+START_TEST (test_unservable_requests_get_requester_error)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	PianoStation_t quickmix;
+	memset (&quickmix, 0, sizeof (quickmix));
+	quickmix.id = "Q1";
+	quickmix.isQuickMix = true;
+	f.station.head.next = (PianoListHead_t *) &quickmix;
+	BarUiPianoCallSetTestHook (mock_count_pandora_calls);
+
+	expect_unserved_error (&f, "2[\"station.getInfo\",{\"stationId\":\"nope\"}]",
+			"station.getStationInfo", "web.socket.station_not_found");
+	expect_unserved_error (&f, "2[\"station.getInfo\",{\"stationId\":null}]",
+			"station.getStationInfo", "web.socket.station_id_missing");
+	expect_unserved_error (&f, "2[\"station.getInfo\",{}]",
+			"station.getStationInfo", "web.socket.station_id_missing");
+	expect_unserved_error (&f, "2[\"station.getInfo\",null]",
+			"station.getStationInfo", "web.socket.station_id_missing");
+
+	expect_unserved_error (&f, "2[\"station.getModes\",{\"stationId\":\"nope\"}]",
+			"station.getStationModes", "web.socket.station_not_found");
+	expect_unserved_error (&f, "2[\"station.getModes\",{\"stationId\":\"Q1\"}]",
+			"station.getStationModes", "web.socket.station_modes_quickmix");
+	expect_unserved_error (&f, "2[\"station.getModes\",{\"stationId\":null}]",
+			"station.getStationModes", "web.socket.station_id_missing");
+	expect_unserved_error (&f, "2[\"station.getModes\",{}]",
+			"station.getStationModes", "web.socket.station_id_missing");
+	expect_unserved_error (&f, "2[\"station.getModes\",null]",
+			"station.getStationModes", "web.socket.station_id_missing");
+
+	expect_unserved_error (&f, "2[\"music.search\",{\"query\":null}]",
+			"music.search", "web.socket.invalid_search");
+	expect_unserved_error (&f, "2[\"music.search\",{\"query\":\"\"}]",
+			"music.search", "web.socket.invalid_search");
+	expect_unserved_error (&f, "2[\"music.search\",{}]",
+			"music.search", "web.socket.invalid_search");
+	expect_unserved_error (&f, "2[\"music.search\",null]",
+			"music.search", "web.socket.invalid_search");
+
+	BarUiPianoCallClearTestHook ();
+	f.station.head.next = NULL;
+	info_fixture_destroy (&f);
+}
+END_TEST
+
+/* The same failures called without a requester are broadcast, like the
+ * Pandora failures of these handlers */
+START_TEST (test_unservable_requests_broadcast_without_requester)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	BarUiPianoCallSetTestHook (mock_count_pandora_calls);
+
+	json_object *data = json_tokener_parse ("{\"stationId\":\"nope\"}");
+	BarSocketIoHandleGetStationInfo (&f.app, data, BAR_WS_DEST_BROADCAST);
+	BarSocketIoHandleGetStationModes (&f.app, data, BAR_WS_DEST_BROADCAST);
+	json_object_put (data);
+	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
+	ck_assert_int_eq (g_unservedPandoraCalls, 0);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"error\""), 2);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"error\""), 2);
 	info_fixture_destroy (&f);
 }
 END_TEST
@@ -3373,6 +3472,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_data_replies_go_to_requester_only);
 	tcase_add_test(tc_handle, test_data_reply_errors_go_to_requester_only);
 	tcase_add_test(tc_handle, test_data_reply_errors_broadcast_without_requester);
+	tcase_add_test(tc_handle, test_unservable_requests_get_requester_error);
+	tcase_add_test(tc_handle, test_unservable_requests_broadcast_without_requester);
 	tcase_add_test(tc_handle, test_state_changing_action_errors_still_broadcast);
 	tcase_add_test(tc_handle, test_process_event_carries_player_version);
 	tcase_add_test(tc_handle, test_not_implemented_action_errors_requester_only);
