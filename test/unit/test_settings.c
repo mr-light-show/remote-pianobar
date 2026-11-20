@@ -460,7 +460,7 @@ START_TEST (test_settings_short_keys_and_act_prefix) {
 	ck_assert_int_eq (write_file (accpath,
 			"=1\n"
 			"   =1\n"
-			"user = suser\n"
+			"user = suser\r\n"
 			"password = spass\n"
 			"account_label ="), 0);
 
@@ -473,7 +473,7 @@ START_TEST (test_settings_short_keys_and_act_prefix) {
 			"=1\n"
 			"   =1\n"
 			"act_ = 1\n"
-			"act_songlove = L\n"
+			"act_songlove = L\r\n"
 			"account = short:short.conf\n"
 			"unterminated ="), 0);
 

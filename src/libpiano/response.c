@@ -43,8 +43,7 @@ static char *PianoJsonStrdup (json_object *j, const char *key) {
 	if (json_object_object_get_ex (j, key, &v) && v != NULL &&
 			!json_object_is_type (v, json_type_object) &&
 			!json_object_is_type (v, json_type_array)) {
-		const char * const str = json_object_get_string (v);
-		return str != NULL ? strdup (str) : NULL;
+		return strdup (json_object_get_string (v));
 	} else {
 		return NULL;
 	}

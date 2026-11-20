@@ -338,6 +338,14 @@ START_TEST (test_request_standard_null_user_token)
 	ck_assert_int_eq (PianoRequest (&ph, &req, PIANO_REQUEST_GET_STATIONS),
 	        PIANO_RET_INVALID_RESPONSE);
 	free (req.postData);
+
+	/* ... and a missing user id */
+	free (ph.user.listenerId);
+	ph.user.listenerId = NULL;
+	ph.user.authToken = strdup ("tok");
+	ck_assert_int_eq (PianoRequest (&ph, &req, PIANO_REQUEST_GET_GENRE_STATIONS),
+	        PIANO_RET_INVALID_RESPONSE);
+	free (req.postData);
 	PianoDestroy (&ph);
 }
 END_TEST
@@ -432,6 +440,206 @@ START_TEST (test_response_playlist_null_encoding)
 }
 END_TEST
 
+/* Container values (object/array) are not usable strings: station skipped */
+START_TEST (test_response_station_container_name_skipped)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":["
+	        "{\"stationName\":{},\"stationToken\":\"a\"},"
+	        "{\"stationName\":[],\"stationToken\":\"b\"},"
+	        "{\"stationName\":42,\"stationToken\":\"c\"}]}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	/* numbers are still stringified, containers are rejected */
+	ck_assert_ptr_nonnull (ph.stations);
+	ck_assert_str_eq (ph.stations->name, "42");
+	ck_assert_ptr_null (ph.stations->head.next);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* "stations":null and null entries are treated as empty / skipped */
+START_TEST (test_response_stations_null_and_null_entry)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	ck_assert_int_eq (callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":null}}"), PIANO_RET_OK);
+	ck_assert_ptr_null (ph.stations);
+	PianoDestroy (&ph);
+
+	ck_assert_int_eq (callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":[null,"
+	        "{\"stationName\":\"n\",\"stationToken\":\"t\"}]}}"), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (ph.stations);
+	ck_assert_str_eq (ph.stations->id, "t");
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_login_step0_missing_partner_id)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 0);
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{"
+	        "\"syncTime\":\"00\",\"partnerAuthToken\":\"t\"}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_INVALID_RESPONSE);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_login_step1_null_user_id)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 1);
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"userId\":null,"
+	        "\"userAuthToken\":\"tok\"}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_INVALID_RESPONSE);
+	ck_assert_ptr_null (ph.user.authToken);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* Three explanations exercise every separator branch */
+START_TEST (test_response_explain_three_traits)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataExplain_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_EXPLAIN;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"explanations\":["
+	        "{\"focusTraitName\":\"a\"},{\"focusTraitName\":\"b\"},"
+	        "{\"focusTraitName\":\"c\"}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (strstr (data.retExplain, "a, b and c."));
+	free (data.retExplain);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* A normal playlist item with a known encoding, rating and gain */
+START_TEST (test_response_playlist_mp3_item)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"songName\":\"no artist\"},"
+	        "{\"artistName\":\"A\",\"songName\":\"S\",\"songRating\":1,"
+	        "\"trackGain\":\"-3.5\",\"trackLength\":120,"
+	        "\"audioUrlMap\":{\"highQuality\":{\"encoding\":\"mp3\","
+	        "\"audioUrl\":\"http://x/y\"}}}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.retPlaylist);
+	ck_assert_int_eq (data.retPlaylist->audioFormat, PIANO_AF_MP3);
+	ck_assert_str_eq (data.retPlaylist->audioUrl, "http://x/y");
+	ck_assert_int_eq (data.retPlaylist->rating, PIANO_RATE_LOVE);
+	ck_assert_int_eq (data.retPlaylist->length, 120);
+	PianoDestroyPlaylist (data.retPlaylist);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_search_results)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataSearch_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_SEARCH;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{"
+	        "\"artists\":[{\"artistName\":\"A\",\"musicToken\":\"m1\"},"
+	        "{\"artistName\":null,\"musicToken\":\"m2\"}],"
+	        "\"songs\":[{\"songName\":\"S\",\"artistName\":\"A\","
+	        "\"musicToken\":\"m3\"}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.searchResult.artists);
+	ck_assert_str_eq (data.searchResult.artists->name, "A");
+	ck_assert_ptr_null (((PianoArtist_t *) data.searchResult.artists->head.next)->name);
+	ck_assert_ptr_nonnull (data.searchResult.songs);
+	PianoDestroySearchResult (&data.searchResult);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_station_info_seeds_and_feedback)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetStationInfo_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_GET_STATION_INFO;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{"
+	        "\"music\":{\"songs\":[{\"songName\":\"S\",\"artistName\":\"A\","
+	        "\"seedId\":\"s1\"}],\"artists\":[{\"artistName\":\"B\","
+	        "\"seedId\":\"s2\"}]},"
+	        "\"feedback\":{\"thumbsUp\":[{\"songName\":\"U\",\"artistName\":\"A\","
+	        "\"feedbackId\":\"f1\",\"isPositive\":true,\"trackLength\":5}],"
+	        "\"thumbsDown\":\"bogus\"}}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.info.songSeeds);
+	ck_assert_ptr_nonnull (data.info.artistSeeds);
+	ck_assert_ptr_nonnull (data.info.feedback);
+	ck_assert_int_eq (data.info.feedback->rating, PIANO_RATE_LOVE);
+	PianoDestroyStationInfo (&data.info);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_station_modes)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetStationModes_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_GET_STATION_MODES;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"currentModeId\":1,"
+	        "\"availableModes\":[7,{\"modeId\":1,\"modeName\":\"Mode\","
+	        "\"modeDescription\":null}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.retModes);
+	ck_assert_str_eq (data.retModes->name, "Mode");
+	ck_assert_ptr_null (data.retModes->description);
+	ck_assert (data.retModes->active);
+	ck_assert_ptr_null (data.retModes->head.next);
+	PianoDestroyStationMode (data.retModes);
+	PianoDestroy (&ph);
+}
+END_TEST
+
 Suite *libpiano_response_suite (void) {
 	Suite *s = suite_create ("libpiano_response");
 	TCase *tc = tcase_create ("JSON parsing");
@@ -454,6 +662,15 @@ Suite *libpiano_response_suite (void) {
 	tcase_add_test (tc, test_request_login_step1_null_partner_token);
 	tcase_add_test (tc, test_request_standard_null_user_token);
 	tcase_add_test (tc, test_response_lists_not_arrays);
+	tcase_add_test (tc, test_response_station_container_name_skipped);
+	tcase_add_test (tc, test_response_stations_null_and_null_entry);
+	tcase_add_test (tc, test_response_login_step0_missing_partner_id);
+	tcase_add_test (tc, test_response_login_step1_null_user_id);
+	tcase_add_test (tc, test_response_explain_three_traits);
+	tcase_add_test (tc, test_response_playlist_mp3_item);
+	tcase_add_test (tc, test_response_search_results);
+	tcase_add_test (tc, test_response_station_info_seeds_and_feedback);
+	tcase_add_test (tc, test_response_station_modes);
 	tcase_add_test (tc, test_response_create_station_null_token);
 	tcase_add_test (tc, test_response_create_station_ok);
 	tcase_add_test (tc, test_response_playlist_null_encoding);
