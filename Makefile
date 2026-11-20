@@ -443,7 +443,12 @@ lint-test:
 		-I ${LIBPIANO_INCLUDE} -I ${PIANOBAR_DIR} ${TEST_DIR}/**/*.c ${TEST_DIR}/*.c
 
 # Comprehensive test suite: unit tests + linting
-test-all: test lint
+# Tests for the shell helpers under scripts/ (change-scope classifier)
+test-scripts:
+	${SILENTECHO} "   TEST  scripts/changed-scope.sh..."
+	${SILENTCMD}bash scripts/test-changed-scope.sh
+
+test-all: test lint test-scripts
 	${SILENTECHO} "   TEST  All tests passed!"
 
 # Build and run tests with coverage instrumentation, in build/coverage. Only
@@ -514,4 +519,4 @@ test-valgrind: ${TEST_BIN}
 gates: locale-codegen
 	${SILENTCMD}./scripts/gates.sh
 
-.PHONY: install install-libpiano uninstall test test-par test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean
+.PHONY: install install-libpiano uninstall test test-par test-scripts test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean
