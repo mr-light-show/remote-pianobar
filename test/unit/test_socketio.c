@@ -3200,6 +3200,107 @@ START_TEST (test_upcoming_reads_queue_under_state_lock) {
 }
 END_TEST
 
+static int g_test_null_field_calls;
+
+static bool
+mock_count_piano_calls (BarApp_t *app, const PianoRequestType_t type, void *data,
+                        PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) data;
+	(void) type;
+	g_test_null_field_calls++;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return false;
+}
+
+/* Drive a handler with a payload where one field is JSON null; the handler
+ * must return without crashing and without issuing any Pandora request. */
+static void
+run_null_field_case (void (*handler) (BarApp_t *, json_object *), const char *payload)
+{
+	BarApp_t app;
+	PianoStation_t station;
+	json_object *data;
+	memset (&app, 0, sizeof (app));
+	memset (&station, 0, sizeof (station));
+	BarSettingsInit (&app.settings);
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	station.id = "S1";
+	app.ph.stations = &station;
+
+	g_test_null_field_calls = 0;
+	BarUiPianoCallSetTestHook (mock_count_piano_calls);
+	data = json_tokener_parse (payload);
+	ck_assert_ptr_nonnull (data);
+	handler (&app, data);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+
+	ck_assert_int_eq (g_test_null_field_calls, 0);
+
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+
+static void
+get_station_info_broadcast (BarApp_t *app, json_object *data)
+{
+	BarSocketIoHandleGetStationInfo (app, data, BAR_WS_DEST_BROADCAST);
+}
+
+START_TEST (test_socketio_delete_seed_null_seed_type_noop)
+{
+	run_null_field_case (BarSocketIoHandleDeleteSeed,
+			"{\"stationId\":\"S1\",\"seedType\":null,\"seedId\":\"x\"}");
+}
+END_TEST
+
+START_TEST (test_socketio_delete_seed_null_seed_id_noop)
+{
+	run_null_field_case (BarSocketIoHandleDeleteSeed,
+			"{\"stationId\":\"S1\",\"seedType\":\"artist\",\"seedId\":null}");
+}
+END_TEST
+
+START_TEST (test_socketio_delete_seed_null_station_id_noop)
+{
+	run_null_field_case (BarSocketIoHandleDeleteSeed,
+			"{\"stationId\":null,\"seedType\":\"artist\",\"seedId\":\"x\"}");
+}
+END_TEST
+
+START_TEST (test_socketio_delete_feedback_null_feedback_id_noop)
+{
+	run_null_field_case (BarSocketIoHandleDeleteFeedback,
+			"{\"stationId\":\"S1\",\"feedbackId\":null}");
+}
+END_TEST
+
+START_TEST (test_socketio_delete_feedback_null_station_id_noop)
+{
+	run_null_field_case (BarSocketIoHandleDeleteFeedback,
+			"{\"stationId\":null,\"feedbackId\":\"x\"}");
+}
+END_TEST
+
+START_TEST (test_socketio_set_station_mode_null_station_id_noop)
+{
+	run_null_field_case (BarSocketIoHandleSetStationMode,
+			"{\"stationId\":null,\"modeId\":1}");
+}
+END_TEST
+
+START_TEST (test_socketio_get_station_info_null_station_id_noop)
+{
+	run_null_field_case (get_station_info_broadcast,
+			"{\"stationId\":null}");
+}
+END_TEST
+
 Suite *socketio_suite(void) {
 	Suite *s;
 	TCase *tc_emit;
@@ -3282,6 +3383,13 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_sorts_snapshot);
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_quickmix_10_name_az);
 	tcase_add_test(tc_handle, test_socketio_unknown_action_emits_nothing);
+	tcase_add_test(tc_handle, test_socketio_delete_seed_null_seed_type_noop);
+	tcase_add_test(tc_handle, test_socketio_delete_seed_null_seed_id_noop);
+	tcase_add_test(tc_handle, test_socketio_delete_seed_null_station_id_noop);
+	tcase_add_test(tc_handle, test_socketio_delete_feedback_null_feedback_id_noop);
+	tcase_add_test(tc_handle, test_socketio_delete_feedback_null_station_id_noop);
+	tcase_add_test(tc_handle, test_socketio_set_station_mode_null_station_id_noop);
+	tcase_add_test(tc_handle, test_socketio_get_station_info_null_station_id_noop);
 	suite_add_tcase(s, tc_handle);
 
 	/* Formatter tests */
