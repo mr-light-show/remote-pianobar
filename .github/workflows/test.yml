@@ -5,8 +5,41 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a PR branch cancels that PR's run still in progress; pushes to
+# main always finish.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # docs, web or full (scripts/changed-scope.sh, the same rules make gates and
+  # the pre-push hook use). Jobs a change cannot affect are skipped; a push to
+  # main always runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify the change
+        id: scope
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            scope="$(./scripts/changed-scope.sh "origin/${BASE_REF}")"
+          else
+            scope=full
+          fi
+          echo "scope=${scope}" >> "$GITHUB_OUTPUT"
+          echo "Change scope: ${scope}"
+
   c-tests:
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,6 +79,8 @@ jobs:
   # AddressSanitizer + UBSan + LeakSanitizer (LSan is enabled explicitly on
   # Linux by `make test-asan`), in parallel with c-tests; no coverage output.
   c-asan:
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -66,6 +101,8 @@ jobs:
         run: make -j"$(nproc)" test-asan
 
   web-tests:
+    needs: changes
+    if: needs.changes.outputs.scope != 'docs'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -99,6 +136,8 @@ jobs:
   # Pinned: ubuntu-latest is now a release Playwright cannot install browser
   # dependencies for (`playwright install --with-deps` fails there).
   e2e-fake:
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
