@@ -2661,10 +2661,128 @@ START_TEST (test_oversize_request_frame_is_dropped_connection_stays_open)
 	ck_assert (!test_conn (&ctx, 0)->pendingClose);
 	ck_assert_uint_eq (ctx.numConnections, 1);
 	test_drain_all (&ctx);
-	ck_assert_uint_eq (test_written_count, 0);
+	/* Each of the two dropped messages (not their tails) was reported */
+	ck_assert_uint_eq (test_written_count, 2);
+	ck_assert (strstr (test_written_msg[0], "\"request\"") != NULL);
+	ck_assert (strstr (test_written_msg[1], "\"request\"") != NULL);
 
 	BarWsCommandQueueFree (ctx.commands);
 	test_teardown_clients (&app, &ctx);
+}
+END_TEST
+
+/* The sender of a request over WS_CMD_MAX_REQUEST_BYTES is told, in the
+ * localized copy; no other client is */
+START_TEST (test_oversize_request_errors_sender_only)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES + 1);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'x', WS_CMD_MAX_REQUEST_BYTES + 1);
+
+	/* Exactly the limit is accepted: nobody is told */
+	BarWsHandleReceive (&app, &test_ws_cap.sockets[1], big, WS_CMD_MAX_REQUEST_BYTES, true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+
+	/* One byte more is dropped, and only client 1 hears of it */
+	BarWsHandleReceive (&app, &test_ws_cap.sockets[1], big, WS_CMD_MAX_REQUEST_BYTES + 1, true);
+	free (big);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 1);
+	json_object *event = json_tokener_parse (test_ws_cap.frames[0] + 1);
+	ck_assert_ptr_nonnull (event);
+	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (event, 0)), "error");
+	json_object *data = json_object_array_get_idx (event, 1);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (data, "operation", &field));
+	ck_assert_str_eq (json_object_get_string (field), "request");
+	ck_assert (json_object_object_get_ex (data, "message", &field));
+	ck_assert_str_eq (json_object_get_string (field),
+			BarL10nGet (&app.l10n, "web.socket.request_too_large"));
+	ck_assert_str_eq (json_object_get_string (field),
+			"The request is too large and was ignored.");
+	json_object_put (event);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+/* A message too long only in total (several parts) is reported once, not
+ * once per part, and a following small request still runs */
+START_TEST (test_oversize_multipart_request_errors_once)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	void *a = &test_ws_cap.sockets[0];
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'x', WS_CMD_MAX_REQUEST_BYTES);
+
+	BarWsHandleReceive (&app, a, big, WS_CMD_MAX_REQUEST_BYTES, false);
+	BarWsHandleReceive (&app, a, big, 100, false);   /* over: reported */
+	BarWsHandleReceive (&app, a, big, 100, false);   /* tail: silent */
+	BarWsHandleReceive (&app, a, big, 100, true);    /* tail: silent */
+	free (big);
+	BarWsHandleReceive (&app, a, TEST_CMD, strlen (TEST_CMD), true);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_int_eq (test_ws_cap.frameClient[0], 0);
+	ck_assert (strstr (test_ws_cap.frames[0], "\"request\"") != NULL);
+	size_t len = 0;
+	char *text = NULL;
+	ck_assert (BarWsCommandQueuePop (ctx.commands, NULL, &text, &len));
+	ck_assert_str_eq (text, TEST_CMD);
+	free (text);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
+}
+END_TEST
+
+/* A client streaming oversize messages must not fill the shared ingress
+ * (which would close every client): the service thread drains it, so only
+ * the flooder's own queue fills and only it is closed */
+START_TEST (test_oversize_request_flood_does_not_close_other_clients)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	test_setup_web_app (&app, &ctx);
+	TestWsCaptureAttach (&app, 2, NULL);
+	ctx.commands = BarWsCommandQueueNew ();
+	ck_assert_ptr_nonnull (ctx.commands);
+	char *big = malloc (WS_CMD_MAX_REQUEST_BYTES + 1);
+	ck_assert_ptr_nonnull (big);
+	memset (big, 'x', WS_CMD_MAX_REQUEST_BYTES + 1);
+
+	for (int i = 0; i < 4 * WS_INGRESS_MAX_MSGS; i++) {
+		BarWsHandleReceive (&app, &test_ws_cap.sockets[0], big,
+				WS_CMD_MAX_REQUEST_BYTES + 1, true);
+	}
+	free (big);
+	ck_assert (!BarWsOutboxTakeOverflow (ctx.outbox));
+	ck_assert (!ctx.connections[1].pendingClose);
+	ck_assert (ctx.connections[1].wsi != NULL);
+
+	BarWsCommandQueueFree (ctx.commands);
+	ctx.commands = NULL;
+	TestWsCaptureDetach (&app);
+	test_teardown_web_app (&app, &ctx);
 }
 END_TEST
 
@@ -3125,8 +3243,9 @@ START_TEST (test_repeated_start_stop)
 END_TEST
 
 /* Real commands from a real client. An oversize frame (a valid query padded
- * past the limit, which libwebsockets delivers in parts) is dropped without
- * closing the connection; a query sent in two fragments is reassembled and
+ * past the limit, which libwebsockets delivers in parts) is dropped, once
+ * reported to its sender with a request error, without closing the
+ * connection; a query sent in two fragments is reassembled and
  * answered once; later commands are answered in order. */
 START_TEST (test_end_to_end_commands_over_lws)
 {
@@ -3148,17 +3267,18 @@ START_TEST (test_end_to_end_commands_over_lws)
 	test_e2e_send_flags (&a, "ry\"]", LWS_WRITE_CONTINUATION);
 	test_e2e_send (&a, TEST_EXPLAIN);
 	test_e2e_send (&a, TEST_QUERY);
-	test_e2e_pump_until (cctx, &a, 6, &none, 0);
-	test_e2e_expect (&a, 1, "\"process\"");
-	test_e2e_expect (&a, 2, "\"stations\"");
-	test_e2e_expect (&a, 3, "why-1");
-	test_e2e_expect (&a, 4, "\"process\"");
-	test_e2e_expect (&a, 5, "\"stations\"");
+	test_e2e_pump_until (cctx, &a, 7, &none, 0);
+	test_e2e_expect (&a, 1, "\"request\"");
+	test_e2e_expect (&a, 2, "\"process\"");
+	test_e2e_expect (&a, 3, "\"stations\"");
+	test_e2e_expect (&a, 4, "why-1");
+	test_e2e_expect (&a, 5, "\"process\"");
+	test_e2e_expect (&a, 6, "\"stations\"");
 	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
 			strdup ("2[\"end\"]")));
-	test_e2e_pump_until (cctx, &a, 7, &none, 0);
-	test_e2e_expect (&a, 6, "\"end\"");
-	ck_assert_uint_eq (a.count, 7);
+	test_e2e_pump_until (cctx, &a, 8, &none, 0);
+	test_e2e_expect (&a, 7, "\"end\"");
+	ck_assert_uint_eq (a.count, 8);
 	ck_assert (!a.closed);
 
 	lws_context_destroy (cctx);
@@ -4030,6 +4150,9 @@ Suite *websocket_suite(void) {
 	tcase_add_test (tc_worker, test_repeated_start_stop);
 	tcase_add_test (tc_worker, test_admission_full_returns_localized_error_to_requester);
 	tcase_add_test (tc_worker, test_oversize_request_frame_is_dropped_connection_stays_open);
+	tcase_add_test (tc_worker, test_oversize_request_errors_sender_only);
+	tcase_add_test (tc_worker, test_oversize_multipart_request_errors_once);
+	tcase_add_test (tc_worker, test_oversize_request_flood_does_not_close_other_clients);
 	tcase_add_test (tc_worker, test_end_to_end_commands_over_lws);
 	tcase_add_test (tc_worker, test_busy_burst_notifies_once_and_closes_nobody);
 	tcase_add_test (tc_worker, test_delayed_volume_broadcast_fires_without_other_traffic);

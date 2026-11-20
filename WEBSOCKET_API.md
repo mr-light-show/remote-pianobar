@@ -70,7 +70,9 @@ ws.onerror = (error) => {
 
 **Client to server.** Commands from all clients run **one at a time, in the order the server received them**. Connections, keepalive pings (consumed on arrival: never queued, never answered with the busy error) and server events keep flowing while a command runs, but a slow command delays every later command, including cheap ones such as volume or pause. This is by design. One Pandora request can take up to `timeout` × `max_retry` (the player retries temporary network errors; 30 s × 5 = 150 s by default on a dead network), and a command may make several.
 
-- A command is one message of at most 4096 bytes; it may arrive in any number of fragments or TCP segments. A longer message is dropped whole and logged; the connection stays open.
+- A command is one message of at most 4096 bytes; it may arrive in any number of fragments or TCP segments. A longer message is dropped whole (its remaining fragments too) and logged; the connection stays open. Only its sender receives
+  `2["error",{"operation":"request","message":"The request is too large and was ignored."}]`
+  (the message is localized), once per dropped message.
 - Up to 32 commands (64 KiB) can wait. When that is full the command is refused and only its sender receives
   `2["error",{"operation":"command","message":"The player is busy. Try again in a moment."}]`
   (the message is localized), once until one of its commands is accepted again; later refused commands are dropped silently. Send it again later.
