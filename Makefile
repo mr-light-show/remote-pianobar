@@ -451,12 +451,15 @@ lint-test:
 		-I ${LIBPIANO_INCLUDE} -I ${PIANOBAR_DIR} ${TEST_DIR}/**/*.c ${TEST_DIR}/*.c
 
 # Comprehensive test suite: unit tests + linting
-# Tests for the shell helpers under scripts/ (change scope, pre-push decision)
+# Tests for the shell helpers under scripts/ (change scope, pre-push decision).
+# They build throwaway git repos; git's hook environment (GIT_DIR, ...) is
+# cleared so they can never act on this repository (each suite also clears it).
+test-scripts: GIT_ENV_UNSET:=$(foreach v,$(shell git rev-parse --local-env-vars 2>/dev/null),-u $(v))
 test-scripts:
 	${SILENTECHO} "   TEST  scripts/changed-scope.sh, scripts/pre-push-decision.sh..."
-	${SILENTCMD}bash scripts/test-changed-scope.sh
-	${SILENTCMD}bash scripts/test-pre-push-decision.sh
-	${SILENTCMD}bash scripts/test-script-isolation.sh
+	${SILENTCMD}env ${GIT_ENV_UNSET} bash scripts/test-changed-scope.sh
+	${SILENTCMD}env ${GIT_ENV_UNSET} bash scripts/test-pre-push-decision.sh
+	${SILENTCMD}env ${GIT_ENV_UNSET} bash scripts/test-script-isolation.sh
 
 test-all: test lint test-scripts
 	${SILENTECHO} "   TEST  All tests passed!"

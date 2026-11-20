@@ -4,11 +4,19 @@
 # they must never act on the caller's repository. This runs each suite with
 # GIT_DIR pointing at a scratch repo and checks that repo is untouched.
 set -euo pipefail
+# This suite itself runs inside the pre-push hook: drop git's local
+# environment (GIT_DIR, ...) before creating the scratch repo.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 S="$(mktemp -d "${TMPDIR:-/tmp}/script-isolation.XXXXXX")"
 trap 'rm -rf "$S"' EXIT
 git -C "$S" init -q
+if [ "$(git -C "$S" rev-parse --absolute-git-dir)" != "$(cd "$S" && pwd -P)/.git" ]; then
+	echo "refusing to run: git does not point at the scratch repo" >&2
+	exit 2
+fi
 git -C "$S" -c user.name=iso -c user.email=iso@example.invalid commit -q --allow-empty -m init
 
 fail=0
