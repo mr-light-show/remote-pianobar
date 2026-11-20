@@ -85,6 +85,11 @@ is passed through unchanged.
   `make test-par` every shard would overwrite the same file. Use
   `./pianobar_test` (or `TEST_JOBS=1`) when you need one Check log.
 
+Each variant builds in its own directory (`build/default`, `build/coverage`,
+`build/asan`, `build/tsan`; see DEVELOPMENT.md, "Build directories"), so
+running `make test-coverage` and then `make test-asan` keeps both builds, and
+switching back rebuilds nothing.
+
 ### Cleaning Test Files
 
 ```bash

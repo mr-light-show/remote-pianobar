@@ -17,7 +17,7 @@ GitHub Actions **c-tests** runs (headless Ubuntu, **no sound card**):
 PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
 ```
 
-`test-coverage` starts with **`make clean`**, then compiles every test object from scratch.
+CI starts from a fresh checkout, so every object is compiled from scratch. Locally, `make test-coverage` builds in `build/coverage` and rebuilds only what changed; `make distclean` first gives the clean build.
 
 Local **`make test-all`** (and the default pre-push hook) can miss:
 
@@ -78,9 +78,9 @@ Always set **both** when reproducing CI locally.
 
 ```bash
 make distclean
-make test/integration/fixture_http.o
-ls test/integration/fixture_http.d test/integration/fixture_http.o
-test ! -e integration/fixture_http.d
+make build/default/test/integration/fixture_http.o
+ls build/default/test/integration/fixture_http.d build/default/test/integration/fixture_http.o
+test ! -e build/default/integration/fixture_http.d
 ```
 
 Use **`$(@:.o=.d)`**, not **`$*.d`**, in test compile rules with directory components.

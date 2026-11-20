@@ -171,8 +171,22 @@ make distclean
 # Build Remote Pianobar with debug symbols
 make CFLAGS="-g -O0"
 
-# The binary will be created as ./pianobar
+# The binary is built as build/default/pianobar and copied to ./pianobar
 ```
+
+#### Build directories
+
+Objects, dependency files and binaries are built out of tree, one directory per variant, so the variants never share objects and can be built side by side (or at the same time, see `make gates`):
+
+| Build | Directory |
+|---|---|
+| `make`, `make test`, `make test-all`, `make test-par` | `build/default` (`BUILD_DIR=...` overrides it) |
+| `make minimal` | `build/minimal` |
+| `make test-coverage` | `build/coverage` (report `build/coverage/coverage.info`, copied to `./coverage.info`) |
+| `make test-asan` | `build/asan` |
+| `make test-tsan` | `build/tsan` |
+
+`./pianobar` and `./pianobar_test` are copies of the last default (or minimal) build, so `make install`, packaging, scripts and the `./pianobar_test` one-liners work as before. Each directory records its compiler and flags in `.build-flags`; building with different `CFLAGS`/`LDFLAGS` (for example `make CFLAGS="-g -O0"`) rebuilds that directory instead of mixing objects. `make test-coverage`, `make test-asan` and `make test-tsan` no longer start with `make clean`: they rebuild only what changed, and `make test-coverage` resets the `.gcda` counters before each run. `make clean` removes `build/` (and objects left in `src/` and `test/` by the old in-tree layout); `make distclean` also deletes stray `*.gcda`/`*.gcno`/`*.gcov` files.
 
 ### Build variants
 
