@@ -451,10 +451,11 @@ lint-test:
 		-I ${LIBPIANO_INCLUDE} -I ${PIANOBAR_DIR} ${TEST_DIR}/**/*.c ${TEST_DIR}/*.c
 
 # Comprehensive test suite: unit tests + linting
-# Tests for the shell helpers under scripts/ (change-scope classifier)
+# Tests for the shell helpers under scripts/ (change scope, pre-push decision)
 test-scripts:
-	${SILENTECHO} "   TEST  scripts/changed-scope.sh..."
+	${SILENTECHO} "   TEST  scripts/changed-scope.sh, scripts/pre-push-decision.sh..."
 	${SILENTCMD}bash scripts/test-changed-scope.sh
+	${SILENTCMD}bash scripts/test-pre-push-decision.sh
 
 test-all: test lint test-scripts
 	${SILENTECHO} "   TEST  All tests passed!"

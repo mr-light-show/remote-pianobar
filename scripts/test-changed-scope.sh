@@ -89,5 +89,21 @@ unset GATES_SCOPE
 new_repo; commit_files README.md
 expect missing_base_falls_back_full_or_main full no-such-ref
 
+new_repo; mkdir -p src; echo c >src/foo.c; git add src/foo.c; git commit -q -m src
+git checkout -q -b base2; git checkout -q topic; git mv src/foo.c docs/foo.md 2>/dev/null || { mkdir -p docs; git mv src/foo.c docs/foo.md; }
+git commit -q -m mv
+expect rename_src_to_docs_committed_is_full full base2
+
+new_repo; mkdir -p src; echo c >src/foo.c; git add src/foo.c; git commit -q -m src
+git checkout -q -b base2; git checkout -q topic; mkdir -p docs; git mv src/foo.c docs/foo.md
+expect rename_src_to_docs_staged_is_full full base2
+
+new_repo; commit_files src/a.c
+export GATES_SCOPE=docs
+expect override_docs_is_ignored full base
+export GATES_SCOPE=web
+expect override_web_is_ignored full base
+unset GATES_SCOPE
+
 echo "test-changed-scope: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

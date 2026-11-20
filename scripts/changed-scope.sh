@@ -14,12 +14,15 @@
 #         .githooks/, unknown paths, or a base that cannot be resolved
 #
 # base: first argument, else SCOPE_BASE, else origin/feature/ws-simplification,
-# falling back to origin/main. GATES_SCOPE=docs|web|full overrides the result.
+# falling back to origin/main. GATES_SCOPE=full forces full (other values are
+# ignored).
 set -euo pipefail
 
-case "${GATES_SCOPE:-}" in
-docs|web|full) echo "$GATES_SCOPE"; exit 0 ;;
-esac
+# Only "full" overrides: a leftover GATES_SCOPE must never skip tests.
+if [ "${GATES_SCOPE:-}" = full ]; then
+	echo full
+	exit 0
+fi
 
 base="${1:-${SCOPE_BASE:-origin/feature/ws-simplification}}"
 if ! git rev-parse --verify -q "${base}^{commit}" >/dev/null; then
@@ -31,8 +34,10 @@ if ! git rev-parse --verify -q "${base}^{commit}" >/dev/null; then
 	fi
 fi
 
-files="$( (git diff --name-only "${base}...HEAD" &&
-	git status --porcelain -uall | cut -c4- | sed 's/.* -> //') | sort -u)" || {
+# --no-renames: a moved file counts under its old path too (src/a.c moved to
+# docs/ is still a src/ change).
+files="$( (git diff --no-renames --name-only "${base}...HEAD" &&
+	git status --porcelain -uall --no-renames | cut -c4-) | sort -u)" || {
 	echo full
 	exit 0
 }

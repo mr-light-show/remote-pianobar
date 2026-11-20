@@ -13,8 +13,9 @@ concurrency:
 
 jobs:
   # docs, web or full (scripts/changed-scope.sh, the same rules make gates and
-  # the pre-push hook use). Jobs a change cannot affect are skipped; a push to
-  # main always runs everything.
+  # the pre-push hook use). Jobs a change cannot affect are skipped: c-tests
+  # and c-asan need full, web-tests and e2e-fake (the web UI end to end) need
+  # web or full. A push to main always runs everything.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -137,7 +138,7 @@ jobs:
   # dependencies for (`playwright install --with-deps` fails there).
   e2e-fake:
     needs: changes
-    if: needs.changes.outputs.scope == 'full'
+    if: needs.changes.outputs.scope != 'docs'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
