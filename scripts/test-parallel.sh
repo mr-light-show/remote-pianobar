@@ -19,6 +19,8 @@
 #               TEST_JOBS=1 runs the binary once, unsharded: exactly the
 #               serial `./pianobar_test` run.
 # TEST_SPLIT_SUITES  suites to split by tcase (default: playback_integration)
+# TEST_PAR_LOGS      all (default) prints every shard's output; failed prints
+#                    only failing shards in full (others: their Checks line)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -52,7 +54,12 @@ if [ "${1:-}" = "--shard" ]; then
 		sleep 0.05
 	done
 	printf '=== %s (exit %s, %ss)\n' "$label" "$rc" "$secs"
-	cat "$log"
+	if [ "${TEST_PAR_LOGS:-all}" != failed ] || [ "$rc" != 0 ] ||
+			[ "${checks:-none}" = none ] || [ "${checks}" = 0 ]; then
+		cat "$log"
+	else
+		grep -a 'Checks: ' "$log" | tail -n 1 || true
+	fi
 	rmdir "${out}/.lock"
 	exit 0
 fi

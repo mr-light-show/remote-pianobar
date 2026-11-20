@@ -2194,6 +2194,9 @@ END_TEST
 
 START_TEST (test_cli_explain_prints_terminal_output_and_no_web_reply)
 {
+	/* Checks terminal output with debug logging off (PIANOBAR_TEST_DEBUG_ALL
+	 * would mirror BarUiMsg into the log instead). */
+	log_set_debug_mask (0);
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoStation_t station;
@@ -2268,6 +2271,9 @@ run_cli_upcoming (void *arg)
 
 START_TEST (test_cli_upcoming_prints_terminal_list_and_no_web_reply)
 {
+	/* Checks terminal output with debug logging off (PIANOBAR_TEST_DEBUG_ALL
+	 * would mirror BarUiMsg into the log instead). */
+	log_set_debug_mask (0);
 	BarApp_t app;
 	BarWsContext_t ctx;
 	PianoStation_t station;
@@ -3029,6 +3035,10 @@ mock_create_from_song_records (BarApp_t *app, const PianoRequestType_t type,
 /* Runs create-from-song with `input` for a song that is no longer queued;
  * returns whether the "no longer available" message was printed */
 static bool run_create_from_gone_song (const char *input) {
+	/* Checks terminal output with debug logging off (PIANOBAR_TEST_DEBUG_ALL
+	 * would mirror BarUiMsg into the log instead). */
+	const unsigned int savedMask = log_get_debug_mask ();
+	log_set_debug_mask (0);
 	BarApp_t app;
 	PianoSong_t song;
 	int pipefd[2];
@@ -3066,6 +3076,7 @@ static bool run_create_from_gone_song (const char *input) {
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
+	log_set_debug_mask (savedMask);
 	return printed;
 }
 

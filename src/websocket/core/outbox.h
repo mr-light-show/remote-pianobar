@@ -47,7 +47,9 @@ typedef struct BarWsFrame BarWsFrame_t;
 BarWsFrame_t *BarWsFrameNew (const char *text, size_t len);
 BarWsFrame_t *BarWsFrameRef (BarWsFrame_t *f);
 void BarWsFrameUnref (BarWsFrame_t *f);
-/* Payload start (LWS_PRE writable bytes precede it) and payload length */
+/* Payload start (LWS_PRE writable bytes precede it) and payload length. The
+ * byte at data[len] is always NUL, so the payload is also a C string (as long
+ * as the text itself has no NUL); still pass len wherever a length is taken. */
 unsigned char *BarWsFrameData (const BarWsFrame_t *f);
 size_t BarWsFrameLen (const BarWsFrame_t *f);
 
