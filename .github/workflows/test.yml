@@ -28,7 +28,7 @@ jobs:
         env:
           PIANOBAR_INTEGRATION: "1"
           PIANOBAR_TEST_NO_DEVICE: "1"
-        run: make test-coverage
+        run: make -j"$(nproc)" test-coverage
 
       - name: Upload C coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -97,4 +97,4 @@ jobs:
       - name: E2E against fake Pandora
         env:
           CI: "1"
-        run: make test-e2e-fake
+        run: make -j"$(nproc)" test-e2e-fake

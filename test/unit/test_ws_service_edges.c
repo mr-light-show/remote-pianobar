@@ -135,7 +135,9 @@ static const struct lws_protocols close_client_protocols[] = {
 
 /* A client that does not read while the server floods it is dropped, and the
  * server's close frame carries the reason (either the ingress or the per-client
- * queue overflowed first, depending on how fast the service thread drains). */
+ * queue overflowed first, depending on how fast the service thread drains).
+ * The test waits for the close frame itself, not for the client socket
+ * teardown (LWS_CALLBACK_CLIENT_CLOSED), which can lag the frame by ~30 s. */
 START_TEST (test_flooded_client_receives_close_reason_over_lws) {
 	BarApp_t app;
 	memset (&app, 0, sizeof (app));
@@ -199,9 +201,10 @@ START_TEST (test_flooded_client_receives_close_reason_over_lws) {
 
 	/* Now read: the close frame follows the data already on the wire */
 	clock_gettime (CLOCK_MONOTONIC, &start);
-	while (!c.closed) {
+	while (!c.closed && c.closeStatus == 0) {
 		clock_gettime (CLOCK_MONOTONIC, &now);
-		ck_assert_msg (now.tv_sec - start.tv_sec < 20, "client was never closed");
+		ck_assert_msg (now.tv_sec - start.tv_sec < 20,
+				"client never received a close frame");
 		lws_service (cctx, 20);
 	}
 	ck_assert_msg (strcmp (c.closeReason, "Server event queue full") == 0 ||

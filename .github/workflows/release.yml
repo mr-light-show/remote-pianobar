@@ -105,9 +105,6 @@ jobs:
             libwebsockets-dev libasound2-dev libblas-dev liblapack-dev check \
             python3-yaml
 
-      - name: Ensure BLAS/LAPACK installed (required by libsphinxbase)
-        run: sudo apt-get update && sudo apt-get install -y libblas-dev liblapack-dev
-      
       - name: Setup Node.js with caching
         uses: actions/setup-node@v5
         with:
@@ -126,7 +123,7 @@ jobs:
           
           # Build pianobar
           make CFLAGS="$DEBUG_FLAGS" clean
-          make CFLAGS="$DEBUG_FLAGS"
+          make -j"$(nproc)" CFLAGS="$DEBUG_FLAGS"
           
           # Build Web UI
           cd webui
@@ -339,7 +336,7 @@ jobs:
             ${{ matrix.image }} \
             bash -c '
               make CFLAGS="$DEBUG_FLAGS" clean && \
-              make CFLAGS="$DEBUG_FLAGS" && \
+              make -j"$(nproc)" CFLAGS="$DEBUG_FLAGS" && \
               cd webui && \
               npm ci && \
               npm run build
@@ -529,7 +526,7 @@ jobs:
           fi
           
           make clean
-          make CFLAGS="-g -O0 -mmacosx-version-min=12.0 $DEBUG_FLAGS"
+          make -j"$(sysctl -n hw.ncpu)" CFLAGS="-g -O0 -mmacosx-version-min=12.0 $DEBUG_FLAGS"
           
       - name: Build Web UI
         run: |
@@ -660,7 +657,9 @@ jobs:
       - name: Create DMG
         run: |
           APP_NAME="Remote-Pianobar-${VERSION}"
-          DMG_NAME="remote-pianobar_macos14.dmg"
+          # Named after the minimum macOS the binary targets (MACOSX_DEPLOYMENT_TARGET
+          # and -mmacosx-version-min above), not the runner image.
+          DMG_NAME="remote-pianobar_macos12.dmg"
           
           create-dmg \
             --volname "Remote Pianobar" \
