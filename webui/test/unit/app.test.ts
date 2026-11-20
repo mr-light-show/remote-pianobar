@@ -191,7 +191,7 @@ describe('PianobarApp', () => {
     hoisted.fire('progress', { elapsed: 10, duration: 100 });
     hoisted.fire('playState', { paused: true });
     await el.updateComplete;
-    hoisted.fire('stop');
+    hoisted.fire('stop', {});
     await el.updateComplete;
     expect(el.shadowRoot?.querySelector('h1')?.textContent).toBe('T');
   });

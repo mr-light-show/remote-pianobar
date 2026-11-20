@@ -157,7 +157,7 @@ coordinator and Lovelace card depend on:
 | Event | Wire packet example | Payload type |
 |-------|--------------------|----|
 | `start` | `2["start",{"title":"Song","artist":"Artist","album":"Album","coverArt":"https://...","duration":240,"rating":1,"trackToken":"tok","stationId":"sid","songStationName":"Name"}]` | object |
-| `stop` | `2["stop"]` | none (no second element) |
+| `stop` | `2["stop",{}]` | empty object |
 | `progress` | `2["progress",{"elapsed":42,"duration":240,"percentage":17}]` | object |
 | `volume` | `2["volume",50]` | bare integer (not an object) |
 | `stations` | `2["stations",[{"id":"sid","name":"Name","isQuickMix":false}]]` | array |
@@ -304,12 +304,13 @@ Broadcast when a **new** song begins playing (e.g. station change, skip, or auto
 
 Broadcast when playback stops (song ended, skipped, or station changed).
 
-**Payload:** `null`
+**Payload:** an empty object. Older players sent no second element
+(`2["stop"]`); clients should ignore the payload.
 
 **Example:**
 
 ```json
-null
+{}
 ```
 
 ---

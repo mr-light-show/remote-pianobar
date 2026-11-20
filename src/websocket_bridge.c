@@ -95,7 +95,10 @@ void BarWsBroadcastProcess(BarApp_t *app) {
 
 void BarWsBroadcastSongStop(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
-		char *msg = BarSocketIoFormatEventMessage ("stop", NULL);
+		/* An empty object, not no payload: clients read the second element */
+		struct json_object *data = json_object_new_object ();
+		char *msg = BarSocketIoFormatEventMessage ("stop", data);
+		json_object_put (data);
 		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }

@@ -2270,7 +2270,13 @@ START_TEST (test_capture_playback_start_stop_broadcast) {
 	TestWsCaptureClear ();
 	BarWsBroadcastSongStop (&app);
 	assert_broadcast_frame ("stop");
-	ck_assert_ptr_null (frame_payload (0));
+	/* An empty object payload: clients that read the second element (the
+	 * integration) must find one */
+	json_object *stop = frame_payload (0);
+	ck_assert_ptr_nonnull (stop);
+	ck_assert (json_object_is_type (stop, json_type_object));
+	ck_assert_int_eq (json_object_object_length (stop), 0);
+	json_object_put (stop);
 
 	capture_app_destroy (&app);
 }

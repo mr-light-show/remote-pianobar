@@ -2113,22 +2113,26 @@ START_TEST (test_wire_compat_volume_is_bare_integer)
 }
 END_TEST
 
-/* Wire-compat: stop must have no payload element — no comma after "stop" */
-START_TEST (test_wire_compat_stop_has_no_payload)
+/* Wire-compat: stop carries an empty object payload, 2["stop",{}] */
+START_TEST (test_wire_compat_stop_has_empty_object_payload)
 {
 	BarApp_t app;
 	BarWsContext_t ctx;
 	test_setup_web_app (&app, &ctx);
 	compatAttach (&app);
 
-	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "stop", NULL);
+	BarWsBroadcastSongStop (&app);
 
 	TestWsCaptureFlush ();
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);
-	const char *stopPos = strstr (g_compatBuf, "\"stop\"");
-	ck_assert_ptr_nonnull (stopPos);
-	/* No comma after "stop" means no second (payload) element */
-	ck_assert_ptr_null (strchr (stopPos, ','));
+	struct json_object *arr = json_tokener_parse (g_compatBuf + 1);
+	ck_assert_ptr_nonnull (arr);
+	ck_assert_int_eq (json_object_array_length (arr), 2);
+	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (arr, 0)), "stop");
+	struct json_object *payload = json_object_array_get_idx (arr, 1);
+	ck_assert (json_object_is_type (payload, json_type_object));
+	ck_assert_int_eq (json_object_object_length (payload), 0);
+	json_object_put (arr);
 
 	compatDetach (&app);
 	test_teardown_web_app (&app, &ctx);
@@ -4044,7 +4048,7 @@ Suite *websocket_suite(void) {
 	tc_compat = tcase_create ("wire_compat");
 	tcase_add_test (tc_compat, test_wire_compat_progress_is_object);
 	tcase_add_test (tc_compat, test_wire_compat_volume_is_bare_integer);
-	tcase_add_test (tc_compat, test_wire_compat_stop_has_no_payload);
+	tcase_add_test (tc_compat, test_wire_compat_stop_has_empty_object_payload);
 	tcase_add_test (tc_compat, test_wire_compat_stations_is_array);
 	suite_add_tcase (s, tc_compat);
 
