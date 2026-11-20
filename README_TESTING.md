@@ -32,15 +32,17 @@ make test
 
 ### Comprehensive Testing
 
-To run all tests including linting and memory leak detection:
+To run all tests plus static analysis:
 ```bash
 make test-all
 ```
 
-This will:
-1. Run unit tests
-2. Run static analysis (cppcheck)
-3. Rebuild with AddressSanitizer and run tests again
+This runs `make test` (unit tests) and `make lint` (cppcheck). It does not run
+the sanitizers; use `make test-asan` or `make test-tsan` for those.
+
+Builds are serial by default. Pass `-jN` (for example
+`make -j"$(getconf _NPROCESSORS_ONLN)" test-all`) to compile in parallel and to
+overlap lint with the tests; the output of the two is then interleaved.
 
 ### Individual Test Targets
 

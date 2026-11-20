@@ -24,7 +24,7 @@ jobs:
     # Default `make` enables HAVE_DEBUGLOG; use debug=N in config or PIANOBAR_DEBUG at runtime.
     - name: Build pianobar (debug symbols for PRs)
       if: github.event_name == 'pull_request'
-      run: make CFLAGS="-g -O0"
+      run: make -j"$(nproc)" CFLAGS="-g -O0"
     - name: Build pianobar (release on main)
       if: github.event_name != 'pull_request'
-      run: make
+      run: make -j"$(nproc)"

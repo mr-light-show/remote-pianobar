@@ -262,6 +262,10 @@ make test
 ./pianobar_test --verbose
 ```
 
+#### Parallel builds
+
+`make` is serial by default. Add `-jN` to compile in parallel, for example `make -j"$(getconf _NPROCESSORS_ONLN)" test-all` (`getconf` works on macOS and Linux). With `-j`, `make test-all` also runs `make lint` while the tests run, so test and lint output is interleaved; the exit status is still non-zero if either fails. The pre-push hook and `make test-ci-local` use `-j` automatically; set `JOBS=1` (hook) or `PIANOBAR_CI_JOBS=1` (Docker script) for serial, readable output.
+
 #### Static analysis
 
 `make lint` runs cppcheck and is strict: a suppression that matches nothing fails the run, so stale ones are caught on current cppcheck. cppcheck older than 2.18 (for example Ubuntu 24.04's apt package) reports many existing suppressions as unmatched; run `make lint CPPCHECK_LENIENT=1` there.

@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include <stdio.h>
 #include <sys/wait.h>
 #include "../../src/main.h"
+#include "../test_tmp.h"
 #include "../../src/websocket/daemon/daemon.h"
 
 /* Test: Write PID file with NULL app should fail */
@@ -76,11 +77,19 @@ START_TEST(test_daemon_get_ipv4_address_returns_nonempty_address) {
 }
 END_TEST
 
+/* Per-test scratch directory, so concurrent test runs never share pid files. */
+static void daemon_test_pid_path (char *dir, size_t dirSize, char *path,
+		size_t pathSize, const char *prefix) {
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, dirSize, prefix));
+	snprintf (path, pathSize, "%s/pianobar.pid", dir);
+}
+
 /* Real-world: write PID file with a configured path, check process detection,
  * then remove it.  Mirrors what happens when the daemon launches. */
 START_TEST(test_daemon_pid_file_write_detect_remove_roundtrip) {
-	const char *pidPath = "/tmp/test_pianobar_daemon_roundtrip.pid";
-	unlink(pidPath);
+	char dir[256], pidPath[300];
+	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
+			"daemon_roundtrip");
 
 	BarApp_t app;
 	memset(&app, 0, sizeof(app));
@@ -97,11 +106,14 @@ START_TEST(test_daemon_pid_file_write_detect_remove_roundtrip) {
 	ck_assert_int_ne(stat(pidPath, &st), 0);
 
 	free(app.settings.pidFile);
+	rmdir (dir);
 }
 END_TEST
 
 START_TEST(test_daemon_is_running_with_dead_pid) {
-	const char *pidPath = "/tmp/test_pianobar_daemon_dead.pid";
+	char dir[256], pidPath[300];
+	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
+			"daemon_dead");
 	FILE *f = fopen(pidPath, "w");
 	ck_assert_ptr_nonnull(f);
 	/* PID that almost certainly does not exist on test hosts. */
@@ -110,6 +122,7 @@ START_TEST(test_daemon_is_running_with_dead_pid) {
 
 	ck_assert(!BarDaemonIsRunning(pidPath));
 	unlink(pidPath);
+	rmdir (dir);
 }
 END_TEST
 
@@ -141,11 +154,12 @@ START_TEST(test_daemon_write_lock_pid_rejects_invalid_fd) {
 END_TEST
 
 START_TEST(test_daemonize_steps_without_log_file_keeps_stderr) {
-	const char *pidPath = "/tmp/test_pianobar_daemon_steps.pid";
+	char dir[256], pidPath[300];
 	pid_t child;
 	int status;
 
-	unlink (pidPath);
+	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
+			"daemon_steps");
 	child = fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
@@ -161,6 +175,7 @@ START_TEST(test_daemonize_steps_without_log_file_keeps_stderr) {
 	ck_assert (WIFEXITED (status));
 	ck_assert_int_eq (WEXITSTATUS (status), 0);
 	unlink (pidPath);
+	rmdir (dir);
 }
 END_TEST
 

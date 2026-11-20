@@ -413,9 +413,8 @@ test-coverage: clean
 	${SILENTECHO} "   COV   Generating coverage report..."
 	${SILENTCMD}lcov --capture --directory . --output-file coverage.info \
 		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
-	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' --output-file coverage.info \
-		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
-	${SILENTCMD}lcov --remove coverage.info '*l10n_defaults_gen.c' --output-file coverage.info \
+	${SILENTCMD}lcov --remove coverage.info '/usr/*' '*/test/*' '*l10n_defaults_gen.c' \
+		--output-file coverage.info \
 		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
 	${SILENTECHO} "   COV   Coverage report: coverage.info"
 
@@ -435,7 +434,7 @@ test-clean:
 # Full clean required so all code linked into the test binary is built with ASan (cf. test-coverage).
 # -fno-sanitize-recover=undefined makes any UB finding abort the run with a non-zero exit.
 SANITIZE_FLAGS:=-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
-test-asan: clean clean-test-asan
+test-asan: clean
 	${SILENTECHO} "   TEST  Building with AddressSanitizer + UndefinedBehaviorSanitizer..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${SANITIZE_FLAGS} -g" LDFLAGS="${LDFLAGS} ${SANITIZE_FLAGS}"
 	${SILENTECHO} "   TEST  Running test suite with memory and undefined-behavior checks..."
@@ -446,7 +445,7 @@ clean-test-asan:
 
 # Run tests with ThreadSanitizer. Known third-party races are listed in test/tsan.supp.
 TSAN_FLAGS:=-fsanitize=thread -fno-omit-frame-pointer
-test-tsan: clean clean-test-asan
+test-tsan: clean
 	${SILENTECHO} "   TEST  Building with ThreadSanitizer..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${TSAN_FLAGS} -O1 -g" LDFLAGS="${LDFLAGS} ${TSAN_FLAGS}"
 	${SILENTECHO} "   TEST  Running test suite with data-race checks..."
