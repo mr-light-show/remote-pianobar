@@ -441,8 +441,9 @@ typedef struct {
 static void *advance_playlist_worker(void *arg) {
 	const bar_state_playlist_thread_args_t *args = arg;
 	for (int i = 0; i < args->iterations; ++i) {
-		PianoSong_t *finished = BarStateAdvancePlaylist(args->app);
-		(void) finished;
+		/* the caller owns the detached head (the playback manager in
+		 * production) */
+		PianoDestroyPlaylist(BarStateAdvancePlaylist(args->app));
 	}
 	return NULL;
 }
@@ -850,6 +851,42 @@ exercise_new_bar_state_apis(BarUiMode_t mode)
 START_TEST(test_bar_state_new_apis_cli_and_web) {
 	exercise_new_bar_state_apis(BAR_UI_MODE_CLI);
 	exercise_new_bar_state_apis(BAR_UI_MODE_WEB);
+}
+END_TEST
+
+/* Every disconnect/reconnect resets the handle; each reset must free the old
+ * one (LSan fails this under test-asan on Linux if PianoDestroy is dropped) */
+START_TEST(test_bar_state_reset_piano_handle_does_not_accumulate) {
+	BarApp_t app;
+	bar_state_test_setup(&app, BAR_UI_MODE_BOTH);
+	app.settings.partnerUser = (char *)"partner-user";
+	app.settings.partnerPassword = (char *)"partner-pass";
+	app.settings.device = (char *)"device";
+	app.settings.inkey = (char *)"0123456789abcdef";
+	app.settings.outkey = (char *)"0123456789abcdef";
+	ck_assert_int_eq(PianoInit(&app.ph, app.settings.partnerUser,
+			app.settings.partnerPassword, app.settings.device,
+			app.settings.inkey, app.settings.outkey), PIANO_RET_OK);
+
+	for (int i = 0; i < 10; ++i) {
+		PianoStation_t *st = calloc(1, sizeof(*st));
+		ck_assert_ptr_nonnull(st);
+		st->id = strdup("station");
+		st->name = strdup("name");
+		app.ph.stations = st;
+		app.ph.user.listenerId = strdup("listener");
+		app.ph.user.authToken = strdup("token");
+
+		ck_assert_int_eq(BarStateResetPianoHandle(&app), PIANO_RET_OK);
+
+		ck_assert_ptr_null(app.ph.stations);
+		ck_assert_ptr_null(app.ph.user.listenerId);
+		ck_assert_ptr_null(app.ph.user.authToken);
+		ck_assert_ptr_nonnull(app.ph.partner.user);
+	}
+
+	PianoDestroy(&app.ph);
+	bar_state_test_teardown(&app);
 }
 END_TEST
 
@@ -1540,6 +1577,7 @@ Suite *bar_state_suite(void) {
 
 	TCase *tc_misc = tcase_create("Misc");
 	tcase_add_test(tc_misc, test_bar_state_is_pandora_connected);
+	tcase_add_test(tc_misc, test_bar_state_reset_piano_handle_does_not_accumulate);
 	tcase_add_test(tc_misc, test_bar_state_apply_quickmix_ids_ignores_null_entries);
 	tcase_add_test(tc_misc, test_bar_state_apply_quickmix_ids_handles_null_id_list);
 	tcase_add_test(tc_misc, test_bar_state_update_station_display_names_handles_null_name);

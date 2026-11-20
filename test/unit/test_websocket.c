@@ -2101,7 +2101,10 @@ START_TEST (test_wire_compat_volume_is_bare_integer)
 	test_setup_web_app (&app, &ctx);
 	compatAttach (&app);
 
-	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "volume", json_object_new_int (50));
+	/* BarSocketIoEmit borrows the payload */
+	json_object *volume = json_object_new_int (50);
+	BarSocketIoEmit (&app, BAR_WS_DEST_BROADCAST, "volume", volume);
+	json_object_put (volume);
 
 	TestWsCaptureFlush ();
 	ck_assert (strncmp (g_compatBuf, "2[", 2) == 0);

@@ -797,6 +797,8 @@ static void
 session_app_destroy (BarApp_t *app)
 {
 	free (app->lastStationId);
+	/* session_app_init's handle, or the one a disconnect reset created */
+	PianoDestroy (&app->ph);
 	pthread_cond_destroy (&app->player.decoderCond);
 	pthread_mutex_destroy (&app->player.decoderLock);
 	pthread_cond_destroy (&app->player.audioCond);

@@ -873,6 +873,16 @@ read_default_settings (BarSettings_t *settings)
 	BarSettingsRead (settings);
 }
 
+/* Free the Piano handle the test created with PianoInit, or that a
+ * disconnect/reconnect reset created in its place. */
+static void
+destroy_piano_for_test (BarApp_t *app)
+{
+	pthread_mutex_lock (&app->pianoHttpMutex);
+	PianoDestroy (&app->ph);
+	pthread_mutex_unlock (&app->pianoHttpMutex);
+}
+
 START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 {
 	BarApp_t app;
@@ -908,6 +918,7 @@ START_TEST (test_ui_do_pandora_disconnect_when_player_already_dead)
 	ck_assert (strstr (last_broadcast (), "user") != NULL);
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -947,6 +958,7 @@ START_TEST (test_ui_do_pandora_disconnect_idle_timeout_message)
 	ck_assert (strstr (last_broadcast (), "idle_timeout") != NULL);
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -999,6 +1011,7 @@ START_TEST (test_ui_do_pandora_disconnect_clears_playback_state_before_destroy)
 	ck_assert_str_eq (app.lastStationId, "resume-station");
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -1076,6 +1089,9 @@ START_TEST (test_ui_act_pandora_reconnect_clears_playback_state)
 	ck_assert_ptr_null (app.lastStationId);
 	g_mock_reconnect_stations = NULL;
 
+	/* the mock login put the test's stack station in the list */
+	app.ph.stations = NULL;
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	TestWsCaptureDetach (&app);
@@ -1179,6 +1195,9 @@ START_TEST (test_session_auto_recover_resumes_without_disconnect_event)
 	TestWsCaptureFlush ();
 	ck_assert_uint_eq (TestWsCaptureCount (0, "pandora.disconnected"), 0);
 
+	/* the mock login put the test's stack station in the list */
+	app.ph.stations = NULL;
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	TestWsCaptureDetach (&app);
@@ -1235,6 +1254,7 @@ START_TEST (test_session_auto_recover_failure_is_sticky)
 	BarUiPianoCallClearTestHook ();
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	TestWsCaptureDetach (&app);
@@ -1297,6 +1317,7 @@ START_TEST (test_ui_do_pandora_disconnect_logs_when_manager_not_parked)
 	ck_assert_ptr_null (BarStateGetPlaylist (&app));
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -1356,6 +1377,9 @@ START_TEST (test_ui_act_pandora_reconnect_logs_when_manager_not_parked)
 	ck_assert_ptr_eq (BarStateGetNextStation (&app), &station);
 	ck_assert_ptr_null (app.lastStationId);
 
+	/* the mock login put the test's stack station in the list */
+	app.ph.stations = NULL;
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	TestWsCaptureDetach (&app);
@@ -1395,6 +1419,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_running_manager)
 	BarPlaybackManagerStop (&app);
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -1435,6 +1460,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_parked_manager)
 	BarPlaybackManagerStop (&app);
 
 	log_set_debug_mask (0);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -1690,6 +1716,7 @@ START_TEST (test_ui_act_pandora_disconnect_delegates_to_helper)
 	ck_assert (strstr (last_broadcast (), "pandora.disconnected") != NULL);
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -1810,6 +1837,7 @@ START_TEST (test_ui_do_pandora_disconnect_waits_for_player_stop)
 
 	ck_assert_ptr_nonnull (last_broadcast ());
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -2296,6 +2324,7 @@ START_TEST (test_ui_do_pandora_disconnect_playlist_session_error_message)
 	ck_assert_ptr_nonnull (last_broadcast ());
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -2332,6 +2361,7 @@ START_TEST (test_ui_do_pandora_disconnect_piano_reinit_failure)
 	ck_assert_int_ne (app.player.interrupted, 0);
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -2363,6 +2393,7 @@ START_TEST (test_ui_do_pandora_reconnect_piano_reinit_failure)
 	ck_assert (!BarUiDoPandoraReconnect (&app, NULL));
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -2410,6 +2441,7 @@ START_TEST (test_ui_do_pandora_reconnect_get_stations_failure)
 	BarUiPianoCallClearTestHook ();
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	pthread_mutex_destroy (&app.pianoHttpMutex);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
@@ -4181,6 +4213,9 @@ START_TEST (test_pandora_disconnect_reconnect_wait_without_holds)
 	read_default_settings (&app.settings);
 	/* web mode: stateRwlock exists */
 	attach_ws_context_for_test (&app, &ctx);
+	/* replace the credentials read_default_settings loaded */
+	free (app.settings.username);
+	free (app.settings.password);
 	app.settings.username = strdup ("user");
 	app.settings.password = strdup ("pass");
 	ck_assert (BarL10nInit (&app.l10n, &app.settings));
@@ -4225,6 +4260,7 @@ START_TEST (test_pandora_disconnect_reconnect_wait_without_holds)
 	ck_assert_uint_eq (lock_probe_other_thread (&app), 0);
 
 	free (app.lastStationId);
+	destroy_piano_for_test (&app);
 	BarUiPianoHttpMutexDestroy (&app);
 	player_primitives_destroy (&app);
 	BarStateDestroy (&app);
