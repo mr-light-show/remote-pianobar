@@ -531,6 +531,62 @@ START_TEST (test_response_playlist_keeps_good_item_beside_bad)
 END_TEST
 
 /* A destroyed category frees its name and nested genres */
+/* calloc that succeeds for the first g_callocOk calls, then fails */
+static int g_callocOk;
+static void *failing_calloc (size_t nmemb, size_t size) {
+	if (g_callocOk-- > 0) {
+		return calloc (nmemb, size);
+	}
+	return NULL;
+}
+
+/* Out of memory while building the second playlist item frees the first */
+START_TEST (test_response_playlist_oom_frees_partial_list)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"artistName\":\"A\",\"songName\":\"S1\"},"
+	        "{\"artistName\":\"B\",\"songName\":\"S2\"}]}}";
+	g_callocOk = 1;
+	PianoResponseSetCallocTestHook (failing_calloc);
+	PianoReturn_t ret = PianoResponse (&ph, &req);
+	PianoResponseSetCallocTestHook (NULL);
+	ck_assert_int_eq (ret, PIANO_RET_OUT_OF_MEMORY);
+	ck_assert_ptr_null (data.retPlaylist);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* Out of memory on a genre (or its category) frees what was built so far */
+START_TEST (test_response_genre_oom_frees_partial_category)
+{
+	static const char *const json = "{\"stat\":\"ok\",\"result\":{\"categories\":[{"
+	        "\"categoryName\":\"Rock\",\"stations\":[{"
+	        "\"stationName\":\"Classic\",\"stationToken\":\"g1\"}]}]}}";
+	/* _i = successful callocs before the failure: 0 = the category itself,
+	 * 1 = the first genre of that category */
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	g_callocOk = _i;
+	PianoResponseSetCallocTestHook (failing_calloc);
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_GENRE_STATIONS, json);
+	PianoResponseSetCallocTestHook (NULL);
+	ck_assert_int_eq (ret, PIANO_RET_OUT_OF_MEMORY);
+	ck_assert_ptr_null (ph.genreStations);
+	PianoDestroy (&ph);
+}
+END_TEST
+
 START_TEST (test_destroy_genre_category_frees_nested)
 {
 	PianoGenreCategory_t *cat = calloc (1, sizeof (*cat));
@@ -799,6 +855,8 @@ Suite *libpiano_response_suite (void) {
 	tcase_add_test (tc, test_response_playlist_skips_missing_title_or_artist);
 	tcase_add_test (tc, test_response_playlist_keeps_good_item_beside_bad);
 	tcase_add_test (tc, test_destroy_genre_category_frees_nested);
+	tcase_add_test (tc, test_response_playlist_oom_frees_partial_list);
+	tcase_add_loop_test (tc, test_response_genre_oom_frees_partial_category, 0, 2);
 	tcase_add_test (tc, test_response_missing_stat_field);
 	tcase_add_test (tc, test_response_invalid_json_does_not_crash);
 	tcase_add_test (tc, test_response_fail_missing_code_field);

@@ -33,6 +33,19 @@ THE SOFTWARE.
 #include "piano_private.h"
 #include "crypt.h"
 
+/* calloc for the objects whose out-of-memory cleanup is tested; unit tests
+ * install a hook to make an allocation fail (see PianoResponseSetCallocTestHook). */
+static void *(*pianoCallocHook) (size_t nmemb, size_t size) = NULL;
+
+void PianoResponseSetCallocTestHook (void *(*hook) (size_t nmemb, size_t size)) {
+	pianoCallocHook = hook;
+}
+
+static void *PianoCalloc (size_t nmemb, size_t size) {
+	return pianoCallocHook != NULL ? pianoCallocHook (nmemb, size) :
+			calloc (nmemb, size);
+}
+
 /* Scalar value of key, or NULL.  j may be NULL (JSON null array element);
  * get_ex treats that as missing.  json-c represents JSON null as a NULL object
  * and has no string for containers worth keeping; both are treated like a
@@ -315,7 +328,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					continue;
 				}
 
-				if ((song = calloc (1, sizeof (*song))) == NULL) {
+				if ((song = PianoCalloc (1, sizeof (*song))) == NULL) {
 					PianoDestroyPlaylist (playlist);
 					return PIANO_RET_OUT_OF_MEMORY;
 				}
@@ -521,7 +534,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					json_object *c = json_object_array_get_idx (categories, i);
 					PianoGenreCategory_t *tmpGenreCategory;
 
-					if ((tmpGenreCategory = calloc (1,
+					if ((tmpGenreCategory = PianoCalloc (1,
 							sizeof (*tmpGenreCategory))) == NULL) {
 						return PIANO_RET_OUT_OF_MEMORY;
 					}
@@ -539,7 +552,7 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 									json_object_array_get_idx (stations, k);
 							PianoGenre_t *tmpGenre;
 
-							if ((tmpGenre = calloc (1,
+							if ((tmpGenre = PianoCalloc (1,
 									sizeof (*tmpGenre))) == NULL) {
 								PianoDestroyGenreCategory (tmpGenreCategory);
 								return PIANO_RET_OUT_OF_MEMORY;

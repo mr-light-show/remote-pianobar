@@ -29,3 +29,7 @@ void PianoDestroyStation (PianoStation_t *station);
 void PianoDestroyUserInfo (PianoUserInfo_t *user);
 
 void PianoDestroyGenreCategory (PianoGenreCategory_t *cat);
+
+/* Test-only: replace calloc for the playlist song and genre allocations in
+ * PianoResponse (NULL restores calloc). */
+void PianoResponseSetCallocTestHook (void *(*hook) (size_t nmemb, size_t size));
