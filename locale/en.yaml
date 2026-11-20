@@ -99,6 +99,10 @@ web:
     busy: "The player is busy. Try again in a moment."
     response_too_large: "The response is too large to send."
     request_too_large: "The request is too large and was ignored."
+    station_not_found: "The station was not found."
+    station_id_missing: "No station was specified."
+    station_modes_quickmix: "Modes are not available for QuickMix."
+    invalid_search: "Enter a search term."
 
   # Web UI only (Lit); flat keys web.ui.* in generated JSON / locale files
   ui:

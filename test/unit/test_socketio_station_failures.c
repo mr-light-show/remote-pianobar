@@ -144,8 +144,9 @@ handle_get_station_info (BarApp_t *app, json_object *data)
 	BarSocketIoHandleGetStationInfo (app, data, BAR_WS_DEST_BROADCAST);
 }
 
-/* An unknown station id: nothing is called, nothing is sent, and the mutex
- * the handler took for the lookup is released again */
+/* An unknown station id: nothing is called, the mutex the handler took for
+ * the lookup is released again, and only the two reply-style handlers (their
+ * requester is a broadcast here) tell anyone, with an error */
 START_TEST (test_station_handlers_ignore_unknown_station)
 {
 	static const struct {
@@ -174,7 +175,11 @@ START_TEST (test_station_handlers_ignore_unknown_station)
 	BarUiPianoCallClearTestHook ();
 	ck_assert_uint_eq (g_calls, 0);
 	TestWsCaptureFlush ();
-	ck_assert_uint_eq (test_ws_cap.frameCount, 0);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	for (size_t i = 0; i < test_ws_cap.frameCount; i++) {
+		ck_assert_msg (strstr (test_ws_cap.frames[i], "\"error\"") != NULL,
+				"frame: %s", test_ws_cap.frames[i]);
+	}
 	fixture_destroy (&f);
 }
 END_TEST

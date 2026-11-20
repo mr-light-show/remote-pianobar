@@ -206,7 +206,13 @@ those replies: `station.getGenres` (operation `station.getGenres`),
 (`station.getStationInfo`) and `music.search` (`music.search`). The requester
 gets the `error` instead of the reply, and no other client is told, so one
 client's failed lookup cannot fail another client's wait for the same
-operation. Errors from state-changing commands (skip, love, station changes and
+operation. A request that cannot be served at all is answered the same way
+(to the requester only, same `operation`, localized `message`, no Pandora
+request): `station.getInfo` or `station.getModes` for an unknown station
+(`web.socket.station_not_found`) or with a missing or null `stationId`
+(`web.socket.station_id_missing`), `station.getModes` for the QuickMix station
+(`web.socket.station_modes_quickmix`), and `music.search` with a missing,
+null or empty `query` (`web.socket.invalid_search`). Errors from state-changing commands (skip, love, station changes and
 the like) are still broadcast to every client.
 
 ### `process` - Full Application State
