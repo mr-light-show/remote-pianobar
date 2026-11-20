@@ -926,7 +926,6 @@ int main (int argc, char **argv) {
 	BarStateDestroy (&app);
 	BarL10nDestroy (&app.l10n);
 	BarSettingsDestroy (&app.settings);
-	log_close_file ();
 
 	/* restore terminal attributes, zsh doesn't need this, bash does... */
 	if (!BarShouldSkipCliOutput(&app)) {

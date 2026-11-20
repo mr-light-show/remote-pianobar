@@ -28,6 +28,7 @@ THE SOFTWARE.
 #include <stdbool.h>
 #include <stdint.h>
 #include <check.h>
+#include <wchar.h>
 #include <pthread.h>
 #include <sys/stat.h>
 
@@ -350,6 +351,30 @@ START_TEST (test_log_file_rejects_null_and_empty_path)
 END_TEST
 
 /* A log line longer than the formatting buffer is written whole. */
+/* A format vsnprintf rejects (an unconvertible wide character) must not
+ * write a partial line to the file or disturb later lines. */
+START_TEST (test_log_file_skips_unformattable_line)
+{
+	char dir[256], path[300];
+	const wchar_t bad[] = { (wchar_t) 0x7fffffff, 0 };
+	file_test_paths (dir, sizeof (dir), path, sizeof (path), "log_badfmt");
+
+	log_set_debug_mask (0);
+	file_test_silence_stderr ();
+	ck_assert (log_set_file (path));
+	log_write (LOG_ERROR, "bad %ls\n", bad);
+	log_write (LOG_ERROR, "good line\n");
+	log_close_file ();
+	file_test_restore_stderr ();
+
+	char *text = file_test_read (path);
+	ck_assert_ptr_nonnull (strstr (text, "good line\n"));
+	ck_assert_ptr_null (strstr (text, "bad "));
+	free (text);
+	file_test_cleanup (dir, path);
+}
+END_TEST
+
 START_TEST (test_log_file_long_line_not_truncated)
 {
 	char dir[256], path[300];
@@ -558,6 +583,7 @@ Suite *log_suite (void) {
 	tcase_add_test (tc_file, test_log_file_appends_and_reopens);
 	tcase_add_test (tc_file, test_log_file_rejects_null_and_empty_path);
 	tcase_add_test (tc_file, test_log_file_long_line_not_truncated);
+	tcase_add_test (tc_file, test_log_file_skips_unformattable_line);
 	tcase_add_test (tc_file, test_log_file_unwritable_path_is_ignored);
 	tcase_add_test (tc_file, test_log_file_concurrent_writers_do_not_interleave);
 #ifdef HAVE_DEBUGLOG

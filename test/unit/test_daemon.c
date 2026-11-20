@@ -377,6 +377,68 @@ START_TEST(test_daemon_redirect_stdio_log_file_with_std_fds_closed) {
 }
 END_TEST
 
+/* Every combination of closed standard fds, with and without a log file:
+ * whichever descriptor open() hands back (0, 1, 2 or above), the result must
+ * be stdin on /dev/null and stdout/stderr on the log file or /dev/null (an
+ * open stderr is kept when there is no log file). */
+START_TEST(test_daemon_redirect_stdio_every_closed_fd_combination) {
+	char dir[256], logPath[300];
+	int mask, useLog;
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "daemon_combo"));
+	snprintf (logPath, sizeof (logPath), "%s/daemon.log", dir);
+	for (useLog = 0; useLog < 2; useLog++) {
+		for (mask = 0; mask < 8; mask++) {
+			pid_t child = daemon_test_fork ();
+			ck_assert (child >= 0);
+			if (child == 0) {
+				struct stat before, after;
+				bool errOpen = fcntl (STDERR_FILENO, F_GETFD) != -1;
+
+				if (!errOpen || fstat (STDERR_FILENO, &before) != 0) {
+					daemon_test_exit (1);
+				}
+				for (int fd = 0; fd < 3; fd++) {
+					if (mask & (1 << fd)) {
+						close (fd);
+					}
+				}
+				errOpen = !(mask & (1 << STDERR_FILENO));
+				if (!BarDaemonRedirectStdio (useLog ? logPath : NULL)) {
+					daemon_test_exit (2);
+				}
+				if (!daemon_test_fd_is_dev_null (STDIN_FILENO)) {
+					daemon_test_exit (3);
+				}
+				if (useLog) {
+					if (!daemon_test_fd_is_file (STDOUT_FILENO, logPath) ||
+							!daemon_test_fd_is_file (STDERR_FILENO, logPath)) {
+						daemon_test_exit (4);
+					}
+				} else {
+					if (!daemon_test_fd_is_dev_null (STDOUT_FILENO)) {
+						daemon_test_exit (5);
+					}
+					if (errOpen) {
+						if (fstat (STDERR_FILENO, &after) != 0 ||
+								before.st_ino != after.st_ino ||
+								before.st_dev != after.st_dev) {
+							daemon_test_exit (6);
+						}
+					} else if (!daemon_test_fd_is_dev_null (STDERR_FILENO)) {
+						daemon_test_exit (7);
+					}
+				}
+				daemon_test_exit (0);
+			}
+			daemon_test_wait_ok (child);
+		}
+	}
+	unlink (logPath);
+	rmdir (dir);
+}
+END_TEST
+
 START_TEST(test_daemon_redirect_stdio_bad_log_file_keeps_stderr) {
 	char dir[256], badPath[300];
 	pid_t child;
@@ -495,6 +557,7 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_redirect_stdio_with_std_fds_closed);
 	tcase_add_test(tc_core, test_daemon_redirect_stdio_all_std_fds_closed);
 	tcase_add_test(tc_core, test_daemon_redirect_stdio_log_file_with_std_fds_closed);
+	tcase_add_test(tc_core, test_daemon_redirect_stdio_every_closed_fd_combination);
 	tcase_add_test(tc_core, test_daemon_redirect_stdio_bad_log_file_keeps_stderr);
 	tcase_add_test(tc_core, test_daemon_redirect_stdio_dev_null_unavailable_returns_false);
 	tcase_add_test(tc_core, test_daemonize_steps_rejects_null_app);

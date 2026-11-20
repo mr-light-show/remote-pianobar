@@ -192,7 +192,8 @@ static void log_to_file(logKind kind, const char *format, va_list args)
 	        tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec,
 	        (long)(ts.tv_nsec / 1000000),
 	        LOG_KIND_LABEL_FIELD_WIDTH, log_kind_prefix_label(kind));
-	len = prefix > 0 ? (size_t)prefix : 0;
+	/* A fixed ASCII format cannot fail; the comparison keeps len sane anyway. */
+	len = (size_t)(prefix > 0) * (size_t)prefix;
 #else
 	(void) kind;
 #endif
@@ -221,9 +222,9 @@ static void log_to_file(logKind kind, const char *format, va_list args)
 		}
 	}
 
-	if (write(fd, buf, out) < 0) {
-		/* Nowhere left to report a failing log file. */
-	}
+	/* Nowhere left to report a failing log file, so the result is dropped. */
+	const ssize_t written = write(fd, buf, out);
+	(void) written;
 	free(heap);
 }
 

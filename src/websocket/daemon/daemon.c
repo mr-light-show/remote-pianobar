@@ -82,7 +82,8 @@ bool BarDaemonRedirectStdio (const char *logFile) {
 		if (nullFd != STDOUT_FILENO) {
 			(void) dup2 (nullFd, STDOUT_FILENO);
 		}
-		if (fcntl (STDERR_FILENO, F_GETFD) == -1 && nullFd != STDERR_FILENO) {
+		/* (If nullFd is 2, stderr is open and this test is false.) */
+		if (fcntl (STDERR_FILENO, F_GETFD) == -1) {
 			(void) dup2 (nullFd, STDERR_FILENO);
 		}
 	}
