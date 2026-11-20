@@ -1341,6 +1341,12 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	seedType = json_object_get_string(seedTypeObj);
 	stationId = json_object_get_string(stationIdObj);
 	
+	/* A JSON null value is present but has no string form */
+	if (!seedId || !seedType || !stationId) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - invalid seedId, seedType or stationId\n");
+		return;
+	}
+	
 	/* Resolve and use the station inside pianoHttpMutex; the seeds fetched
 	 * below are owned by infoReqData and need no lock. */
 	pthread_mutex_lock(&app->pianoHttpMutex);
@@ -1433,6 +1439,12 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	
 	feedbackId = json_object_get_string(feedbackIdObj);
 	stationId = json_object_get_string(stationIdObj);
+	
+	/* A JSON null value is present but has no string form */
+	if (!feedbackId || !stationId) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - invalid feedbackId or stationId\n");
+		return;
+	}
 	
 	/* Resolve and use the station inside pianoHttpMutex; the feedback
 	 * fetched below is owned by infoReqData and needs no lock. */
