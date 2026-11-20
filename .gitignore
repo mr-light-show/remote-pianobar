@@ -30,3 +30,5 @@ webui/coverage/
 *.lldb
 pianobar-session-*.log
 pianobar-crash-*.log
+# Per-variant build directories (make, make test-coverage, test-asan, ...)
+build/

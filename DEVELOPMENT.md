@@ -171,8 +171,22 @@ make distclean
 # Build Remote Pianobar with debug symbols
 make CFLAGS="-g -O0"
 
-# The binary will be created as ./pianobar
+# The binary is built as build/default/pianobar and copied to ./pianobar
 ```
+
+#### Build directories
+
+Objects, dependency files and binaries are built out of tree, one directory per variant, so the variants never share objects and can be built side by side (or at the same time, see `make gates`):
+
+| Build | Directory |
+|---|---|
+| `make`, `make test`, `make test-all`, `make test-par` | `build/default` (`BUILD_DIR=...` overrides it) |
+| `make minimal` | `build/minimal` |
+| `make test-coverage` | `build/coverage` (report `build/coverage/coverage.info`, copied to `./coverage.info`) |
+| `make test-asan` | `build/asan` |
+| `make test-tsan` | `build/tsan` |
+
+`./pianobar` and `./pianobar_test` are copies of the last default (or minimal) build, so `make install`, packaging, scripts and the `./pianobar_test` one-liners work as before. Each directory records its compiler and flags in `.build-flags`; building with different `CFLAGS`/`LDFLAGS` (for example `make CFLAGS="-g -O0"`) rebuilds that directory instead of mixing objects. `make test-coverage`, `make test-asan` and `make test-tsan` no longer start with `make clean`: they rebuild only what changed, and `make test-coverage` resets the `.gcda` counters before each run. `make clean` removes `build/` (and objects left in `src/` and `test/` by the old in-tree layout); `make distclean` also deletes stray `*.gcda`/`*.gcno`/`*.gcov` files.
 
 ### Build variants
 
@@ -269,6 +283,10 @@ make test
 `make test-coverage`, `make test-asan` and `make test-tsan` run the test binary through `scripts/test-parallel.sh` (one suite per process, `TEST_JOBS` workers, default `min(4, ncpu/2)`); `make test-par` does the same for the default build. `make test` and `make test-all` still run `./pianobar_test` serially. See [README_TESTING.md](README_TESTING.md#parallel-test-runs).
 
 `make test-ci-local` builds a local image (`pianobar-ci:ubuntu-24.04`, from `.github/docker/Dockerfile.ci-test` and `ci-test-deps.txt`) once and reuses it; Docker's layer cache rebuilds it when the package list changes, and `PIANOBAR_CI_REBUILD=1` forces a fresh `apt-get` against the current base image. The host tree is mounted read-only and copied into the container, so the run never writes objects, `.gcda` files or `coverage.info` into the host tree, and no `make distclean` is needed after it. `PIANOBAR_CI_OUT=<dir>` copies the container's `coverage.info` out.
+
+#### All gates at once
+
+`make gates` (`scripts/gates.sh`) runs the pre-push gates concurrently from one tree: `make test-ci-local` (Docker, CI `c-tests`), `make test-coverage`, `make test-all` (`-O2` tests and lint), `PIANOBAR_CI_TARGET=test-asan make test-ci-local` (Docker, CI `c-asan` with LeakSanitizer), `make test-asan` and `make test-tsan`, all with `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1`. Each step builds in its own directory, so none needs `make clean`. At most `GATES_JOBS` (default 3) run at once, each with `make -j(ncpu/3)` and `TEST_JOBS=3` (`GATES_MAKE_JOBS`, `GATES_TEST_JOBS`), because the playback suites use real-time waits and flake on an oversubscribed host. A failed step is rerun alone once and reported as "passed on rerun"; a second failure fails the gate. `GATES_STEPS="coverage test-all asan tsan"` picks steps (for example without Docker). Logs are in `build/gates/<step>.log`, and the summary lists each step's exit status, duration and `Checks:` count. For a patch-coverage number, run `make test-coverage` on its own: under gate load a few timing-dependent lines can differ.
 
 #### Static analysis
 

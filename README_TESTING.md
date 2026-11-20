@@ -51,6 +51,7 @@ overlap lint with the tests; the output of the two is then interleaved.
 - `make test-integration` - Run integration tests (sets `PIANOBAR_INTEGRATION=1`)
 - `make test-e2e-fake` - Run the web UI Playwright E2E suite against the real `pianobar` binary and a local fake Pandora API (no account; needs Python 3, openssl, Node and Playwright's Chromium); see [TESTING.md](TESTING.md#e2e-without-a-pandora-account-fake-pandora)
 - `make test-startup-smoke` - Start the real `pianobar` as a web-only daemon against a closed Pandora port (no account, network or sound card; needs Python 3) and check that stdin stays on `/dev/null` (no `lws: ZERO RANDOM FD`) and the startup failure appears on stderr; not part of `make test-all`, run in the CI `c-tests` job
+- `make gates` - Run the pre-push gates concurrently: Docker `test-ci-local` (coverage and `test-asan`), `test-coverage`, `test-all`, `test-asan`, `test-tsan` (see DEVELOPMENT.md, "All gates at once")
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
 - `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors and UB abort the run; on Linux LeakSanitizer is on too via `detect_leaks=1`, overridable with `ASAN_OPTIONS`, and runs in the CI `c-asan` job)
@@ -84,6 +85,11 @@ is passed through unchanged.
 - `CK_XML_LOG_FILE_NAME` and `CK_LOG_FILE_NAME` are per process: with
   `make test-par` every shard would overwrite the same file. Use
   `./pianobar_test` (or `TEST_JOBS=1`) when you need one Check log.
+
+Each variant builds in its own directory (`build/default`, `build/coverage`,
+`build/asan`, `build/tsan`; see DEVELOPMENT.md, "Build directories"), so
+running `make test-coverage` and then `make test-asan` keeps both builds, and
+switching back rebuilds nothing.
 
 ### Cleaning Test Files
 

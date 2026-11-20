@@ -17,7 +17,7 @@ GitHub Actions **c-tests** runs (headless Ubuntu, **no sound card**):
 PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
 ```
 
-`test-coverage` starts with **`make clean`**, then compiles every test object from scratch.
+CI starts from a fresh checkout, so every object is compiled from scratch. Locally, `make test-coverage` builds in `build/coverage` and rebuilds only what changed; `make distclean` first gives the clean build.
 
 Local **`make test-all`** (and the default pre-push hook) can miss:
 
@@ -37,13 +37,21 @@ Apply **before push** when **any** of these changed:
 
 ## Mandatory verification (CI parity)
 
-**Preferred — Docker repro (matches GHA exactly):**
+**Preferred — all gates at once (needs Docker):**
+
+```bash
+make gates
+```
+
+Runs `make test-ci-local` (Docker, = CI `c-tests`), `make test-coverage`, `make test-all`, `PIANOBAR_CI_TARGET=test-asan make test-ci-local` (= CI `c-asan`), `make test-asan` and `make test-tsan`, at most three at a time, each in its own build directory; a failed step is rerun alone once. Logs: `build/gates/<step>.log`. About 2 minutes from a clean tree.
+
+**Docker repro alone (matches GHA c-tests):**
 
 ```bash
 make test-ci-local
 ```
 
-Requires Docker. Runs Ubuntu 24.04 with the same apt packages as CI.
+Requires Docker. Runs Ubuntu 24.04 with the same apt packages as CI (prebuilt local image, fresh copy of the tree; the host tree is not written).
 
 **Alternative — on host (needs `lcov` for full parity):**
 
@@ -63,7 +71,7 @@ make distclean && PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all
 2. Integration suite completes without `Test timeout expired`.
 3. State in your reply which command you ran.
 
-**Shell timeout:** ≥ **300000 ms** for `make test-ci-local` or clean `test-coverage`.
+**Shell timeout:** ≥ **300000 ms** for `make gates`, `make test-ci-local` or clean `test-coverage`.
 
 ## Environment variables (CI + integration)
 
@@ -78,9 +86,9 @@ Always set **both** when reproducing CI locally.
 
 ```bash
 make distclean
-make test/integration/fixture_http.o
-ls test/integration/fixture_http.d test/integration/fixture_http.o
-test ! -e integration/fixture_http.d
+make build/default/test/integration/fixture_http.o
+ls build/default/test/integration/fixture_http.d build/default/test/integration/fixture_http.o
+test ! -e build/default/integration/fixture_http.d
 ```
 
 Use **`$(@:.o=.d)`**, not **`$*.d`**, in test compile rules with directory components.
@@ -89,7 +97,7 @@ Use **`$(@:.o=.d)`**, not **`$*.d`**, in test compile rules with directory compo
 
 ```
 1. Incremental PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all (dev loop)
-2. Before push on test/CI changes → make test-ci-local OR clean test-coverage command above
+2. Before push on test/CI changes → make gates (or make test-ci-local, or the clean test-coverage command above)
 3. git push
 ```
 
