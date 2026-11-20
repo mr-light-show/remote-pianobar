@@ -835,7 +835,7 @@ void BarSettingsRead (BarSettings_t *settings) {
 			}
 
 			/* act_* keyboard shortcuts (prefix-based, not exact match) */
-			if (memcmp ("act_", key, 4) == 0) {
+			if (strncmp (key, "act_", 4) == 0) {
 				for (size_t i = 0; i < BAR_KS_COUNT; i++) {
 					if (streq (dispatchActions[i].configKey, key)) {
 						settings->keys[i] = streq (val, "disabled") ?

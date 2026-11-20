@@ -446,6 +446,30 @@ START_TEST (test_settings_table_dispatch_invalid_websocket_port_ignored) {
 }
 END_TEST
 
+/* Keys shorter than the "act_" prefix (and bare "act_") must be handled
+ * without comparing past the key's terminator; real act_ keys still work. */
+START_TEST (test_settings_short_keys_and_act_prefix) {
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"a = 1\n"
+			"ac = 1\n"
+			"act = 1\n"
+			"=1\n"
+			"act_ = 1\n"
+			"act_songlove = L\n"), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+	ck_assert_int_eq (s.keys[BAR_KS_LOVE], 'L');
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
 START_TEST (test_settings_table_dispatch_rejects_malformed_account_line) {
 	char tmpl[512];
 	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
@@ -981,6 +1005,7 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_table_dispatch_remaining_backends_sorts_and_accounts);
 	tcase_add_test (tc, test_settings_table_dispatch_auto_and_pulseaudio_backends);
 	tcase_add_test (tc, test_settings_table_dispatch_invalid_websocket_port_ignored);
+	tcase_add_test (tc, test_settings_short_keys_and_act_prefix);
 	tcase_add_test (tc, test_settings_table_dispatch_rejects_malformed_account_line);
 	tcase_add_test (tc, test_settings_table_dispatch_all_sort_orders);
 	tcase_add_test (tc, test_settings_rejects_missing_account_file_with_primary);

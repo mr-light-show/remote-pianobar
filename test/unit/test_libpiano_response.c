@@ -5,9 +5,13 @@
  */
 
 #include <check.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <piano.h>
+
+#include "crypt.h"
 
 /* Helper: set up a zeroed PianoHandle + PianoRequest, call PianoResponse,
  * return the result.  Caller must call PianoDestroy(&ph) afterwards. */
@@ -88,6 +92,346 @@ START_TEST (test_response_ok_genre_stations_empty_does_not_crash)
 }
 END_TEST
 
+/* "stat":null is not a string: must be rejected, not passed to strcmp */
+START_TEST (test_response_null_stat_is_invalid)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":null,\"result\":{}}");
+	ck_assert_int_eq (ret, PIANO_RET_INVALID_RESPONSE);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* A station whose name is JSON null must be skipped, not strdup(NULL)'d */
+START_TEST (test_response_station_null_name_skipped)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":["
+	        "{\"stationName\":null,\"stationToken\":\"bad\"},"
+	        "{\"stationName\":\"Good\",\"stationToken\":\"good\"}]}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	ck_assert_ptr_nonnull (ph.stations);
+	ck_assert_str_eq (ph.stations->name, "Good");
+	ck_assert_str_eq (ph.stations->id, "good");
+	ck_assert_ptr_null (ph.stations->head.next);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* A quickmix station without stationToken must not reach strcmp(.., NULL) */
+START_TEST (test_response_quickmix_missing_station_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":["
+	        "{\"stationName\":\"QuickMix\",\"isQuickMix\":true,"
+	        "\"quickMixStationIds\":[\"a\"]},"
+	        "{\"stationName\":\"A\",\"stationToken\":\"a\"}]}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* null entries in quickMixStationIds are ignored; real ids still match */
+START_TEST (test_response_quickmix_null_id_entry)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":["
+	        "{\"stationName\":\"QuickMix\",\"stationToken\":\"q\","
+	        "\"isQuickMix\":true,\"quickMixStationIds\":[null,\"a\"]},"
+	        "{\"stationName\":\"A\",\"stationToken\":\"a\"},"
+	        "{\"stationName\":\"B\",\"stationToken\":\"b\"}]}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	PianoStation_t *q = ph.stations;
+	ck_assert_ptr_nonnull (q);
+	PianoStation_t *a = (PianoStation_t *) q->head.next;
+	ck_assert_ptr_nonnull (a);
+	PianoStation_t *b = (PianoStation_t *) a->head.next;
+	ck_assert_ptr_nonnull (b);
+	ck_assert (!q->useQuickMix);
+	ck_assert (a->useQuickMix);
+	ck_assert (!b->useQuickMix);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* stations that is not an array must be ignored */
+START_TEST (test_response_stations_not_array)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_GET_STATIONS,
+	        "{\"stat\":\"ok\",\"result\":{\"stations\":\"oops\"}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	ck_assert_ptr_null (ph.stations);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* focusTraitName:null must be skipped instead of reaching PianoStrpcat */
+START_TEST (test_response_explain_null_focus_trait)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataExplain_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	req.type = PIANO_REQUEST_EXPLAIN;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"explanations\":["
+	        "{\"focusTraitName\":null},{\"focusTraitName\":\"jazz\"}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.retExplain);
+	ck_assert_ptr_nonnull (strstr (data.retExplain, "jazz"));
+	free (data.retExplain);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+static void initCryptoHandle (PianoHandle_t *ph, PianoRequest_t *req,
+		PianoRequestDataLogin_t *login, int step) {
+	ck_assert_int_eq (PianoInit (ph, "u", "p", "d", "inkeyinkey", "inkeyinkey"),
+			PIANO_RET_OK);
+	memset (req, 0, sizeof (*req));
+	memset (login, 0, sizeof (*login));
+	login->step = step;
+	req->type = PIANO_REQUEST_LOGIN;
+	req->data = login;
+}
+
+/* Missing partnerAuthToken in the partnerLogin response is a bad response,
+ * not a login that proceeds with a NULL token. */
+START_TEST (test_response_login_step0_missing_auth_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+	char json[256];
+
+	initCryptoHandle (&ph, &req, &login, 0);
+	char *enc = PianoEncryptString (ph.partner.out, "xxxx1234567890");
+	ck_assert_ptr_nonnull (enc);
+	snprintf (json, sizeof (json), "{\"stat\":\"ok\",\"result\":{"
+	        "\"syncTime\":\"%s\",\"partnerId\":\"42\"}}", enc);
+	free (enc);
+	req.responseData = json;
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_INVALID_RESPONSE);
+	ck_assert_ptr_null (ph.partner.authToken);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* syncTime:null must not be passed to the decryptor */
+START_TEST (test_response_login_step0_null_sync_time)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 0);
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"syncTime\":null,"
+	        "\"partnerAuthToken\":\"t\",\"partnerId\":\"42\"}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_INVALID_RESPONSE);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* A well-formed partnerLogin response still continues the login */
+START_TEST (test_response_login_step0_ok)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+	char json[256];
+
+	initCryptoHandle (&ph, &req, &login, 0);
+	char *enc = PianoEncryptString (ph.partner.out, "xxxx1234567890");
+	ck_assert_ptr_nonnull (enc);
+	snprintf (json, sizeof (json), "{\"stat\":\"ok\",\"result\":{"
+	        "\"syncTime\":\"%s\",\"partnerAuthToken\":\"tok\","
+	        "\"partnerId\":\"42\"}}", enc);
+	free (enc);
+	req.responseData = json;
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_CONTINUE_REQUEST);
+	ck_assert_str_eq (ph.partner.authToken, "tok");
+	ck_assert_int_eq (login.step, 1);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* userLogin response missing userAuthToken must fail, leaving no half-set
+ * user info behind. */
+START_TEST (test_response_login_step1_missing_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 1);
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"userId\":\"7\","
+	        "\"userAuthToken\":null}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_INVALID_RESPONSE);
+	ck_assert_ptr_null (ph.user.listenerId);
+	ck_assert_ptr_null (ph.user.authToken);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_login_step1_ok)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 1);
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"userId\":\"7\","
+	        "\"userAuthToken\":\"tok\"}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_str_eq (ph.user.listenerId, "7");
+	ck_assert_str_eq (ph.user.authToken, "tok");
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* PianoRequest must refuse to escape a NULL partner/user auth token */
+START_TEST (test_request_login_step1_null_partner_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataLogin_t login;
+
+	initCryptoHandle (&ph, &req, &login, 1);
+	login.user = "u";
+	login.password = "p";
+	ph.partner.authToken = NULL;
+	ck_assert_int_eq (PianoRequest (&ph, &req, PIANO_REQUEST_LOGIN),
+	        PIANO_RET_INVALID_RESPONSE);
+	free (req.postData);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_request_standard_null_user_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	ck_assert_int_eq (PianoInit (&ph, "u", "p", "d", "inkeyinkey", "inkeyinkey"),
+	        PIANO_RET_OK);
+	memset (&req, 0, sizeof (req));
+	ph.user.listenerId = strdup ("7");
+	ph.user.authToken = NULL;
+	ck_assert_int_eq (PianoRequest (&ph, &req, PIANO_REQUEST_GET_STATIONS),
+	        PIANO_RET_INVALID_RESPONSE);
+	free (req.postData);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* Non-array containers in the other list parsers are ignored, not walked */
+START_TEST (test_response_lists_not_arrays)
+{
+	static const struct { PianoRequestType_t type; const char *json; } cases[] = {
+		{PIANO_REQUEST_GET_GENRE_STATIONS,
+		 "{\"stat\":\"ok\",\"result\":{\"categories\":7}}"},
+		{PIANO_REQUEST_GET_GENRE_STATIONS,
+		 "{\"stat\":\"ok\",\"result\":{\"categories\":[{\"categoryName\":\"c\","
+		 "\"stations\":{}}]}}"},
+		{PIANO_REQUEST_EXPLAIN,
+		 "{\"stat\":\"ok\",\"result\":{\"explanations\":\"x\"}}"},
+		{PIANO_REQUEST_SEARCH,
+		 "{\"stat\":\"ok\",\"result\":{\"artists\":1,\"songs\":2}}"},
+		{PIANO_REQUEST_GET_STATION_MODES,
+		 "{\"stat\":\"ok\",\"result\":{\"availableModes\":true}}"},
+	};
+	for (size_t i = 0; i < sizeof (cases)/sizeof (*cases); i++) {
+		PianoHandle_t ph;
+		PianoRequest_t req;
+		union {
+			PianoRequestDataExplain_t explain;
+			PianoRequestDataSearch_t search;
+			PianoRequestDataGetStationModes_t modes;
+		} data;
+		memset (&data, 0, sizeof (data));
+		memset (&ph, 0, sizeof (ph));
+		memset (&req, 0, sizeof (req));
+		req.type = cases[i].type;
+		req.data = &data;
+		req.responseData = (char *) cases[i].json;
+		(void) PianoResponse (&ph, &req);
+		PianoDestroy (&ph);
+	}
+}
+END_TEST
+
+/* createStation answer without name/token must not be added or escape-matched */
+START_TEST (test_response_create_station_null_token)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_CREATE_STATION,
+	        "{\"stat\":\"ok\",\"result\":{\"stationName\":\"X\","
+	        "\"stationToken\":null}}");
+	ck_assert_int_eq (ret, PIANO_RET_INVALID_RESPONSE);
+	ck_assert_ptr_null (ph.stations);
+	PianoDestroy (&ph);
+}
+END_TEST
+
+START_TEST (test_response_create_station_ok)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+
+	PianoReturn_t ret = callResponse (&ph, &req, PIANO_REQUEST_CREATE_STATION,
+	        "{\"stat\":\"ok\",\"result\":{\"stationName\":\"X\","
+	        "\"stationToken\":\"tok\"}}");
+	ck_assert_int_eq (ret, PIANO_RET_OK);
+	ck_assert_str_eq (ph.stations->id, "tok");
+	PianoDestroy (&ph);
+}
+END_TEST
+
+/* "encoding":null in the audio map must not reach strcmp */
+START_TEST (test_response_playlist_null_encoding)
+{
+	PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) "{\"stat\":\"ok\",\"result\":{\"items\":[{"
+	        "\"artistName\":\"A\",\"songName\":\"S\","
+	        "\"audioUrlMap\":{\"highQuality\":{\"encoding\":null,"
+	        "\"audioUrl\":\"http://x/y\"}}}]}}";
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	ck_assert_ptr_nonnull (data.retPlaylist);
+	ck_assert_int_eq (data.retPlaylist->audioFormat, PIANO_AF_UNKNOWN);
+	PianoDestroyPlaylist (data.retPlaylist);
+	PianoDestroy (&ph);
+}
+END_TEST
+
 Suite *libpiano_response_suite (void) {
 	Suite *s = suite_create ("libpiano_response");
 	TCase *tc = tcase_create ("JSON parsing");
@@ -96,6 +440,23 @@ Suite *libpiano_response_suite (void) {
 	tcase_add_test (tc, test_response_invalid_json_does_not_crash);
 	tcase_add_test (tc, test_response_fail_missing_code_field);
 	tcase_add_test (tc, test_response_ok_genre_stations_empty_does_not_crash);
+	tcase_add_test (tc, test_response_null_stat_is_invalid);
+	tcase_add_test (tc, test_response_station_null_name_skipped);
+	tcase_add_test (tc, test_response_quickmix_missing_station_token);
+	tcase_add_test (tc, test_response_quickmix_null_id_entry);
+	tcase_add_test (tc, test_response_stations_not_array);
+	tcase_add_test (tc, test_response_explain_null_focus_trait);
+	tcase_add_test (tc, test_response_login_step0_missing_auth_token);
+	tcase_add_test (tc, test_response_login_step0_null_sync_time);
+	tcase_add_test (tc, test_response_login_step0_ok);
+	tcase_add_test (tc, test_response_login_step1_missing_token);
+	tcase_add_test (tc, test_response_login_step1_ok);
+	tcase_add_test (tc, test_request_login_step1_null_partner_token);
+	tcase_add_test (tc, test_request_standard_null_user_token);
+	tcase_add_test (tc, test_response_lists_not_arrays);
+	tcase_add_test (tc, test_response_create_station_null_token);
+	tcase_add_test (tc, test_response_create_station_ok);
+	tcase_add_test (tc, test_response_playlist_null_encoding);
 	suite_add_tcase (s, tc);
 	return s;
 }
