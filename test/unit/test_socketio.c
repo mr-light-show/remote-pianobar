@@ -2470,6 +2470,99 @@ START_TEST (test_data_replies_go_to_requester_only)
 }
 END_TEST
 
+static bool
+mock_every_call_fails (BarApp_t *app, const PianoRequestType_t type, void *data,
+                       PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	(void) type;
+	(void) data;
+	*pRet = PIANO_RET_ERR;
+	*wRet = CURLE_OK;
+	return false;
+}
+
+/* Send `message` as client 1 with every Pandora call failing: only client 1
+ * gets the (single) error frame, and it names `operation` */
+static void expect_error_to_requester_only (InfoFixture_t *f, const char *message,
+		const char *operation) {
+	TestWsCaptureClear ();
+	BarSocketIoHandleMessage (&f->app, message, test_ws_cap.ids[1]);
+	TestWsCaptureFlush ();
+	ck_assert_msg (TestWsCaptureCount (1, "\"error\"") == 1,
+			"%s: error did not reach the requester", operation);
+	ck_assert_msg (TestWsCaptureCount (1, operation) == 1, "%s: wrong operation", operation);
+	ck_assert_msg (TestWsCaptureCount (0, "") == 0, "%s: error reached another client", operation);
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+}
+
+/* S8: a failed Pandora call in a reply-style handler (station.getGenres,
+ * station.getModes, station.getInfo, music.search) is reported to the asking
+ * client only, so it cannot fail another client's wait for the same operation */
+START_TEST (test_data_reply_errors_go_to_requester_only)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	BarUiPianoCallSetTestHook (mock_every_call_fails);
+
+	expect_error_to_requester_only (&f, "2[\"station.getGenres\",{}]", "station.getGenres");
+	expect_error_to_requester_only (&f,
+			"2[\"station.getModes\",{\"stationId\":\"S1\"}]", "station.getStationModes");
+	expect_error_to_requester_only (&f,
+			"2[\"station.getInfo\",{\"stationId\":\"S1\"}]", "station.getStationInfo");
+	expect_error_to_requester_only (&f, "2[\"music.search\",{\"query\":\"q\"}]", "music.search");
+
+	BarUiPianoCallClearTestHook ();
+	info_fixture_destroy (&f);
+}
+END_TEST
+
+/* S8: a reply-style handler called without a requester still broadcasts its
+ * error */
+START_TEST (test_data_reply_errors_broadcast_without_requester)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	BarUiPianoCallSetTestHook (mock_every_call_fails);
+
+	json_object *data = json_tokener_parse ("{\"stationId\":\"S1\"}");
+	BarSocketIoHandleGetStationModes (&f.app, data, BAR_WS_DEST_BROADCAST);
+	BarSocketIoHandleGetStationInfo (&f.app, data, BAR_WS_DEST_BROADCAST);
+	json_object_put (data);
+	data = json_tokener_parse ("{\"query\":\"q\"}");
+	BarSocketIoHandleSearchMusic (&f.app, data, BAR_WS_DEST_BROADCAST);
+	json_object_put (data);
+	BarSocketIoHandleGetGenres (&f.app, BAR_WS_DEST_BROADCAST);
+
+	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 8);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\"error\""), 4);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"error\""), 4);
+	info_fixture_destroy (&f);
+}
+END_TEST
+
+/* S8: the error of a failed state-changing action stays a broadcast */
+START_TEST (test_state_changing_action_errors_still_broadcast)
+{
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	f.station.isCreator = true;
+	BarUiPianoCallSetTestHook (mock_every_call_fails);
+
+	BarSocketIoHandleMessage (&f.app,
+			"2[\"station.rename\",{\"stationId\":\"S1\",\"newName\":\"New\"}]",
+			test_ws_cap.ids[1]);
+	BarUiPianoCallClearTestHook ();
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "station.rename"), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "station.rename"), 1);
+	info_fixture_destroy (&f);
+}
+END_TEST
+
 /* S4: stationInfo says which station it describes, so a client can tell its
  * own reply from one for another station */
 START_TEST (test_station_info_carries_station_id)
@@ -3173,6 +3266,9 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_set_station_mode_success);
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_info_success);
 	tcase_add_test(tc_handle, test_data_replies_go_to_requester_only);
+	tcase_add_test(tc_handle, test_data_reply_errors_go_to_requester_only);
+	tcase_add_test(tc_handle, test_data_reply_errors_broadcast_without_requester);
+	tcase_add_test(tc_handle, test_state_changing_action_errors_still_broadcast);
 	tcase_add_test(tc_handle, test_process_event_carries_player_version);
 	tcase_add_test(tc_handle, test_not_implemented_action_errors_requester_only);
 	tcase_add_test(tc_handle, test_station_info_carries_station_id);

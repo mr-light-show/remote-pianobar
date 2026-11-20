@@ -200,6 +200,15 @@ client's own request (`genres`, `searchResults`, `stationModes`, `stationInfo`,
 `query.upcoming.result`, `song.explanation`, and the answers to `query`) go to
 that client only.
 
+So do the `error` events for a failed Pandora call in the commands that produce
+those replies: `station.getGenres` (operation `station.getGenres`),
+`station.getModes` (`station.getStationModes`), `station.getInfo`
+(`station.getStationInfo`) and `music.search` (`music.search`). The requester
+gets the `error` instead of the reply, and no other client is told, so one
+client's failed lookup cannot fail another client's wait for the same
+operation. Errors from state-changing commands (skip, love, station changes and
+the like) are still broadcast to every client.
+
 ### `process` - Full Application State
 
 Sent in response to a `query` event or on initial connection. Contains complete application state.

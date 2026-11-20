@@ -689,10 +689,13 @@ static void BarSocketIoOnPandoraRequestFailed(BarApp_t *app, PianoReturn_t pRet)
 	}
 }
 
-/* Wrapper: call Piano API with logging; on failure, log + BarSocketIoOnPandoraRequestFailed + BarSocketIoEmitError. Messages derived from actionName. */
-static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
+/* Call Piano API with logging; on failure, log + BarSocketIoOnPandoraRequestFailed
+ * + an error event to `errorDest` (BAR_WS_DEST_BROADCAST broadcasts). Messages
+ * derived from actionName. Reply-style handlers pass their requester so a failed
+ * lookup does not fail another client's wait for the same operation. */
+static bool BarSocketIoPianoCallLoggedTo(BarApp_t *app, PianoRequestType_t type,
 	void *data, const char *actionName,
-	const char *operation,
+	const char *operation, BarWsConnId_t errorDest,
 	PianoReturn_t *pRet, CURLcode *wRet) {
 	bool ok = BarUiPianoCallLogged(app, type, data, actionName, pRet, wRet);
 	if (ok) {
@@ -703,8 +706,17 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 	BarSocketIoOnPandoraRequestFailed(app, *pRet);
 	char buf[BAR_BUF_SMALL];
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
-	BarSocketIoEmitError(app, operation, buf);
+	BarSocketIoEmitErrorTo(app, errorDest, operation, buf);
 	return false;
+}
+
+/* Wrapper for state-changing actions: the error is broadcast */
+static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
+	void *data, const char *actionName,
+	const char *operation,
+	PianoReturn_t *pRet, CURLcode *wRet) {
+	return BarSocketIoPianoCallLoggedTo(app, type, data, actionName, operation,
+			BAR_WS_DEST_BROADCAST, pRet, wRet);
 }
 
 /* Emit 'query.upcoming.result' event (up to maxSongs queued songs) to `dest`.
@@ -812,8 +824,8 @@ void BarSocketIoHandleGetGenres(BarApp_t *app, BarWsConnId_t requester) {
 	/* Fetch genre stations if not already cached */
 	if (app->ph.genreStations == NULL) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Fetching genre stations from API\n");
-		if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
-				"Receiving genre stations", "station.getGenres", &pRet, &wRet)) {
+		if (!BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
+				"Receiving genre stations", "station.getGenres", requester, &pRet, &wRet)) {
 			pthread_mutex_unlock(&app->pianoHttpMutex);
 			return;
 		}
@@ -1081,8 +1093,9 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data,
 	/* Fetch station modes (the result is owned by reqData) */
 	memset(&reqData, 0, sizeof(reqData));
 	reqData.station = station;
-	const bool fetched = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_MODES,
-			&reqData, "Fetching station modes", "station.getStationModes", &pRet, &wRet);
+	const bool fetched = BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_GET_STATION_MODES,
+			&reqData, "Fetching station modes", "station.getStationModes", requester,
+			&pRet, &wRet);
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (fetched) {
 		BarSocketIoEmitStationModes(app, &reqData, requester);
@@ -1207,8 +1220,9 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data,
 	memset(&reqData, 0, sizeof(reqData));
 	reqData.station = station;
 	
-	const bool fetched = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO,
-			&reqData, "Fetching station info", "station.getStationInfo", &pRet, &wRet);
+	const bool fetched = BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_GET_STATION_INFO,
+			&reqData, "Fetching station info", "station.getStationInfo", requester,
+			&pRet, &wRet);
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (fetched) {
 		BarSocketIoEmitStationInfo(app, stationId, &reqData, requester);
@@ -1563,8 +1577,8 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data,
 	memset(&reqData.searchResult, 0, sizeof(reqData.searchResult));
 	
 	/* Perform the search */
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SEARCH, &reqData,
-			"Searching", "music.search", &pRet, &wRet)) {
+	if (BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_SEARCH, &reqData,
+			"Searching", "music.search", requester, &pRet, &wRet)) {
 		BarSocketIoEmitSearchResults(app, &reqData.searchResult, requester);
 		PianoDestroySearchResult(&reqData.searchResult);
 	}
