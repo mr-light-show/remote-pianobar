@@ -149,7 +149,7 @@ static void BarSocketIoEmitNotImplemented (BarApp_t *app, const char *operation,
  * reply must not be left to its own timeout */
 static void BarSocketIoEmitRequestRejected (BarApp_t *app, BarWsConnId_t requester,
                                             const char *operation, const char *key) {
-	BarSocketIoEmitErrorTo (app, requester, operation, BarL10nGet (app ? &app->l10n : NULL, key));
+	BarSocketIoEmitErrorTo (app, requester, operation, BarL10nGet (&app->l10n, key));
 }
 
 /* Parse Socket.IO protocol message format */

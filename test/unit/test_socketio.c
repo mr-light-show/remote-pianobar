@@ -2625,6 +2625,17 @@ START_TEST (test_unservable_requests_get_requester_error)
 }
 END_TEST
 
+/* Without an app there is nobody to answer: no crash */
+START_TEST (test_reply_handlers_ignore_null_app)
+{
+	json_object *data = json_tokener_parse ("{\"stationId\":\"S1\",\"query\":\"q\"}");
+	BarSocketIoHandleGetStationInfo (NULL, data, BAR_WS_DEST_BROADCAST);
+	BarSocketIoHandleGetStationModes (NULL, data, BAR_WS_DEST_BROADCAST);
+	BarSocketIoHandleSearchMusic (NULL, data, BAR_WS_DEST_BROADCAST);
+	json_object_put (data);
+}
+END_TEST
+
 /* The same failures called without a requester are broadcast, like the
  * Pandora failures of these handlers */
 START_TEST (test_unservable_requests_broadcast_without_requester)
@@ -3474,6 +3485,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_data_reply_errors_broadcast_without_requester);
 	tcase_add_test(tc_handle, test_unservable_requests_get_requester_error);
 	tcase_add_test(tc_handle, test_unservable_requests_broadcast_without_requester);
+	tcase_add_test(tc_handle, test_reply_handlers_ignore_null_app);
 	tcase_add_test(tc_handle, test_state_changing_action_errors_still_broadcast);
 	tcase_add_test(tc_handle, test_process_event_carries_player_version);
 	tcase_add_test(tc_handle, test_not_implemented_action_errors_requester_only);
