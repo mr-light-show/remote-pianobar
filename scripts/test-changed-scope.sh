@@ -3,6 +3,11 @@
 # Each case builds a throwaway repo: branch `base`, then a topic branch with
 # the case's files, and checks the printed scope.
 set -euo pipefail
+# Git exports GIT_DIR (and friends) to hooks, and the pre-push hook runs this
+# via test-all: drop them so every git command below acts on the throwaway
+# repo, never on the caller's (scripts/test-script-isolation.sh checks this).
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
 # The cases set their own overrides; ignore the caller's.
 unset GATES_SCOPE SCOPE_BASE
 
@@ -20,6 +25,10 @@ new_repo () {
 	mkdir -p "$TMP/r"
 	cd "$TMP/r"
 	git init -q -b base
+	if [ "$(git rev-parse --absolute-git-dir)" != "$(pwd -P)/.git" ]; then
+		echo "refusing to run: git does not point at the throwaway repo" >&2
+		exit 2
+	fi
 	git config user.email t@example.invalid
 	git config user.name t
 	echo seed >seed.txt

@@ -456,6 +456,7 @@ test-scripts:
 	${SILENTECHO} "   TEST  scripts/changed-scope.sh, scripts/pre-push-decision.sh..."
 	${SILENTCMD}bash scripts/test-changed-scope.sh
 	${SILENTCMD}bash scripts/test-pre-push-decision.sh
+	${SILENTCMD}bash scripts/test-script-isolation.sh
 
 test-all: test lint test-scripts
 	${SILENTECHO} "   TEST  All tests passed!"
