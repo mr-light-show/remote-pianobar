@@ -35,20 +35,31 @@ if ! git rev-parse --verify -q "${base}^{commit}" >/dev/null; then
 fi
 
 # --no-renames: a moved file counts under its old path too (src/a.c moved to
-# docs/ is still a src/ change).
-files="$( (git diff --no-renames --name-only "${base}...HEAD" &&
-	git status --porcelain -uall --no-renames | cut -c4-) | sort -u)" || {
-	echo full
-	exit 0
-}
-
+# docs/ is still a src/ change). -z gives NUL-separated, unquoted paths (spaces
+# and non-ASCII are C-quoted otherwise); porcelain -z entries are "XY path".
 scope=docs
-while IFS= read -r f; do
-	[ -n "$f" ] || continue
-	case "$f" in
+classify () {
+	case "$1" in
 	*.md|docs/*|.agents/*|.cursor/*|LICENSE*) ;;
 	webui/*) scope=web ;;
 	*) echo full; exit 0 ;;
 	esac
-done <<<"$files"
+}
+
+tmpd="$(mktemp -d "${TMPDIR:-/tmp}/scope.XXXXXX")"
+trap 'rm -rf "$tmpd"' EXIT
+git diff -z --no-renames --name-only "${base}...HEAD" >"$tmpd/diff" || {
+	echo full
+	exit 0
+}
+git status --porcelain -z -uall --no-renames >"$tmpd/status" || {
+	echo full
+	exit 0
+}
+while IFS= read -r -d '' f; do
+	[ -n "$f" ] && classify "$f"
+done <"$tmpd/diff"
+while IFS= read -r -d '' f; do
+	[ -n "$f" ] && classify "${f:3}"
+done <"$tmpd/status"
 echo "$scope"

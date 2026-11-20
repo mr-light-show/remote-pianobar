@@ -114,5 +114,58 @@ export GATES_SCOPE=web
 expect override_web_is_ignored full base
 unset GATES_SCOPE
 
+new_repo; commit_files "docs/my notes.md"
+expect committed_path_with_space_is_docs docs base
+
+new_repo; commit_files "docs/ü.md"
+expect committed_non_ascii_path_is_docs docs base
+
+new_repo; commit_files "src/with space.c"
+expect src_path_with_space_is_full full base
+
+new_repo; mkdir -p docs; echo y >"docs a.md"
+expect untracked_path_with_space_is_docs docs base
+
+# Default base (no argument, no SCOPE_BASE): origin/feature/ws-simplification,
+# else origin/main, else full. Refs are created by hand in the throwaway repo.
+new_repo; commit_files README.md
+git update-ref refs/remotes/origin/main base
+expect default_base_falls_back_to_origin_main docs
+
+new_repo; commit_files src/a.c
+git update-ref refs/remotes/origin/main base
+expect default_base_origin_main_src_is_full full
+
+new_repo; commit_files README.md
+expect default_base_none_present_is_full full
+
+new_repo; commit_files src/a.c
+git update-ref refs/remotes/origin/main base
+git update-ref refs/remotes/origin/feature/ws-simplification topic
+expect default_base_prefers_feature_branch docs
+
+# Unresolvable merge base (shallow clone, unrelated history): diff fails.
+new_repo; commit_files README.md
+git checkout -q --orphan unrelated; git rm -rfq . >/dev/null 2>&1 || true
+echo u >u.md; git add u.md; git commit -q -m unrelated
+expect unrelated_history_no_merge_base_is_full full base
+
+# Shallow fetches of both tips: the merge base is not in the history.
+new_repo; commit_files README.md; commit_files docs/b.md
+rm -rf "$TMP/shallow"
+git init -q "$TMP/shallow"
+( cd "$TMP/shallow" &&
+	git fetch -q --depth 1 "file://$TMP/r" base &&
+	git update-ref refs/remotes/origin/main FETCH_HEAD &&
+	git fetch -q --depth 1 "file://$TMP/r" topic &&
+	git checkout -q --detach FETCH_HEAD ) 2>/dev/null
+got="$(cd "$TMP/shallow" && "$SCOPE" 2>/dev/null || echo "exit-$?")"
+if [ "$got" = full ]; then
+	pass=$((pass + 1))
+else
+	echo "FAIL shallow_no_merge_base_is_full: got ${got}" >&2
+	fail=$((fail + 1))
+fi
+
 echo "test-changed-scope: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
