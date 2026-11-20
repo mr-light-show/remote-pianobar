@@ -542,6 +542,9 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 	BarStateSnapshotPlayback (app, &pbSnap);
 
 	struct json_object *data = json_object_new_object ();
+	/* Clients compare its major version with their own (VERSION is "dev" for
+	 * local builds; the release workflow sets it from the tag) */
+	json_object_object_add (data, "version", json_object_new_string (VERSION));
 	json_object_object_add (data, "playing", json_object_new_boolean (pbSnap.hasSong));
 
 	bool paused = BarStateGetPlayerPaused (app);

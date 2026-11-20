@@ -163,7 +163,7 @@ coordinator and Lovelace card depend on:
 | `progress` | `2["progress",{"elapsed":42,"duration":240,"percentage":17}]` | object |
 | `volume` | `2["volume",50]` | bare integer (not an object) |
 | `stations` | `2["stations",[{"id":"sid","name":"Name","isQuickMix":false}]]` | array |
-| `process` | `2["process",{"song":{...},"station":"Name","stationId":"sid","playing":true,"paused":false,"volume":50}]` | object |
+| `process` | `2["process",{"version":"3.0.0","song":{...},"station":"Name","stationId":"sid","playing":true,"paused":false,"volume":50}]` | object |
 | `playState` | `2["playState",{"paused":true}]` | object |
 | `error` | `2["error",{"operation":"query.history","message":"..."}]` | object |
 | `pandora.disconnected` | `2["pandora.disconnected",{"reason":"idle"}]` | object |
@@ -208,6 +208,7 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `version` | string | Player version (`"dev"` for local builds; a release sets it from its tag, e.g. `"3.0.0"`). Clients compare its major version with their own. Absent from players older than v3. |
 | `playing` | boolean | Whether a song is currently loaded |
 | `paused` | boolean | Whether playback is paused |
 | `volume` | number | Current volume as percentage (0-100) |
@@ -223,6 +224,7 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 ```json
 {
+  "version": "3.0.0",
   "playing": true,
   "paused": false,
   "volume": 65,
@@ -252,6 +254,7 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 ```json
 {
+  "version": "3.0.0",
   "playing": false,
   "paused": false,
   "volume": 50,

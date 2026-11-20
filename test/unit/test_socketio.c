@@ -2526,6 +2526,36 @@ START_TEST (test_not_implemented_action_errors_requester_only)
 }
 END_TEST
 
+/* S7: every process event names the player version (VERSION), so clients
+ * can compare major versions; a query reply and a broadcast both carry it */
+START_TEST (test_process_event_carries_player_version) {
+	BarApp_t app;
+	PianoStation_t station;
+	PianoSong_t song;
+	capture_app_init (&app, &station, &song);
+
+	BarSocketIoEmitProcessTo (&app, test_ws_cap.ids[1]);
+	assert_frame (0, 1, "process");
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	json_object *payload = frame_payload (0);
+	json_object *field;
+	ck_assert (json_object_object_get_ex (payload, "version", &field));
+	ck_assert (json_object_is_type (field, json_type_string));
+	ck_assert_str_eq (json_object_get_string (field), VERSION);
+	json_object_put (payload);
+
+	TestWsCaptureClear ();
+	BarSocketIoEmitProcess (&app);
+	assert_broadcast_frame ("process");
+	payload = frame_payload (0);
+	ck_assert (json_object_object_get_ex (payload, "version", &field));
+	ck_assert_str_eq (json_object_get_string (field), VERSION);
+	json_object_put (payload);
+
+	capture_app_destroy (&app);
+}
+END_TEST
+
 START_TEST (test_capture_progress_broadcast) {
 	BarApp_t app;
 	PianoStation_t station;
@@ -3143,6 +3173,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_set_station_mode_success);
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_info_success);
 	tcase_add_test(tc_handle, test_data_replies_go_to_requester_only);
+	tcase_add_test(tc_handle, test_process_event_carries_player_version);
 	tcase_add_test(tc_handle, test_not_implemented_action_errors_requester_only);
 	tcase_add_test(tc_handle, test_station_info_carries_station_id);
 	tcase_add_test(tc_handle, test_station_info_at_frame_limit_is_sent);
