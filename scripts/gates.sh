@@ -34,6 +34,30 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 unset MAKEFLAGS MFLAGS MAKELEVEL
 
+# Skip what the change cannot affect (scripts/changed-scope.sh; GATES_SCOPE=full
+# forces every step). A full pass on a clean tree leaves build/gates/passed
+# (the tested commit; not written for a GATES_STEPS subset), which
+# .githooks/pre-push trusts for that commit.
+STAMP="${ROOT}/build/gates/passed"
+rm -f "$STAMP"
+SCOPE="$(./scripts/changed-scope.sh)"
+case "$SCOPE" in
+docs)
+	echo "gates: docs-only change, nothing to run (GATES_SCOPE=full to force)"
+	exit 0
+	;;
+web)
+	echo "gates: webui-only change, running the web unit tests"
+	(cd webui && npm test -- --run)
+	exit $?
+	;;
+esac
+clean_tree () { [ -z "$(git status --porcelain -uall)" ]; }
+start_head=""
+if clean_tree; then
+	start_head="$(git rev-parse HEAD)"
+fi
+
 ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 STEPS="${GATES_STEPS:-docker coverage test-all docker-asan asan tsan}"
 CAP="${GATES_JOBS:-3}"
@@ -118,5 +142,9 @@ for s in $failed; do
 done
 
 echo "gates: total $(( $(now) - gate_start ))s"
+if [ "$final" -eq 0 ] && [ -z "${GATES_STEPS:-}" ] && [ -n "$start_head" ] && clean_tree &&
+		[ "$(git rev-parse HEAD)" = "$start_head" ]; then
+	echo "$start_head" >"$STAMP"
+fi
 [ "$final" -eq 0 ] && echo "gates: all passed" || echo "gates: FAILED"
 exit "$final"

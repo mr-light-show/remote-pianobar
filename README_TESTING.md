@@ -67,6 +67,9 @@ overlap lint with the tests; the output of the two is then interleaved.
 (`CK_RUN_CASE`). The environment (`PIANOBAR_INTEGRATION`, `ASAN_OPTIONS`, ...)
 is passed through unchanged.
 
+- While iterating, `make test-suite S=<suite> [C=<tcase>]` builds the default
+  variant and runs one suite (or one tcase) with `PIANOBAR_INTEGRATION=1
+  PIANOBAR_TEST_NO_DEVICE=1`; it fails when the name matches nothing.
 - `TEST_JOBS=N` sets the worker count. The default is `min(4, ncpu/2)`,
   because the playback suites use real-time waits and can flake on an
   oversubscribed host. `TEST_JOBS=1` runs `./pianobar_test` once, unsharded,

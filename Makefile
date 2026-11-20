@@ -400,6 +400,14 @@ test-par: pianobar_test
 	${SILENTECHO} "   TEST  Running test suite in parallel shards..."
 	${SILENTCMD}${TEST_PAR}
 
+# One suite (and optionally one tcase) from the default build, for a fast
+# edit-test loop: make test-suite S=WebSocket [C=Core]. Fails when nothing
+# matches. Run the full gates before pushing.
+test-suite: pianobar_test
+	${SILENTCMD}if [ -z "$(S)" ]; then echo "test-suite: set S=<suite> (and optionally C=<tcase>)" >&2; exit 2; fi
+	${SILENTECHO} "   TEST  Suite $(S)$(if $(C), / $(C))..."
+	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 CK_RUN_SUITE="$(S)" $(if $(C),CK_RUN_CASE="$(C)") ./${TEST_BIN}
+
 # Integration tests (local HTTP audio fixture + mocked Pandora playlist)
 test-integration: pianobar_test
 	${SILENTECHO} "   TEST  Running integration tests..."
@@ -443,7 +451,17 @@ lint-test:
 		-I ${LIBPIANO_INCLUDE} -I ${PIANOBAR_DIR} ${TEST_DIR}/**/*.c ${TEST_DIR}/*.c
 
 # Comprehensive test suite: unit tests + linting
-test-all: test lint
+# Tests for the shell helpers under scripts/ (change scope, pre-push decision).
+# They build throwaway git repos; git's hook environment (GIT_DIR, ...) is
+# cleared so they can never act on this repository (each suite also clears it).
+test-scripts: GIT_ENV_UNSET:=$(foreach v,$(shell git rev-parse --local-env-vars 2>/dev/null),-u $(v))
+test-scripts:
+	${SILENTECHO} "   TEST  scripts/changed-scope.sh, scripts/pre-push-decision.sh..."
+	${SILENTCMD}env ${GIT_ENV_UNSET} bash scripts/test-changed-scope.sh
+	${SILENTCMD}env ${GIT_ENV_UNSET} bash scripts/test-pre-push-decision.sh
+	${SILENTCMD}env ${GIT_ENV_UNSET} bash scripts/test-script-isolation.sh
+
+test-all: test lint test-scripts
 	${SILENTECHO} "   TEST  All tests passed!"
 
 # Build and run tests with coverage instrumentation, in build/coverage. Only
@@ -514,4 +532,4 @@ test-valgrind: ${TEST_BIN}
 gates: locale-codegen
 	${SILENTCMD}./scripts/gates.sh
 
-.PHONY: install install-libpiano uninstall test test-par test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean
+.PHONY: install install-libpiano uninstall test test-par test-scripts test-suite test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind gates minimal all locale-codegen clean distclean
