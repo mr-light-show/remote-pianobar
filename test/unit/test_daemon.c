@@ -79,6 +79,20 @@ START_TEST(test_daemon_get_ipv4_address_returns_nonempty_address) {
 }
 END_TEST
 
+/* Fork a child that exercises the fd handling. The child leaves through
+ * exit() (not _exit()) so coverage counters are flushed, hence stdio buffers
+ * are flushed first so nothing inherited is written through the redirected
+ * descriptors. */
+static pid_t daemon_test_fork (void) {
+	fflush (NULL);
+	return fork ();
+}
+
+static void daemon_test_exit (int code) {
+	fflush (NULL);
+	exit (code);
+}
+
 /* Per-test scratch directory, so concurrent test runs never share pid files. */
 static void daemon_test_pid_path (char *dir, size_t dirSize, char *path,
 		size_t pathSize, const char *prefix) {
@@ -162,7 +176,7 @@ START_TEST(test_daemonize_steps_without_log_file_keeps_stderr) {
 
 	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
 			"daemon_steps");
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		BarApp_t app;
@@ -171,7 +185,7 @@ START_TEST(test_daemonize_steps_without_log_file_keeps_stderr) {
 		BarSettingsInit (&app.settings);
 		app.settings.logFile = NULL;
 		app.settings.pidFile = strdup (pidPath);
-		_exit (BarDaemonizeSteps (&app) ? 0 : 1);
+		daemon_test_exit (BarDaemonizeSteps (&app) ? 0 : 1);
 	}
 	ck_assert_int_eq (waitpid (child, &status, 0), child);
 	ck_assert (WIFEXITED (status));
@@ -220,7 +234,7 @@ START_TEST(test_daemonize_steps_reopens_stdin_on_dev_null) {
 
 	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
 			"daemon_stdin");
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		BarApp_t app;
@@ -230,9 +244,9 @@ START_TEST(test_daemonize_steps_reopens_stdin_on_dev_null) {
 		app.settings.logFile = NULL;
 		app.settings.pidFile = strdup (pidPath);
 		if (!BarDaemonizeSteps (&app)) {
-			_exit (1);
+			daemon_test_exit (1);
 		}
-		_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
+		daemon_test_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
 				daemon_test_fd_is_dev_null (STDOUT_FILENO) ? 0 : 2);
 	}
 	daemon_test_wait_ok (child);
@@ -249,7 +263,7 @@ START_TEST(test_daemonize_steps_with_log_file_keeps_stdin_open) {
 	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
 			"daemon_logfile");
 	snprintf (logPath, sizeof (logPath), "%s/daemon.log", dir);
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		BarApp_t app;
@@ -259,19 +273,19 @@ START_TEST(test_daemonize_steps_with_log_file_keeps_stdin_open) {
 		app.settings.logFile = strdup (logPath);
 		app.settings.pidFile = strdup (pidPath);
 		if (!BarDaemonizeSteps (&app)) {
-			_exit (1);
+			daemon_test_exit (1);
 		}
 		if (!daemon_test_fd_is_dev_null (STDIN_FILENO)) {
-			_exit (2);
+			daemon_test_exit (2);
 		}
 		if (!daemon_test_fd_is_file (STDOUT_FILENO, logPath) ||
 				!daemon_test_fd_is_file (STDERR_FILENO, logPath)) {
-			_exit (3);
+			daemon_test_exit (3);
 		}
 		if (write (STDOUT_FILENO, "from-stdout\n", 12) != 12) {
-			_exit (4);
+			daemon_test_exit (4);
 		}
-		_exit (0);
+		daemon_test_exit (0);
 	}
 	daemon_test_wait_ok (child);
 	f = fopen (logPath, "r");
@@ -290,29 +304,29 @@ END_TEST
 START_TEST(test_daemon_redirect_stdio_with_std_fds_closed) {
 	pid_t child;
 
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		struct stat before, after;
 
 		if (fstat (STDERR_FILENO, &before) != 0) {
-			_exit (1);
+			daemon_test_exit (1);
 		}
 		close (STDIN_FILENO);
 		close (STDOUT_FILENO);
 		if (!BarDaemonRedirectStdio (NULL)) {
-			_exit (2);
+			daemon_test_exit (2);
 		}
 		if (!daemon_test_fd_is_dev_null (STDIN_FILENO) ||
 				!daemon_test_fd_is_dev_null (STDOUT_FILENO)) {
-			_exit (3);
+			daemon_test_exit (3);
 		}
 		if (fstat (STDERR_FILENO, &after) != 0 ||
 				before.st_ino != after.st_ino ||
 				before.st_dev != after.st_dev) {
-			_exit (4);
+			daemon_test_exit (4);
 		}
-		_exit (0);
+		daemon_test_exit (0);
 	}
 	daemon_test_wait_ok (child);
 }
@@ -321,16 +335,16 @@ END_TEST
 START_TEST(test_daemon_redirect_stdio_all_std_fds_closed) {
 	pid_t child;
 
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		close (STDIN_FILENO);
 		close (STDOUT_FILENO);
 		close (STDERR_FILENO);
 		if (!BarDaemonRedirectStdio (NULL)) {
-			_exit (1);
+			daemon_test_exit (1);
 		}
-		_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
+		daemon_test_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
 				daemon_test_fd_is_dev_null (STDOUT_FILENO) &&
 				daemon_test_fd_is_dev_null (STDERR_FILENO) ? 0 : 2);
 	}
@@ -344,16 +358,16 @@ START_TEST(test_daemon_redirect_stdio_log_file_with_std_fds_closed) {
 
 	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "daemon_closed_log"));
 	snprintf (logPath, sizeof (logPath), "%s/daemon.log", dir);
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		close (STDIN_FILENO);
 		close (STDOUT_FILENO);
 		close (STDERR_FILENO);
 		if (!BarDaemonRedirectStdio (logPath)) {
-			_exit (1);
+			daemon_test_exit (1);
 		}
-		_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
+		daemon_test_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
 				daemon_test_fd_is_file (STDOUT_FILENO, logPath) &&
 				daemon_test_fd_is_file (STDERR_FILENO, logPath) ? 0 : 2);
 	}
@@ -370,27 +384,27 @@ START_TEST(test_daemon_redirect_stdio_bad_log_file_keeps_stderr) {
 	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "daemon_badlog"));
 	/* The parent directory does not exist, so open(O_CREAT) fails. */
 	snprintf (badPath, sizeof (badPath), "%s/missing/x.log", dir);
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
 		struct stat before, after;
 
 		if (fstat (STDERR_FILENO, &before) != 0) {
-			_exit (1);
+			daemon_test_exit (1);
 		}
 		if (!BarDaemonRedirectStdio (badPath)) {
-			_exit (2);
+			daemon_test_exit (2);
 		}
 		if (!daemon_test_fd_is_dev_null (STDIN_FILENO) ||
 				!daemon_test_fd_is_dev_null (STDOUT_FILENO)) {
-			_exit (3);
+			daemon_test_exit (3);
 		}
 		if (fstat (STDERR_FILENO, &after) != 0 ||
 				before.st_ino != after.st_ino ||
 				before.st_dev != after.st_dev) {
-			_exit (4);
+			daemon_test_exit (4);
 		}
-		_exit (0);
+		daemon_test_exit (0);
 	}
 	daemon_test_wait_ok (child);
 	rmdir (dir);
@@ -402,36 +416,45 @@ END_TEST
 START_TEST(test_daemon_redirect_stdio_dev_null_unavailable_returns_false) {
 	pid_t child;
 
-	child = fork ();
+	child = daemon_test_fork ();
 	ck_assert (child >= 0);
 	if (child == 0) {
-		struct rlimit lim;
+		struct rlimit lim, saved;
 		struct stat before, after;
 		int i;
 
 		/* Make sure 0, 1 and 2 are all open, then forbid fd 3. */
 		for (i = 0; i < 3; i++) {
 			if (fcntl (i, F_GETFD) == -1 && open ("/dev/null", O_RDWR) != i) {
-				_exit (1);
+				daemon_test_exit (1);
 			}
 		}
 		if (fstat (STDIN_FILENO, &before) != 0) {
-			_exit (2);
+			daemon_test_exit (2);
 		}
+		if (getrlimit (RLIMIT_NOFILE, &saved) != 0) {
+			daemon_test_exit (3);
+		}
+		/* Lower only the soft limit, so it can be restored for the coverage
+		 * flush at exit. */
+		lim = saved;
 		lim.rlim_cur = 3;
-		lim.rlim_max = 3;
 		if (setrlimit (RLIMIT_NOFILE, &lim) != 0) {
-			_exit (3);
+			daemon_test_exit (3);
 		}
-		if (BarDaemonRedirectStdio (NULL)) {
-			_exit (4);
+		const bool redirected = BarDaemonRedirectStdio (NULL);
+		if (setrlimit (RLIMIT_NOFILE, &saved) != 0) {
+			daemon_test_exit (3);
+		}
+		if (redirected) {
+			daemon_test_exit (4);
 		}
 		if (fstat (STDIN_FILENO, &after) != 0 ||
 				before.st_ino != after.st_ino ||
 				before.st_dev != after.st_dev) {
-			_exit (5);
+			daemon_test_exit (5);
 		}
-		_exit (0);
+		daemon_test_exit (0);
 	}
 	daemon_test_wait_ok (child);
 }
