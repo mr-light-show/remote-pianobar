@@ -73,7 +73,7 @@ Suite *ws_failure_paths_suite(void);
 Suite *cli_input_paths_suite(void);
 Suite *socketio_station_failures_suite(void);
 
-/* Under AddressSanitizer an oversized malloc/realloc aborts instead of
+/* Under AddressSanitizer or ThreadSanitizer an oversized malloc/realloc aborts instead of
  * returning NULL. Out-of-memory tests (e.g. httpFetchCb) rely on the NULL
  * return, so ask the sanitizer to behave like a plain allocator. */
 #ifndef __has_feature
@@ -82,6 +82,12 @@ Suite *socketio_station_failures_suite(void);
 #if defined(__SANITIZE_ADDRESS__) || __has_feature(address_sanitizer)
 const char *__asan_default_options (void);
 const char *__asan_default_options (void) {
+	return "allocator_may_return_null=1";
+}
+#endif
+#if defined(__SANITIZE_THREAD__) || __has_feature(thread_sanitizer)
+const char *__tsan_default_options (void);
+const char *__tsan_default_options (void) {
 	return "allocator_may_return_null=1";
 }
 #endif
