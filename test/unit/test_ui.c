@@ -46,6 +46,7 @@ THE SOFTWARE.
 #include <time.h>
 #include "../test_tmp.h"
 #include "../../src/interrupt.h"
+#include "../../src/log.h"
 
 int progressCb (void *data, curl_off_t dltotal, curl_off_t dlnow,
 		curl_off_t ultotal, curl_off_t ulnow);
@@ -652,6 +653,150 @@ START_TEST (test_ui_eventcmd_wait_releases_piano_hold)
 }
 END_TEST
 
+/* Capture what BarUiMsg writes to stdout and stderr while a callback runs. */
+typedef struct {
+	char *out;
+	char *err;
+} UiCapture_t;
+
+static void ui_capture_msg (const BarSettings_t *settings, BarUiMsg_t type,
+		const char *text, UiCapture_t *cap)
+{
+	FILE *outFile = tmpfile ();
+	FILE *errFile = tmpfile ();
+	ck_assert_ptr_nonnull (outFile);
+	ck_assert_ptr_nonnull (errFile);
+	fflush (stdout);
+	fflush (stderr);
+	int savedOut = dup (STDOUT_FILENO);
+	int savedErr = dup (STDERR_FILENO);
+	ck_assert (savedOut >= 0 && savedErr >= 0);
+	ck_assert (dup2 (fileno (outFile), STDOUT_FILENO) >= 0);
+	ck_assert (dup2 (fileno (errFile), STDERR_FILENO) >= 0);
+
+	BarUiMsg (settings, type, "%s", text);
+
+	fflush (stdout);
+	fflush (stderr);
+	ck_assert (dup2 (savedOut, STDOUT_FILENO) >= 0);
+	ck_assert (dup2 (savedErr, STDERR_FILENO) >= 0);
+	close (savedOut);
+	close (savedErr);
+	cap->out = read_tmpfile (outFile);
+	cap->err = read_tmpfile (errFile);
+	fclose (outFile);
+	fclose (errFile);
+}
+
+static void ui_capture_free (UiCapture_t *cap)
+{
+	free (cap->out);
+	free (cap->err);
+}
+
+/* The web-only daemon's stdout is /dev/null: without a log_file its fatal
+ * MSG_ERR text would be lost, so it goes to stderr (the journal). */
+START_TEST (test_ui_msg_err_goes_to_stderr_in_web_only_without_log_file)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = NULL;
+
+	ui_capture_msg (&settings, MSG_ERR, "boom\n", &cap);
+	ck_assert_ptr_nonnull (strstr (cap.err, "boom"));
+	ck_assert_ptr_null (strstr (cap.err, "\033[2K"));
+	ck_assert_str_eq (cap.out, "");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_err_in_web_only_uses_configured_format)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = NULL;
+	free (settings.msgFormat[MSG_ERR].prefix);
+	free (settings.msgFormat[MSG_ERR].postfix);
+	settings.msgFormat[MSG_ERR].prefix = strdup ("PRE<");
+	settings.msgFormat[MSG_ERR].postfix = strdup (">POST");
+
+	ui_capture_msg (&settings, MSG_ERR, "boom", &cap);
+	ck_assert_str_eq (cap.err, "PRE<boom>POST");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_info_stays_on_stdout_in_web_only)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = NULL;
+
+	ui_capture_msg (&settings, MSG_INFO, "hello\n", &cap);
+	ck_assert_ptr_nonnull (strstr (cap.out, "hello"));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_err_stays_on_stdout_with_log_file)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	settings.uiMode = BAR_UI_MODE_WEB;
+	free (settings.logFile);
+	settings.logFile = strdup ("/nonexistent/pianobar-test.log");
+
+	ui_capture_msg (&settings, MSG_ERR, "boom\n", &cap);
+	ck_assert_ptr_nonnull (strstr (cap.out, "boom"));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
+START_TEST (test_ui_msg_err_stays_on_stdout_in_cli_and_both)
+{
+	BarSettings_t settings;
+	UiCapture_t cap;
+	const BarUiMode_t modes[] = {BAR_UI_MODE_CLI, BAR_UI_MODE_BOTH};
+
+	log_set_debug_mask (0);
+	BarSettingsInit (&settings);
+	free (settings.logFile);
+	settings.logFile = NULL;
+	for (size_t i = 0; i < sizeof (modes) / sizeof (modes[0]); i++) {
+		settings.uiMode = modes[i];
+		ui_capture_msg (&settings, MSG_ERR, "boom\n", &cap);
+		ck_assert_ptr_nonnull (strstr (cap.out, "boom"));
+		ck_assert_str_eq (cap.err, "");
+		ui_capture_free (&cap);
+	}
+	BarSettingsDestroy (&settings);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -673,6 +818,11 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_ui_dispatch_piano_lock_policy);
 	tcase_add_test (tc, test_ui_select_station_id_returns_copied_id);
 	tcase_add_test (tc, test_ui_eventcmd_wait_releases_piano_hold);
+	tcase_add_test (tc, test_ui_msg_err_goes_to_stderr_in_web_only_without_log_file);
+	tcase_add_test (tc, test_ui_msg_err_in_web_only_uses_configured_format);
+	tcase_add_test (tc, test_ui_msg_info_stays_on_stdout_in_web_only);
+	tcase_add_test (tc, test_ui_msg_err_stays_on_stdout_with_log_file);
+	tcase_add_test (tc, test_ui_msg_err_stays_on_stdout_in_cli_and_both);
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;

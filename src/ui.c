@@ -126,6 +126,14 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	}
 #endif
 
+	/* The web-only daemon's stdout is /dev/null unless log_file is set, which
+	 * would swallow fatal errors; send those to stderr (e.g. the journal). */
+	FILE *out = stdout;
+	if (type == MSG_ERR && settings->uiMode == BAR_UI_MODE_WEB &&
+			settings->logFile == NULL) {
+		out = stderr;
+	}
+
 	switch (type) {
 		case MSG_INFO:
 		case MSG_PLAYING:
@@ -133,8 +141,10 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 		case MSG_ERR:
 		case MSG_QUESTION:
 		case MSG_LIST:
-			/* print ANSI clear line */
-			fputs ("\033[2K", stdout);
+			/* print ANSI clear line (not into the journal) */
+			if (out == stdout) {
+				fputs ("\033[2K", out);
+			}
 			break;
 
 		default:
@@ -142,17 +152,17 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	}
 
 	if (settings->msgFormat[type].prefix != NULL) {
-		fputs (settings->msgFormat[type].prefix, stdout);
+		fputs (settings->msgFormat[type].prefix, out);
 	}
 
 	va_start (fmtargs, format);
-	vprintf (format, fmtargs);
+	vfprintf (out, format, fmtargs);
 
 	if (settings->msgFormat[type].postfix != NULL) {
-		fputs (settings->msgFormat[type].postfix, stdout);
+		fputs (settings->msgFormat[type].postfix, out);
 	}
 
-	fflush (stdout);
+	fflush (out);
 	va_end (fmtargs);
 }
 
