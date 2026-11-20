@@ -27,6 +27,8 @@ THE SOFTWARE.
 #include <sys/stat.h>
 #include <stdio.h>
 #include <sys/wait.h>
+#include <fcntl.h>
+#include <sys/resource.h>
 #include "../../src/main.h"
 #include "../test_tmp.h"
 #include "../../src/websocket/daemon/daemon.h"
@@ -179,6 +181,262 @@ START_TEST(test_daemonize_steps_without_log_file_keeps_stderr) {
 }
 END_TEST
 
+/* True when fd is open and refers to the same character device as /dev/null. */
+static bool daemon_test_fd_is_dev_null (int fd) {
+	struct stat fdSt, nullSt;
+
+	if (fcntl (fd, F_GETFD) == -1 || fstat (fd, &fdSt) != 0 ||
+			stat ("/dev/null", &nullSt) != 0) {
+		return false;
+	}
+	return S_ISCHR (fdSt.st_mode) && fdSt.st_rdev == nullSt.st_rdev;
+}
+
+/* True when fd is open and refers to the file at path. */
+static bool daemon_test_fd_is_file (int fd, const char *path) {
+	struct stat fdSt, fileSt;
+
+	if (fcntl (fd, F_GETFD) == -1 || fstat (fd, &fdSt) != 0 ||
+			stat (path, &fileSt) != 0) {
+		return false;
+	}
+	return fdSt.st_ino == fileSt.st_ino && fdSt.st_dev == fileSt.st_dev;
+}
+
+static void daemon_test_wait_ok (pid_t child) {
+	int status;
+
+	ck_assert_int_eq (waitpid (child, &status, 0), child);
+	ck_assert (WIFEXITED (status));
+	ck_assert_int_eq (WEXITSTATUS (status), 0);
+}
+
+/* The daemon must keep fd 0 on /dev/null: a closed fd 0 is silently reused by
+ * the next open() (lws's /dev/urandom, an audio device) and then handed to
+ * every child as "stdin". */
+START_TEST(test_daemonize_steps_reopens_stdin_on_dev_null) {
+	char dir[256], pidPath[300];
+	pid_t child;
+
+	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
+			"daemon_stdin");
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		BarApp_t app;
+
+		memset (&app, 0, sizeof (app));
+		BarSettingsInit (&app.settings);
+		app.settings.logFile = NULL;
+		app.settings.pidFile = strdup (pidPath);
+		if (!BarDaemonizeSteps (&app)) {
+			_exit (1);
+		}
+		_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
+				daemon_test_fd_is_dev_null (STDOUT_FILENO) ? 0 : 2);
+	}
+	daemon_test_wait_ok (child);
+	unlink (pidPath);
+	rmdir (dir);
+}
+END_TEST
+
+START_TEST(test_daemonize_steps_with_log_file_keeps_stdin_open) {
+	char dir[256], pidPath[300], logPath[300], buf[64];
+	pid_t child;
+	FILE *f;
+
+	daemon_test_pid_path (dir, sizeof (dir), pidPath, sizeof (pidPath),
+			"daemon_logfile");
+	snprintf (logPath, sizeof (logPath), "%s/daemon.log", dir);
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		BarApp_t app;
+
+		memset (&app, 0, sizeof (app));
+		BarSettingsInit (&app.settings);
+		app.settings.logFile = strdup (logPath);
+		app.settings.pidFile = strdup (pidPath);
+		if (!BarDaemonizeSteps (&app)) {
+			_exit (1);
+		}
+		if (!daemon_test_fd_is_dev_null (STDIN_FILENO)) {
+			_exit (2);
+		}
+		if (!daemon_test_fd_is_file (STDOUT_FILENO, logPath) ||
+				!daemon_test_fd_is_file (STDERR_FILENO, logPath)) {
+			_exit (3);
+		}
+		if (write (STDOUT_FILENO, "from-stdout\n", 12) != 12) {
+			_exit (4);
+		}
+		_exit (0);
+	}
+	daemon_test_wait_ok (child);
+	f = fopen (logPath, "r");
+	ck_assert_ptr_nonnull (f);
+	ck_assert_ptr_nonnull (fgets (buf, sizeof (buf), f));
+	ck_assert_str_eq (buf, "from-stdout\n");
+	fclose (f);
+	unlink (logPath);
+	unlink (pidPath);
+	rmdir (dir);
+}
+END_TEST
+
+/* Started from launchd/nohup with the standard fds already closed: open()
+ * returns 0, 1 or 2, and the helper must not close what it just placed there. */
+START_TEST(test_daemon_redirect_stdio_with_std_fds_closed) {
+	pid_t child;
+
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		struct stat before, after;
+
+		if (fstat (STDERR_FILENO, &before) != 0) {
+			_exit (1);
+		}
+		close (STDIN_FILENO);
+		close (STDOUT_FILENO);
+		if (!BarDaemonRedirectStdio (NULL)) {
+			_exit (2);
+		}
+		if (!daemon_test_fd_is_dev_null (STDIN_FILENO) ||
+				!daemon_test_fd_is_dev_null (STDOUT_FILENO)) {
+			_exit (3);
+		}
+		if (fstat (STDERR_FILENO, &after) != 0 ||
+				before.st_ino != after.st_ino ||
+				before.st_dev != after.st_dev) {
+			_exit (4);
+		}
+		_exit (0);
+	}
+	daemon_test_wait_ok (child);
+}
+END_TEST
+
+START_TEST(test_daemon_redirect_stdio_all_std_fds_closed) {
+	pid_t child;
+
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		close (STDIN_FILENO);
+		close (STDOUT_FILENO);
+		close (STDERR_FILENO);
+		if (!BarDaemonRedirectStdio (NULL)) {
+			_exit (1);
+		}
+		_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
+				daemon_test_fd_is_dev_null (STDOUT_FILENO) &&
+				daemon_test_fd_is_dev_null (STDERR_FILENO) ? 0 : 2);
+	}
+	daemon_test_wait_ok (child);
+}
+END_TEST
+
+START_TEST(test_daemon_redirect_stdio_log_file_with_std_fds_closed) {
+	char dir[256], logPath[300];
+	pid_t child;
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "daemon_closed_log"));
+	snprintf (logPath, sizeof (logPath), "%s/daemon.log", dir);
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		close (STDIN_FILENO);
+		close (STDOUT_FILENO);
+		close (STDERR_FILENO);
+		if (!BarDaemonRedirectStdio (logPath)) {
+			_exit (1);
+		}
+		_exit (daemon_test_fd_is_dev_null (STDIN_FILENO) &&
+				daemon_test_fd_is_file (STDOUT_FILENO, logPath) &&
+				daemon_test_fd_is_file (STDERR_FILENO, logPath) ? 0 : 2);
+	}
+	daemon_test_wait_ok (child);
+	unlink (logPath);
+	rmdir (dir);
+}
+END_TEST
+
+START_TEST(test_daemon_redirect_stdio_bad_log_file_keeps_stderr) {
+	char dir[256], badPath[300];
+	pid_t child;
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "daemon_badlog"));
+	/* The parent directory does not exist, so open(O_CREAT) fails. */
+	snprintf (badPath, sizeof (badPath), "%s/missing/x.log", dir);
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		struct stat before, after;
+
+		if (fstat (STDERR_FILENO, &before) != 0) {
+			_exit (1);
+		}
+		if (!BarDaemonRedirectStdio (badPath)) {
+			_exit (2);
+		}
+		if (!daemon_test_fd_is_dev_null (STDIN_FILENO) ||
+				!daemon_test_fd_is_dev_null (STDOUT_FILENO)) {
+			_exit (3);
+		}
+		if (fstat (STDERR_FILENO, &after) != 0 ||
+				before.st_ino != after.st_ino ||
+				before.st_dev != after.st_dev) {
+			_exit (4);
+		}
+		_exit (0);
+	}
+	daemon_test_wait_ok (child);
+	rmdir (dir);
+}
+END_TEST
+
+/* /dev/null cannot be opened (here: fd table full, as in a locked-down
+ * sandbox): report failure and leave the standard fds alone. */
+START_TEST(test_daemon_redirect_stdio_dev_null_unavailable_returns_false) {
+	pid_t child;
+
+	child = fork ();
+	ck_assert (child >= 0);
+	if (child == 0) {
+		struct rlimit lim;
+		struct stat before, after;
+		int i;
+
+		/* Make sure 0, 1 and 2 are all open, then forbid fd 3. */
+		for (i = 0; i < 3; i++) {
+			if (fcntl (i, F_GETFD) == -1 && open ("/dev/null", O_RDWR) != i) {
+				_exit (1);
+			}
+		}
+		if (fstat (STDIN_FILENO, &before) != 0) {
+			_exit (2);
+		}
+		lim.rlim_cur = 3;
+		lim.rlim_max = 3;
+		if (setrlimit (RLIMIT_NOFILE, &lim) != 0) {
+			_exit (3);
+		}
+		if (BarDaemonRedirectStdio (NULL)) {
+			_exit (4);
+		}
+		if (fstat (STDIN_FILENO, &after) != 0 ||
+				before.st_ino != after.st_ino ||
+				before.st_dev != after.st_dev) {
+			_exit (5);
+		}
+		_exit (0);
+	}
+	daemon_test_wait_ok (child);
+}
+END_TEST
+
 START_TEST(test_daemonize_steps_rejects_null_app) {
 	ck_assert(!BarDaemonizeSteps(NULL));
 }
@@ -209,6 +467,13 @@ Suite *daemon_suite(void) {
 	tcase_add_test(tc_core, test_daemon_lock_acquire_write_read_roundtrip);
 	tcase_add_test(tc_core, test_daemon_write_lock_pid_rejects_invalid_fd);
 	tcase_add_test(tc_core, test_daemonize_steps_without_log_file_keeps_stderr);
+	tcase_add_test(tc_core, test_daemonize_steps_reopens_stdin_on_dev_null);
+	tcase_add_test(tc_core, test_daemonize_steps_with_log_file_keeps_stdin_open);
+	tcase_add_test(tc_core, test_daemon_redirect_stdio_with_std_fds_closed);
+	tcase_add_test(tc_core, test_daemon_redirect_stdio_all_std_fds_closed);
+	tcase_add_test(tc_core, test_daemon_redirect_stdio_log_file_with_std_fds_closed);
+	tcase_add_test(tc_core, test_daemon_redirect_stdio_bad_log_file_keeps_stderr);
+	tcase_add_test(tc_core, test_daemon_redirect_stdio_dev_null_unavailable_returns_false);
 	tcase_add_test(tc_core, test_daemonize_steps_rejects_null_app);
 	tcase_add_test(tc_core, test_daemon_kill_running_nonexistent_pid_file);
 	

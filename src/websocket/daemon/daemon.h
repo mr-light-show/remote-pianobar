@@ -33,6 +33,13 @@ bool BarDaemonize(BarApp_t *app);
 /* Perform daemonization steps without forking (for relaunched processes) */
 bool BarDaemonizeSteps(BarApp_t *app);
 
+/* Point fds 0/1/2 at /dev/null, or at logFile (append) for stdout and stderr
+ * when it can be opened. Never leaves a standard fd closed and never closes
+ * one it just placed there. A logFile that cannot be opened is logged and
+ * stdout goes to /dev/null with stderr unchanged. Returns false only when
+ * /dev/null cannot be opened (the fds are left as they were). */
+bool BarDaemonRedirectStdio(const char *logFile);
+
 /* Write PID file */
 bool BarDaemonWritePidFile(BarApp_t *app);
 
