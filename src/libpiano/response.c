@@ -265,7 +265,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 				json_object *s = json_object_array_get_idx (stations, i);
 
 				if ((tmpStation = calloc (1, sizeof (*tmpStation))) == NULL) {
-					return PIANO_RET_OUT_OF_MEMORY;
+					ret = PIANO_RET_OUT_OF_MEMORY;
+					goto cleanup;
 				}
 
 				PianoJsonParseStation (s, tmpStation);
@@ -330,7 +331,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 
 				if ((song = PianoCalloc (1, sizeof (*song))) == NULL) {
 					PianoDestroyPlaylist (playlist);
-					return PIANO_RET_OUT_OF_MEMORY;
+					ret = PIANO_RET_OUT_OF_MEMORY;
+					goto cleanup;
 				}
 
 				/* get audio url based on selected quality */
@@ -448,7 +450,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					PianoArtist_t *artist;
 
 					if ((artist = calloc (1, sizeof (*artist))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 
 					artist->name = PianoJsonStrdup (a, "artistName");
@@ -467,7 +470,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 					PianoSong_t *song;
 
 					if ((song = calloc (1, sizeof (*song))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 
 					song->title = PianoJsonStrdup (s, "songName");
@@ -486,7 +490,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 			PianoStation_t *tmpStation;
 
 			if ((tmpStation = calloc (1, sizeof (*tmpStation))) == NULL) {
-				return PIANO_RET_OUT_OF_MEMORY;
+				ret = PIANO_RET_OUT_OF_MEMORY;
+				goto cleanup;
 			}
 
 			PianoJsonParseStation (result, tmpStation);
@@ -536,7 +541,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 
 					if ((tmpGenreCategory = PianoCalloc (1,
 							sizeof (*tmpGenreCategory))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 					/* not yet linked into ph: any early return must free it */
 
@@ -555,7 +561,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 							if ((tmpGenre = PianoCalloc (1,
 									sizeof (*tmpGenre))) == NULL) {
 								PianoDestroyGenreCategory (tmpGenreCategory);
-								return PIANO_RET_OUT_OF_MEMORY;
+								ret = PIANO_RET_OUT_OF_MEMORY;
+								goto cleanup;
 							}
 
 							/* get genre attributes */
@@ -660,7 +667,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 
 						seedSong = calloc (1, sizeof (*seedSong));
 						if (seedSong == NULL) {
-							return PIANO_RET_OUT_OF_MEMORY;
+							ret = PIANO_RET_OUT_OF_MEMORY;
+							goto cleanup;
 						}
 
 						seedSong->title = PianoJsonStrdup (s, "songName");
@@ -681,7 +689,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 
 						seedArtist = calloc (1, sizeof (*seedArtist));
 						if (seedArtist == NULL) {
-							return PIANO_RET_OUT_OF_MEMORY;
+							ret = PIANO_RET_OUT_OF_MEMORY;
+							goto cleanup;
 						}
 
 						seedArtist->name = PianoJsonStrdup (a, "artistName");
@@ -708,7 +717,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 
 						feedbackSong = calloc (1, sizeof (*feedbackSong));
 						if (feedbackSong == NULL) {
-							return PIANO_RET_OUT_OF_MEMORY;
+							ret = PIANO_RET_OUT_OF_MEMORY;
+							goto cleanup;
 						}
 
 						feedbackSong->title = PianoJsonStrdup (s, "songName");
@@ -754,7 +764,8 @@ PianoReturn_t PianoResponse (PianoHandle_t *ph, PianoRequest_t *req) {
 
 					PianoStationMode_t *mode;
 					if ((mode = calloc (1, sizeof (*mode))) == NULL) {
-						return PIANO_RET_OUT_OF_MEMORY;
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
 					}
 
 					json_object *modeId;
