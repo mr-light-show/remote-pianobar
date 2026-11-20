@@ -653,39 +653,51 @@ START_TEST (test_ui_eventcmd_wait_releases_piano_hold)
 }
 END_TEST
 
-/* Capture what BarUiMsg writes to stdout and stderr while a callback runs. */
+/* Capture what is written to stdout and stderr between begin and end. */
 typedef struct {
 	char *out;
 	char *err;
+	FILE *outFile;
+	FILE *errFile;
+	int savedOut;
+	int savedErr;
 } UiCapture_t;
+
+static void ui_capture_begin (UiCapture_t *cap)
+{
+	cap->outFile = tmpfile ();
+	cap->errFile = tmpfile ();
+	ck_assert_ptr_nonnull (cap->outFile);
+	ck_assert_ptr_nonnull (cap->errFile);
+	fflush (stdout);
+	fflush (stderr);
+	cap->savedOut = dup (STDOUT_FILENO);
+	cap->savedErr = dup (STDERR_FILENO);
+	ck_assert (cap->savedOut >= 0 && cap->savedErr >= 0);
+	ck_assert (dup2 (fileno (cap->outFile), STDOUT_FILENO) >= 0);
+	ck_assert (dup2 (fileno (cap->errFile), STDERR_FILENO) >= 0);
+}
+
+static void ui_capture_end (UiCapture_t *cap)
+{
+	fflush (stdout);
+	fflush (stderr);
+	ck_assert (dup2 (cap->savedOut, STDOUT_FILENO) >= 0);
+	ck_assert (dup2 (cap->savedErr, STDERR_FILENO) >= 0);
+	close (cap->savedOut);
+	close (cap->savedErr);
+	cap->out = read_tmpfile (cap->outFile);
+	cap->err = read_tmpfile (cap->errFile);
+	fclose (cap->outFile);
+	fclose (cap->errFile);
+}
 
 static void ui_capture_msg (const BarSettings_t *settings, BarUiMsg_t type,
 		const char *text, UiCapture_t *cap)
 {
-	FILE *outFile = tmpfile ();
-	FILE *errFile = tmpfile ();
-	ck_assert_ptr_nonnull (outFile);
-	ck_assert_ptr_nonnull (errFile);
-	fflush (stdout);
-	fflush (stderr);
-	int savedOut = dup (STDOUT_FILENO);
-	int savedErr = dup (STDERR_FILENO);
-	ck_assert (savedOut >= 0 && savedErr >= 0);
-	ck_assert (dup2 (fileno (outFile), STDOUT_FILENO) >= 0);
-	ck_assert (dup2 (fileno (errFile), STDERR_FILENO) >= 0);
-
+	ui_capture_begin (cap);
 	BarUiMsg (settings, type, "%s", text);
-
-	fflush (stdout);
-	fflush (stderr);
-	ck_assert (dup2 (savedOut, STDOUT_FILENO) >= 0);
-	ck_assert (dup2 (savedErr, STDERR_FILENO) >= 0);
-	close (savedOut);
-	close (savedErr);
-	cap->out = read_tmpfile (outFile);
-	cap->err = read_tmpfile (errFile);
-	fclose (outFile);
-	fclose (errFile);
+	ui_capture_end (cap);
 }
 
 static void ui_capture_free (UiCapture_t *cap)
@@ -797,6 +809,96 @@ START_TEST (test_ui_msg_err_stays_on_stdout_in_cli_and_both)
 }
 END_TEST
 
+/* Run a real login against a closed loopback port, so BarUiPianoCall reports
+ * a network error, and capture where that text goes. */
+static void ui_piano_call_network_error (BarUiMode_t mode,
+		unsigned int debugMask, UiCapture_t *cap)
+{
+	BarApp_t app;
+	PianoRequestDataLogin_t loginData;
+	PianoReturn_t pRet = PIANO_RET_OK;
+	CURLcode wRet = CURLE_OK;
+
+	log_set_debug_mask (debugMask);
+	memset (&app, 0, sizeof (app));
+	memset (&loginData, 0, sizeof (loginData));
+	BarSettingsInit (&app.settings);
+	app.settings.uiMode = mode;
+	free (app.settings.logFile);
+	app.settings.logFile = NULL;
+	free (app.settings.rpcHost);
+	free (app.settings.rpcTlsPort);
+	app.settings.rpcHost = strdup ("127.0.0.1");
+	app.settings.rpcTlsPort = strdup ("1");
+	app.settings.timeout = 1;
+	app.settings.maxRetry = 1;
+	app.settings.username = strdup ("user");
+	app.settings.password = strdup ("pass");
+
+	BarStateInit (&app);
+	BarUiPianoHttpMutexInit (&app);
+	app.http = curl_easy_init ();
+	ck_assert_ptr_nonnull (app.http);
+	ck_assert_int_eq (PianoInit (&app.ph, "partner-user", "partner-pass",
+			"device", "0123456789abcdef", "0123456789abcdef"), PIANO_RET_OK);
+	loginData.user = app.settings.username;
+	loginData.password = app.settings.password;
+	loginData.step = 0;
+	BarUiPianoCallClearTestHook ();
+
+	ui_capture_begin (cap);
+	ck_assert (!BarUiPianoCall (&app, PIANO_REQUEST_LOGIN, &loginData, &pRet, &wRet));
+	ui_capture_end (cap);
+	log_set_debug_mask (0);
+
+	curl_easy_cleanup (app.http);
+	app.http = NULL;
+	PianoDestroy (&app.ph);
+	BarUiPianoHttpMutexDestroy (&app);
+	BarStateDestroy (&app);
+	BarSettingsDestroy (&app.settings);
+}
+
+/* The login/network failure that ends a web-only startup is reported with
+ * MSG_NONE; without a log_file it must still reach stderr. */
+START_TEST (test_ui_piano_call_error_reaches_stderr_in_web_only_without_log_file)
+{
+	UiCapture_t cap;
+
+	ui_piano_call_network_error (BAR_UI_MODE_WEB, 0, &cap);
+	ck_assert_ptr_nonnull (strstr (cap.err, "Network error:"));
+	ck_assert_str_eq (cap.out, "");
+	ui_capture_free (&cap);
+}
+END_TEST
+
+#ifdef HAVE_DEBUGLOG
+/* With the debug CLI mirror on, the error is logged once, not twice. */
+START_TEST (test_ui_piano_call_error_logged_once_with_debug_cli_in_web_only)
+{
+	UiCapture_t cap;
+	const char *first;
+
+	ui_piano_call_network_error (BAR_UI_MODE_WEB, DEBUG_CLI, &cap);
+	first = strstr (cap.err, "Network error:");
+	ck_assert_ptr_nonnull (first);
+	ck_assert_ptr_null (strstr (first + 1, "Network error:"));
+	ui_capture_free (&cap);
+}
+END_TEST
+#endif
+
+START_TEST (test_ui_piano_call_error_stays_on_stdout_in_both)
+{
+	UiCapture_t cap;
+
+	ui_piano_call_network_error (BAR_UI_MODE_BOTH, 0, &cap);
+	ck_assert_ptr_nonnull (strstr (cap.out, "Network error:"));
+	ck_assert_str_eq (cap.err, "");
+	ui_capture_free (&cap);
+}
+END_TEST
+
 Suite *ui_suite (void)
 {
 	Suite *s = suite_create ("ui");
@@ -823,6 +925,11 @@ Suite *ui_suite (void)
 	tcase_add_test (tc, test_ui_msg_info_stays_on_stdout_in_web_only);
 	tcase_add_test (tc, test_ui_msg_err_stays_on_stdout_with_log_file);
 	tcase_add_test (tc, test_ui_msg_err_stays_on_stdout_in_cli_and_both);
+	tcase_add_test (tc, test_ui_piano_call_error_reaches_stderr_in_web_only_without_log_file);
+	tcase_add_test (tc, test_ui_piano_call_error_stays_on_stdout_in_both);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test (tc, test_ui_piano_call_error_logged_once_with_debug_cli_in_web_only);
+#endif
 	tcase_set_timeout (tc, 15);
 	suite_add_tcase (s, tc);
 	return s;

@@ -89,6 +89,11 @@ static const char *BarStrCaseStr (const char *haystack, const char *needle) {
 	return NULL;
 }
 
+/* The web-only daemon has stdout on /dev/null unless log_file is set. */
+static bool BarUiStdoutDiscarded (const BarSettings_t *settings) {
+	return settings->uiMode == BAR_UI_MODE_WEB && settings->logFile == NULL;
+}
+
 /*	output message and flush stdout
  *	@param message
  */
@@ -126,11 +131,10 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 	}
 #endif
 
-	/* The web-only daemon's stdout is /dev/null unless log_file is set, which
-	 * would swallow fatal errors; send those to stderr (e.g. the journal). */
+	/* Without log_file the web-only daemon's stdout would swallow fatal
+	 * errors; send those to stderr (e.g. the journal). */
 	FILE *out = stdout;
-	if (type == MSG_ERR && settings->uiMode == BAR_UI_MODE_WEB &&
-			settings->logFile == NULL) {
+	if (type == MSG_ERR && BarUiStdoutDiscarded (settings)) {
 		out = stderr;
 	}
 
@@ -164,6 +168,21 @@ void BarUiMsg (const BarSettings_t *settings, const BarUiMsg_t type,
 
 	fflush (out);
 	va_end (fmtargs);
+}
+
+/*	Report a failed Pandora request (MSG_NONE, as before). The web-only daemon
+ *	without log_file discards stdout, and this is the message that explains why
+ *	startup or a request failed, so it goes to stderr there instead. With the
+ *	debug CLI mirror enabled BarUiMsg already writes it to stderr.
+ */
+static void BarUiPianoCallFailed (const BarSettings_t *settings,
+		const char *what, const char *detail) {
+	if (BarUiStdoutDiscarded (settings) && !log_is_debug_cli_enabled ()) {
+		fprintf (stderr, "%s%s\n", what, detail);
+		fflush (stderr);
+		return;
+	}
+	BarUiMsg (settings, MSG_NONE, "%s%s\n", what, detail);
 }
 
 typedef struct {
@@ -439,7 +458,7 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 
 		pRetLocal = BarStatePianoRequest (app, &req, type);
 		if (pRetLocal != PIANO_RET_OK) {
-			BarUiMsg (&app->settings, MSG_NONE, "Error: %s\n",
+			BarUiPianoCallFailed (&app->settings, "Error: ",
 					PianoErrorToStr (pRetLocal));
 			goto cleanup;
 		}
@@ -449,7 +468,7 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 			BarUiMsg (&app->settings, MSG_NONE, "Interrupted.\n");
 			goto cleanup;
 		} else if (wRetLocal != CURLE_OK) {
-			BarUiMsg (&app->settings, MSG_NONE, "Network error: %s\n",
+			BarUiPianoCallFailed (&app->settings, "Network error: ",
 					curl_easy_strerror (wRetLocal));
 			goto cleanup;
 		}
@@ -476,7 +495,7 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 					BarUiMsg (&app->settings, MSG_INFO, "Trying again... ");
 				}
 			} else if (pRetLocal != PIANO_RET_OK) {
-				BarUiMsg (&app->settings, MSG_NONE, "Error: %s\n",
+				BarUiPianoCallFailed (&app->settings, "Error: ",
 						PianoErrorToStr (pRetLocal));
 				goto cleanup;
 			} else {
