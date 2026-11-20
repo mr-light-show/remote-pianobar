@@ -12,6 +12,7 @@
 #include <piano.h>
 
 #include "crypt.h"
+#include "piano_private.h"
 
 /* Helper: set up a zeroed PianoHandle + PianoRequest, call PianoResponse,
  * return the result.  Caller must call PianoDestroy(&ph) afterwards. */
@@ -482,6 +483,71 @@ START_TEST (test_response_playlist_unknown_encoding)
 }
 END_TEST
 
+/* Helper: run GET_PLAYLIST on a response body; caller destroys the playlist */
+static PianoSong_t *parsePlaylist (const char *json) {
+	static PianoHandle_t ph;
+	PianoRequest_t req;
+	PianoRequestDataGetPlaylist_t data;
+
+	memset (&data, 0, sizeof (data));
+	memset (&ph, 0, sizeof (ph));
+	memset (&req, 0, sizeof (req));
+	data.quality = PIANO_AQ_HIGH;
+	req.type = PIANO_REQUEST_GET_PLAYLIST;
+	req.data = &data;
+	req.responseData = (char *) json;
+	ck_assert_int_eq (PianoResponse (&ph, &req), PIANO_RET_OK);
+	return data.retPlaylist;
+}
+
+/* Items without a usable songName or artistName are skipped */
+START_TEST (test_response_playlist_skips_missing_title_or_artist)
+{
+	PianoSong_t *pl = parsePlaylist ("{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"artistName\":\"A\",\"songName\":null},"
+	        "{\"artistName\":\"A\"},"
+	        "{\"artistName\":null,\"songName\":\"S\"},"
+	        "{\"artistName\":{\"x\":1},\"songName\":\"S\"},"
+	        "null]}}");
+	ck_assert_ptr_null (pl);
+}
+END_TEST
+
+/* A good item next to bad ones survives; a missing album becomes "" */
+START_TEST (test_response_playlist_keeps_good_item_beside_bad)
+{
+	PianoSong_t *pl = parsePlaylist ("{\"stat\":\"ok\",\"result\":{\"items\":["
+	        "{\"artistName\":\"A\",\"songName\":null},"
+	        "{\"artistName\":\"B\",\"songName\":\"T\"},"
+	        "{\"songName\":\"U\"}]}}");
+	ck_assert_ptr_nonnull (pl);
+	ck_assert_ptr_null (pl->head.next);
+	ck_assert_str_eq (pl->title, "T");
+	ck_assert_str_eq (pl->artist, "B");
+	ck_assert_ptr_nonnull (pl->album);
+	ck_assert_str_eq (pl->album, "");
+	PianoDestroyPlaylist (pl);
+}
+END_TEST
+
+/* A destroyed category frees its name and nested genres */
+START_TEST (test_destroy_genre_category_frees_nested)
+{
+	PianoGenreCategory_t *cat = calloc (1, sizeof (*cat));
+	ck_assert_ptr_nonnull (cat);
+	cat->name = strdup ("Rock");
+	for (int i = 0; i < 2; i++) {
+		PianoGenre_t *g = calloc (1, sizeof (*g));
+		ck_assert_ptr_nonnull (g);
+		g->name = strdup ("n");
+		g->musicId = strdup ("id");
+		cat->genres = PianoListAppendP (cat->genres, g);
+	}
+	PianoDestroyGenreCategory (cat);
+	PianoDestroyGenreCategory (NULL);
+}
+END_TEST
+
 /* A genre category's stations become its genres */
 START_TEST (test_response_genre_stations_parsed)
 {
@@ -730,6 +796,9 @@ Suite *libpiano_response_suite (void) {
 	Suite *s = suite_create ("libpiano_response");
 	TCase *tc = tcase_create ("JSON parsing");
 	tcase_add_test (tc, test_response_fail_maps_error_code);
+	tcase_add_test (tc, test_response_playlist_skips_missing_title_or_artist);
+	tcase_add_test (tc, test_response_playlist_keeps_good_item_beside_bad);
+	tcase_add_test (tc, test_destroy_genre_category_frees_nested);
 	tcase_add_test (tc, test_response_missing_stat_field);
 	tcase_add_test (tc, test_response_invalid_json_does_not_crash);
 	tcase_add_test (tc, test_response_fail_missing_code_field);

@@ -28,3 +28,4 @@ THE SOFTWARE.
 void PianoDestroyStation (PianoStation_t *station);
 void PianoDestroyUserInfo (PianoUserInfo_t *user);
 
+void PianoDestroyGenreCategory (PianoGenreCategory_t *cat);
