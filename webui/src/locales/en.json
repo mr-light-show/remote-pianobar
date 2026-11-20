@@ -76,6 +76,8 @@
   "web.socket.not_implemented_history": "Song history is not available through the remote API yet.",
   "web.socket.not_implemented_interactive": "This action asks for input on the player terminal and is not available through the generic action command.",
   "web.socket.not_implemented_settings": "Runtime settings changes are not available through the remote API yet.",
+  "web.socket.request_too_large": "The request is too large and was ignored.",
+  "web.socket.response_too_large": "The response is too large to send.",
   "web.song_explain_empty": "No explanation provided by Pandora",
   "web.song_explain_failed": "Failed to receive explanation",
   "web.station_add_music_transform": "Failed to transform station",

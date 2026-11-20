@@ -270,6 +270,12 @@ void BarWsHandleReceive (BarApp_t *app, void *wsi, const void *in, size_t len,
 		           (unsigned long long) conn->id, WS_CMD_MAX_REQUEST_BYTES);
 		BarWsConnectionRxReset (conn);
 		conn->rxDropping = !final;
+		/* Tell the sender (only), once per message: the tail is dropped
+		 * silently above */
+		BarSocketIoEmitErrorTo (app, conn->id, "request",
+				BarL10nGet (&app->l10n, "web.socket.request_too_large"));
+		/* A stream of oversize messages must not fill the shared ingress */
+		BarWsDrainIfHighWater (ctx);
 		return;
 	}
 	if (!final || conn->rxLen > 0) {

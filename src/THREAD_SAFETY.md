@@ -661,7 +661,11 @@ BarUiActCallback(BarUiActMyNewAction) {
 Handlers run on the command worker, never on the service thread. They may
 block (Pandora HTTP), but every later command waits for them. Reply with an
 explicit destination (`BarSocketIoEmit*To (app, requester, ...)`) or a
-broadcast; never touch the connection table (service thread only).
+broadcast; never touch the connection table (service thread only). A reply
+to a request goes to its requester only (`genres`, `stationModes`,
+`stationInfo`, `searchResults`, the not-implemented action errors), so one
+client's reply can never satisfy another client's wait; broadcast only state
+every client shows (`stations`, `process`, `start`, ...).
 
 ```c
 // Template for thread-safe WebSocket handler
@@ -748,7 +752,7 @@ The service thread never runs a command, never takes `pianoHttpMutex` and never 
 | Outbox ingress (`outbox.c`) | any producer → service thread | `WS_FRAME_MAX_BYTES` per frame, `WS_INGRESS_MAX_MSGS`, `WS_INGRESS_MAX_BYTES` | Every client is closed (1011) and resyncs on reconnect |
 | Per-client pending (`outbox.c`) | service thread → that client's writable callbacks | `WS_CLIENT_MAX_MSGS`, `WS_CLIENT_MAX_BYTES` | Only that client is closed (1008) |
 
-A message that arrives in parts is collected per connection (the buffer is freed when the message completes or the connection closes). One longer than `WS_CMD_MAX_REQUEST_BYTES` is dropped whole, tail included, and logged; the connection stays open. The client keepalive (`2["ping"]`, with or without arguments) is consumed on the service thread (`BarWsIsKeepalive`): it is never queued and never earns the busy error, so a stuck worker with a full queue does not turn the web UI's 25 s ping into an error toast. A client is sent the busy error once per overload (until one of its requests is accepted again), so a burst cannot flood the shared ingress. After shutdown starts the command queue is closed and receives are dropped without a reply.
+A message that arrives in parts is collected per connection (the buffer is freed when the message completes or the connection closes). One longer than `WS_CMD_MAX_REQUEST_BYTES` is dropped whole, tail included, and logged; the connection stays open. The sender (only) gets one `error` event (operation `request`, `web.socket.request_too_large`) per dropped message, pushed on the service thread, which then drains the ingress if it is at high water (`BarWsDrainIfHighWater`), so a stream of oversize messages fills only the sender's own queue. The client keepalive (`2["ping"]`, with or without arguments) is consumed on the service thread (`BarWsIsKeepalive`): it is never queued and never earns the busy error, so a stuck worker with a full queue does not turn the web UI's 25 s ping into an error toast. A client is sent the busy error once per overload (until one of its requests is accepted again), so a burst cannot flood the shared ingress. After shutdown starts the command queue is closed and receives are dropped without a reply.
 
 ### Shutdown order
 

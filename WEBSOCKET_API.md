@@ -65,12 +65,14 @@ ws.onerror = (error) => {
 
 - Unsent `progress`, `volume` and `stations` events are replaced by a newer event of the same kind unless another event lies between them. No other event is coalesced, and query replies are never reordered.
 - `progress` sampled for a previous song is dropped once the next song's `start` is queued.
-- A single frame over 256 KiB is refused and logged, not delivered; no connection is closed.
+- A single frame over 256 KiB is refused and logged, not delivered; no connection is closed. `stationInfo` checks its size first and sends its requester an `error` (`web.socket.response_too_large`) instead.
 - A client that falls behind (64 frames or 1 MiB unsent) is closed with code **1008** "Client event queue full". If the server's shared event queue overflows, every client is closed with code **1011** "Server event queue full". Clients should reconnect; the server sends `process` on connect, and a `query` brings back `stations`.
 
 **Client to server.** Commands from all clients run **one at a time**. Each client's commands run in the order it sent them, and the server takes turns between clients that have commands waiting (round-robin, one command per turn), so one client's burst delays another client's command by at most one waiting command per other client, plus the one running. Connections, keepalive pings (consumed on arrival: never queued, never answered with the busy error) and server events keep flowing while a command runs, but a slow command delays every later command, including cheap ones such as volume or pause. This is by design. One Pandora request can take up to `timeout` × `max_retry` (the player retries temporary network errors; 30 s × 5 = 150 s by default on a dead network), and a command may make several.
 
-- A command is one message of at most 4096 bytes; it may arrive in any number of fragments or TCP segments. A longer message is dropped whole and logged; the connection stays open.
+- A command is one message of at most 4096 bytes; it may arrive in any number of fragments or TCP segments. A longer message is dropped whole (its remaining fragments too) and logged; the connection stays open. Only its sender receives
+  `2["error",{"operation":"request","message":"The request is too large and was ignored."}]`
+  (the message is localized), once per dropped message.
 - Up to 32 commands (64 KiB) can wait, in total across all clients. When that is full the command is refused and only its sender receives
   `2["error",{"operation":"command","message":"The player is busy. Try again in a moment."}]`
   (the message is localized), once until one of its commands is accepted again; later refused commands are dropped silently. Send it again later.
@@ -157,11 +159,11 @@ coordinator and Lovelace card depend on:
 | Event | Wire packet example | Payload type |
 |-------|--------------------|----|
 | `start` | `2["start",{"title":"Song","artist":"Artist","album":"Album","coverArt":"https://...","duration":240,"rating":1,"trackToken":"tok","stationId":"sid","songStationName":"Name"}]` | object |
-| `stop` | `2["stop"]` | none (no second element) |
+| `stop` | `2["stop",{}]` | empty object |
 | `progress` | `2["progress",{"elapsed":42,"duration":240,"percentage":17}]` | object |
 | `volume` | `2["volume",50]` | bare integer (not an object) |
 | `stations` | `2["stations",[{"id":"sid","name":"Name","isQuickMix":false}]]` | array |
-| `process` | `2["process",{"song":{...},"station":"Name","stationId":"sid","playing":true,"paused":false,"volume":50}]` | object |
+| `process` | `2["process",{"version":"3.0.0","song":{...},"station":"Name","stationId":"sid","playing":true,"paused":false,"volume":50}]` | object |
 | `playState` | `2["playState",{"paused":true}]` | object |
 | `error` | `2["error",{"operation":"query.history","message":"..."}]` | object |
 | `pandora.disconnected` | `2["pandora.disconnected",{"reason":"idle"}]` | object |
@@ -193,7 +195,10 @@ consumers. Add a compatibility assertion test before renaming anything.
 
 ## Server-to-Client Events
 
-These events are broadcast from the server to connected clients.
+Most of these events are broadcast to every connected client. The replies to a
+client's own request (`genres`, `searchResults`, `stationModes`, `stationInfo`,
+`query.upcoming.result`, `song.explanation`, and the answers to `query`) go to
+that client only.
 
 ### `process` - Full Application State
 
@@ -203,6 +208,7 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `version` | string | Player version (`"dev"` for local builds; a release sets it from its tag, e.g. `"3.0.0"`). Clients compare its major version with their own. Absent from players older than v3. |
 | `playing` | boolean | Whether a song is currently loaded |
 | `paused` | boolean | Whether playback is paused |
 | `volume` | number | Current volume as percentage (0-100) |
@@ -218,6 +224,7 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 ```json
 {
+  "version": "3.0.0",
   "playing": true,
   "paused": false,
   "volume": 65,
@@ -247,6 +254,7 @@ Sent in response to a `query` event or on initial connection. Contains complete 
 
 ```json
 {
+  "version": "3.0.0",
   "playing": false,
   "paused": false,
   "volume": 50,
@@ -304,12 +312,13 @@ Broadcast when a **new** song begins playing (e.g. station change, skip, or auto
 
 Broadcast when playback stops (song ended, skipped, or station changed).
 
-**Payload:** `null`
+**Payload:** an empty object. Older players sent no second element
+(`2["stop"]`); clients should ignore the payload.
 
 **Example:**
 
 ```json
-null
+{}
 ```
 
 ---
@@ -483,7 +492,7 @@ Sent in response to a `query.upcoming` action. Contains list of upcoming songs i
 
 ### `genres` - Genre Categories
 
-Sent in response to a `station.getGenres` event. Contains hierarchical list of genre categories and their stations.
+Sent to the requesting client only, in response to a `station.getGenres` event. Contains hierarchical list of genre categories and their stations.
 
 **Payload:**
 
@@ -543,7 +552,7 @@ Sent in response to a `station.getGenres` event. Contains hierarchical list of g
 
 ### `searchResults` - Music Search Results
 
-Sent in response to a `music.search` event. Contains categorized search results for artists and songs.
+Sent to the requesting client only, in response to a `music.search` event. Contains categorized search results for artists and songs.
 
 **Payload:**
 
@@ -601,7 +610,7 @@ Sent in response to a `music.search` event. Contains categorized search results 
 
 ### `stationModes` - Station Playback Modes
 
-Sent in response to a `station.getModes` event. Contains available playback modes for a station.
+Sent to the requesting client only, in response to a `station.getModes` event. Contains available playback modes for a station.
 
 **Payload:**
 
@@ -655,12 +664,13 @@ Sent in response to a `station.getModes` event. Contains available playback mode
 
 ### `stationInfo` - Station Seeds and Feedback
 
-Sent in response to a `station.getInfo` event. Contains the seeds and feedback history for a station.
+Sent to the requesting client only, in response to a `station.getInfo` event. Contains the seeds and feedback history for a station.
 
 **Payload:**
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `stationId` | string | Station these seeds belong to (the `stationId` of the request) |
 | `artistSeeds` | array | Artists used as seeds for this station |
 | `songSeeds` | array | Songs used as seeds for this station |
 | `stationSeeds` | array | Other stations used as seeds |
@@ -1051,6 +1061,10 @@ ws.send('2["station.getInfo",{"stationId":"3914377188324099182"}]');
 
 **Response Event:** `stationInfo`
 
+**Error:** If the reply would exceed the 256 KiB frame limit, the requester receives
+`2["error",{"operation":"station.getStationInfo","message":"The response is too large to send."}]`
+(the message is localized) instead of `stationInfo`.
+
 ---
 
 ### `station.deleteSeed` - Delete Station Seed
@@ -1332,6 +1346,7 @@ Used in `stationInfo` event.
 
 ```typescript
 interface StationInfo {
+  stationId: string;       // Station the request named
   artistSeeds: ArtistSeed[];
   songSeeds: SongSeed[];
   stationSeeds: StationSeed[];
@@ -1642,7 +1657,7 @@ The following features are defined in the action mappings but are **not implemen
 | `app.settings` | Settings changes don't persist and are only temporary session changes |
 | `song.createStationFrom`, `station.change`, `station.create`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.selectQuickMix` (as `action` commands) | These map to terminal-prompt handlers, which the command worker never runs. Use the dedicated events of the same name (`station.change`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.createFrom`, `station.setQuickMix`) (create a station with `music.search` followed by `station.createFrom`) |
 
-Attempting to use these actions now emits an `error` event instead of silently doing nothing:
+Attempting to use these actions emits an `error` event to the client that sent the action (no other client is told) instead of silently doing nothing:
 
 ```json
 ["error", {"operation": "query.history", "message": "Song history is not available through the remote API yet."}]

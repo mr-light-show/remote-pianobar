@@ -77,6 +77,13 @@ const char* BarWsGetFriendlyErrorMessage(const BarL10nContext_t *l10n,
 		return BarL10nGet (l10n, "error.ws.unknown");
 	}
 
+	/* Already specific and localized by the sender: the per-operation
+	 * fallback below would replace it with a generic failure text */
+	const char *tooLarge = BarL10nGet (l10n, "web.socket.response_too_large");
+	if (strcmp (originalError, tooLarge) == 0) {
+		return originalError;
+	}
+
 	if (strstr (originalError, "Call not allowed") != NULL ||
 	    strstr (originalError, "not allowed") != NULL) {
 
