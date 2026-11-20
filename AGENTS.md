@@ -155,7 +155,7 @@ Follow existing code in the module you edit.
 
 ## Git and releases
 
-- **PR flow:** open independent PRs at the same time; merge each into its target once its own CI, including the Codecov checks, is green (wait until no check is pending). Check the integration PR's full CI before tagging a dev build and before asking to merge to `main`, rather than after every merge. CI skips jobs a change cannot affect (same `scripts/changed-scope.sh` rules).
+- **PR flow:** open independent PRs at the same time; merge each into its target once its own CI, including the Codecov checks, is green (wait until no check is pending; a docs-only PR uploads no coverage, so Codecov reports nothing and is not awaited). Check the integration PR's full CI before tagging a dev build and before asking to merge to `main`, rather than after every merge. CI skips jobs a change cannot affect (same `scripts/changed-scope.sh` rules).
 - Pre-push hook enforces `make test-all`. Do not use `git push --no-verify` unless the user requests it.
 - Immutable GitHub releases: create a **draft** release before CI uploads assets; publish after uploads complete (see [DEVELOPMENT.md](DEVELOPMENT.md)).
 - **“Tag a PR” means a git tag, not a GitHub PR label.** When the user names a version (e.g. `v2.6.8.dev.5`), create an annotated tag on the PR branch HEAD and push it (`git tag -a … && git push origin <tag>`). Optionally open a **draft** release for that tag to run `release.yml`. Do **not** substitute a PR label unless they explicitly ask for a label.
