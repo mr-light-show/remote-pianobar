@@ -16,6 +16,7 @@ JOBS="${PIANOBAR_CI_JOBS:-}"
 echo "==> CI-local: ${IMAGE} ${TARGET:-default} (PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1)"
 
 docker run --rm -e PIANOBAR_CI_TARGET="${TARGET}" -e PIANOBAR_CI_JOBS="${JOBS}" \
+	${ASAN_OPTIONS:+-e ASAN_OPTIONS="${ASAN_OPTIONS}"} \
 	-v "${ROOT}:/work" \
 	-w /work \
 	"${IMAGE}" \

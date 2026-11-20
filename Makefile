@@ -444,7 +444,8 @@ test-asan: clean
 	${SILENTECHO} "   TEST  Building with AddressSanitizer + UndefinedBehaviorSanitizer..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${SANITIZE_FLAGS} -g" LDFLAGS="${LDFLAGS} ${SANITIZE_FLAGS}"
 	${SILENTECHO} "   TEST  Running test suite with memory and undefined-behavior checks..."
-	${SILENTCMD}UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" ./${TEST_BIN}
+	${SILENTCMD}if [ "$$(uname -s)" = Linux ]; then ASAN_OPTIONS="$${ASAN_OPTIONS:-detect_leaks=1}"; export ASAN_OPTIONS; fi; \
+		UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" ./${TEST_BIN}
 
 clean-test-asan:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
