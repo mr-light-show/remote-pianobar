@@ -23,6 +23,7 @@ THE SOFTWARE.
 #include <check.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -292,6 +293,112 @@ START_TEST (test_readline_wrappers_without_input_fds_do_not_block)
 }
 END_TEST
 
+/* Run BarReadline over raw bytes (may contain NUL-free control bytes) into a
+ * heap buffer of exactly bufSize bytes, so ASan sees any access outside it. */
+static size_t rl_run_heap (const char *data, size_t bufSize,
+		BarReadlineFlags_t flags, char *out, size_t outSize) {
+	int pipefd[2];
+	BarReadlineFds_t input;
+	char *buf = malloc (bufSize);
+	ck_assert_ptr_nonnull (buf);
+
+	ck_assert_int_eq (pipe (pipefd), 0);
+	rl_write_input (pipefd[1], data);
+	rl_input_from_fd (&input, pipefd[0]);
+
+	const size_t len = BarReadline (buf, bufSize, NULL, &input, flags, -1);
+	ck_assert_uint_lt (len, bufSize);
+	ck_assert_uint_eq (strlen (buf), len);
+	ck_assert_uint_lt (len, outSize);
+	memcpy (out, buf, len + 1);
+	free (buf);
+	close (pipefd[0]);
+	return len;
+}
+
+/* Full buffer ending in a multi-byte char: backspace must not read past the
+ * end of the buffer. */
+START_TEST (test_readline_backspace_full_buffer_multibyte)
+{
+	char out[16];
+
+	ck_assert_uint_eq (rl_run_heap ("abcde\xc3\xa9\x7f\n", 8, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 5);
+	ck_assert_str_eq (out, "abcde");
+	ck_assert_uint_eq (rl_run_heap ("abcd\xe2\x82\xac\x7f\n", 8, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 4);
+	ck_assert_str_eq (out, "abcd");
+}
+END_TEST
+
+/* A stray continuation byte at buf[0]: backspace must not walk before it. */
+START_TEST (test_readline_backspace_stray_continuation_byte)
+{
+	char out[16];
+
+	ck_assert_uint_eq (rl_run_heap ("\x80\x7f\n", 8, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 0);
+	ck_assert_str_eq (out, "");
+	ck_assert_uint_eq (rl_run_heap ("\x80\x7fok\n", 8, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 2);
+	ck_assert_str_eq (out, "ok");
+}
+END_TEST
+
+/* Buffer holding only continuation bytes: each backspace stays in bounds and
+ * the line can be fully erased. */
+START_TEST (test_readline_backspace_all_continuation_bytes)
+{
+	char out[16];
+
+	ck_assert_uint_eq (rl_run_heap ("\x80\xbf\x80\x7fx\n", 8, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 1);
+	ck_assert_str_eq (out, "x");
+	ck_assert_uint_eq (rl_run_heap ("\x80\x80\x80\x80\x80\x80\x80\x7f\n", 8,
+	                                RL_TEST_FLAGS, out, sizeof (out)), 0);
+	ck_assert_str_eq (out, "");
+}
+END_TEST
+
+/* Ctrl-U with echo walks the buffer backwards char by char; it must stop at
+ * buf[0] even when the buffer starts with continuation bytes. */
+START_TEST (test_readline_ctrl_u_stray_continuation_bytes)
+{
+	char out[16];
+	const BarReadlineFlags_t echoFlags = BAR_RL_NOINT;
+
+	ck_assert_uint_eq (rl_run_heap ("\x80\x15x\n", 8, echoFlags,
+	                                out, sizeof (out)), 1);
+	ck_assert_str_eq (out, "x");
+	ck_assert_uint_eq (rl_run_heap ("\x80\x80\x80\x15y\n", 8, echoFlags,
+	                                out, sizeof (out)), 1);
+	ck_assert_str_eq (out, "y");
+	ck_assert_uint_eq (rl_run_heap ("a\xc3\xa9\xe2\x82\xac\x15z\n", 8,
+	                                echoFlags, out, sizeof (out)), 1);
+	ck_assert_str_eq (out, "z");
+}
+END_TEST
+
+/* Valid UTF-8: backspace removes the whole 2- or 3-byte character. */
+START_TEST (test_readline_backspace_removes_whole_utf8_char)
+{
+	char out[16];
+
+	ck_assert_uint_eq (rl_run_heap ("x\xc3\xa9\x7f\n", 16, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 1);
+	ck_assert_str_eq (out, "x");
+	ck_assert_uint_eq (rl_run_heap ("x\xe2\x82\xac\x7f\n", 16, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 1);
+	ck_assert_str_eq (out, "x");
+	ck_assert_uint_eq (rl_run_heap ("\xc3\xa9\xe2\x82\xac\x7f\n", 16,
+	                                RL_TEST_FLAGS, out, sizeof (out)), 2);
+	ck_assert_str_eq (out, "\xc3\xa9");
+	ck_assert_uint_eq (rl_run_heap ("\xc3\xa9\x7f\x7f\n", 16, RL_TEST_FLAGS,
+	                                out, sizeof (out)), 0);
+	ck_assert_str_eq (out, "");
+}
+END_TEST
+
 Suite *ui_readline_suite (void)
 {
 	Suite *s = suite_create ("ui_readline");
@@ -311,6 +418,11 @@ Suite *ui_readline_suite (void)
 	tcase_add_test (tc, test_readline_restores_interrupt_target);
 	tcase_add_test (tc, test_readline_without_input_fds_returns_immediately);
 	tcase_add_test (tc, test_readline_wrappers_without_input_fds_do_not_block);
+	tcase_add_test (tc, test_readline_backspace_full_buffer_multibyte);
+	tcase_add_test (tc, test_readline_backspace_stray_continuation_byte);
+	tcase_add_test (tc, test_readline_backspace_all_continuation_bytes);
+	tcase_add_test (tc, test_readline_ctrl_u_stray_continuation_bytes);
+	tcase_add_test (tc, test_readline_backspace_removes_whole_utf8_char);
 	suite_add_tcase (s, tc);
 	return s;
 }

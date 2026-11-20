@@ -33,15 +33,17 @@ THE SOFTWARE.
 #include "main.h"
 #include <limits.h>
 
-/*	return size of previous UTF-8 character
+/*	return size of the UTF-8 character before ptr, never walking before start
+ *	(a run of stray continuation bytes at start counts as one character)
  */
-static size_t BarReadlinePrevUtf8 (char *ptr) {
+static size_t BarReadlinePrevUtf8 (const char *start, const char *ptr) {
 	size_t i = 0;
 
+	assert (ptr > start);
 	do {
 		++i;
 		--ptr;
-	} while ((*ptr & (1 << 7)) && !(*ptr & (1 << 6)));
+	} while (ptr > start && (*ptr & (1 << 7)) && !(*ptr & (1 << 6)));
 
 	return i;
 }
@@ -131,7 +133,7 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 			case 21:
 				if (echo) {
 					while (bufLen > 0) {
-						const size_t moveSize = BarReadlinePrevUtf8 (&buf[bufLen]);
+						const size_t moveSize = BarReadlinePrevUtf8 (buf, &buf[bufLen]);
 						assert (bufLen >= moveSize);
 
 						/* move caret and delete character */
@@ -156,9 +158,9 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 			case 8: /* ASCII BS */
 			case 127: /* ASCII DEL */
 				if (bufLen > 0) {
-					size_t moveSize = BarReadlinePrevUtf8 (&buf[bufLen]);
+					size_t moveSize = BarReadlinePrevUtf8 (buf, &buf[bufLen]);
 					assert (bufLen >= moveSize);
-					memmove (&buf[bufLen-moveSize], &buf[bufLen], moveSize);
+					memset (&buf[bufLen-moveSize], 0, moveSize);
 
 					bufLen -= moveSize;
 
