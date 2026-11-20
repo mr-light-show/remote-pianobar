@@ -596,14 +596,22 @@ START_TEST (test_playback_start_succeeds_with_http_url)
 
 	ck_assert (BarPlaybackStartSong (&app, &playerThread));
 	ck_assert (playerThread != 0);
-	ck_assert_int_eq (BarPlayerGetMode (&app.player), PLAYER_WAITING);
+	/* WAITING is published before the worker starts, so it is never seen
+	 * DEAD; the refused stream can already have taken it to FINISHED. */
+	const BarPlayerMode started = BarPlayerGetMode (&app.player);
 
+	/* Join before asserting so a failure cannot leave the worker running */
 	BarInterruptSetTarget (&app.player.interrupted);
 	pthread_mutex_lock (&app.player.lock);
 	app.player.doQuit = true;
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
-	ck_assert (BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10));
+	const bool joined = BarPlayerJoinThreadWithTimeout (&app.player, playerThread, NULL, 10);
+
+	ck_assert (joined);
+	ck_assert_msg (started == PLAYER_WAITING || started == PLAYER_PLAYING ||
+	               started == PLAYER_FINISHED, "mode %d", (int)started);
+	ck_assert_int_eq (BarPlayerGetMode (&app.player), PLAYER_FINISHED);
 
 	teardown_playback_app (&app);
 }
