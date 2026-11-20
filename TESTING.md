@@ -70,9 +70,17 @@ make test
 # Run with verbose output
 CK_VERBOSITY=verbose ./pianobar_test
 
-# Run specific suite
-./pianobar_test --suite socketio
+# Run one suite (Check suite name), or one tcase of a suite
+CK_RUN_SUITE="Socket.IO Protocol" ./pianobar_test
+CK_RUN_SUITE=playback_integration CK_RUN_CASE=core ./pianobar_test
+
+# Run every suite in its own process, several at a time
+make test-par
 ```
+
+An unknown `CK_RUN_SUITE` or `CK_RUN_CASE` name fails the run instead of
+running zero tests. `make test-par` (`scripts/test-parallel.sh`) runs the same
+tests as `./pianobar_test`; see [README_TESTING.md](README_TESTING.md#parallel-test-runs).
 
 ### Test Files
 

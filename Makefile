@@ -364,6 +364,13 @@ test: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite..."
 	${SILENTCMD}./${TEST_BIN}
 
+# Same tests as `make test`, one suite per process, several at a time
+# (scripts/test-parallel.sh; TEST_JOBS=N workers, TEST_JOBS=1 is the serial run)
+TEST_PAR:=./scripts/test-parallel.sh ./${TEST_BIN}
+test-par: ${TEST_BIN}
+	${SILENTECHO} "   TEST  Running test suite in parallel shards..."
+	${SILENTCMD}${TEST_PAR}
+
 # Integration tests (local HTTP audio fixture + mocked Pandora playlist)
 test-integration: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running integration tests..."
@@ -415,7 +422,7 @@ test-coverage: clean
 	${SILENTECHO} "   TEST  Building with coverage instrumentation..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} --coverage -fprofile-update=atomic -g -O0" LDFLAGS="${LDFLAGS} --coverage"
 	${SILENTECHO} "   TEST  Running test suite (CI parity: integration + headless audio)..."
-	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ./${TEST_BIN}
+	${SILENTCMD}PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 ${TEST_PAR}
 	${SILENTECHO} "   COV   Generating coverage report..."
 	${SILENTCMD}lcov --capture --directory . --output-file coverage.info \
 		--rc lcov_branch_coverage=1 --ignore-errors inconsistent,unused
@@ -445,7 +452,7 @@ test-asan: clean
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${SANITIZE_FLAGS} -g" LDFLAGS="${LDFLAGS} ${SANITIZE_FLAGS}"
 	${SILENTECHO} "   TEST  Running test suite with memory and undefined-behavior checks..."
 	${SILENTCMD}if [ "$$(uname -s)" = Linux ]; then ASAN_OPTIONS="$${ASAN_OPTIONS:-detect_leaks=1}"; export ASAN_OPTIONS; fi; \
-		UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" ./${TEST_BIN}
+		UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1" ${TEST_PAR}
 
 clean-test-asan:
 	${SILENTCMD}${RM} ${TEST_OBJ} ${TEST_BIN}
@@ -456,11 +463,11 @@ test-tsan: clean
 	${SILENTECHO} "   TEST  Building with ThreadSanitizer..."
 	${SILENTCMD}${MAKE} ${TEST_BIN} CFLAGS="${CFLAGS} ${TSAN_FLAGS} -O1 -g" LDFLAGS="${LDFLAGS} ${TSAN_FLAGS}"
 	${SILENTECHO} "   TEST  Running test suite with data-race checks..."
-	${SILENTCMD}TSAN_OPTIONS="suppressions=test/tsan.supp:exitcode=66" ./${TEST_BIN}
+	${SILENTCMD}TSAN_OPTIONS="suppressions=test/tsan.supp:exitcode=66" ${TEST_PAR}
 
 # Run tests with valgrind (Linux only, optional)
 test-valgrind: ${TEST_BIN}
 	${SILENTECHO} "   TEST  Running test suite with valgrind..."
 	${SILENTCMD}valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./${TEST_BIN}
 
-.PHONY: install install-libpiano uninstall test test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen
+.PHONY: install install-libpiano uninstall test test-par test-integration test-e2e-fake test-startup-smoke test-ci-local test-all test-coverage coverage-clean lint lint-test test-clean test-asan clean-test-asan test-tsan test-valgrind minimal all locale-codegen
