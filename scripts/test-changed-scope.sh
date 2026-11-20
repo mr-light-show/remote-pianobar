@@ -3,6 +3,8 @@
 # Each case builds a throwaway repo: branch `base`, then a topic branch with
 # the case's files, and checks the printed scope.
 set -euo pipefail
+# The cases set their own overrides; ignore the caller's.
+unset GATES_SCOPE SCOPE_BASE
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCOPE="${ROOT}/scripts/changed-scope.sh"

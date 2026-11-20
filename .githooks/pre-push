@@ -8,6 +8,29 @@ JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/de
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
+# What the change can affect (scripts/changed-scope.sh: docs, web or full;
+# GATES_SCOPE=full forces the full run).
+SCOPE="$(./scripts/changed-scope.sh)"
+case "$SCOPE" in
+docs)
+	echo "pre-push: docs-only change, skipping tests"
+	exit 0
+	;;
+web)
+	echo "pre-push: webui-only change, running the web unit tests..."
+	cd webui && npm test -- --run
+	exit $?
+	;;
+esac
+
+# make gates already passed for exactly this commit on a clean tree.
+STAMP="build/gates/passed"
+if [ -z "$(git status --porcelain -uall)" ] && [ -f "$STAMP" ] &&
+		[ "$(cat "$STAMP")" = "$(git rev-parse HEAD)" ]; then
+	echo "pre-push: make gates already passed for $(git rev-parse --short HEAD), skipping"
+	exit 0
+fi
+
 # Commits being pushed (empty when upstream not set yet)
 RANGE="@{u}..HEAD"
 if ! git rev-parse --verify "$RANGE" >/dev/null 2>&1; then
