@@ -416,7 +416,7 @@ START_TEST (test_playback_fetch_generic_failure_clears_next_station)
 
 	BarApp_t barApp;
 
-	setup_integration_app (&barApp);
+	setup_integration_app_with_piano (&barApp);
 
 	memset (&g_station, 0, sizeof (g_station));
 	g_station.id = "station-failure";
@@ -427,7 +427,7 @@ START_TEST (test_playback_fetch_generic_failure_clears_next_station)
 	ck_assert (!BarPlaybackFetchPlaylist (&barApp));
 	ck_assert_ptr_null (BarStateGetNextStation (&barApp));
 
-	teardown_integration_app (&barApp);
+	teardown_integration_app_with_piano (&barApp);
 }
 END_TEST
 

@@ -43,6 +43,28 @@ jobs:
           flags: c-tests
           fail_ci_if_error: false
 
+  # AddressSanitizer + UBSan + LeakSanitizer (LSan is enabled explicitly on
+  # Linux by `make test-asan`), in parallel with c-tests; no coverage output.
+  c-asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
+            libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
+            libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
+            libblas-dev liblapack-dev check
+
+      - name: Build and test with ASan/UBSan/LSan
+        env:
+          PIANOBAR_INTEGRATION: "1"
+          PIANOBAR_TEST_NO_DEVICE: "1"
+          ASAN_OPTIONS: "detect_leaks=1"
+        run: make -j"$(nproc)" test-asan
+
   web-tests:
     runs-on: ubuntu-latest
     defaults:

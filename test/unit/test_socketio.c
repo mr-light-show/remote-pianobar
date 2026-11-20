@@ -1611,7 +1611,9 @@ START_TEST (test_socketio_handle_add_genre_missing_music_id)
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
 
-	BarSocketIoHandleAddGenre (&app, json_object_new_object ());
+	json_object *data = json_object_new_object ();
+	BarSocketIoHandleAddGenre (&app, data);
+	json_object_put (data);
 
 	ck_assert_ptr_null (test_last_broadcast ());
 
@@ -1810,7 +1812,9 @@ START_TEST (test_socketio_handle_add_music_missing_fields_noop)
 	BarSettingsInit (&app.settings);
 	TestWsCaptureAttach (&app, 1, mockBroadcastCallback);
 	clearBroadcastMock ();
-	BarSocketIoHandleAddMusic (&app, json_object_new_object ());
+	json_object *data = json_object_new_object ();
+	BarSocketIoHandleAddMusic (&app, data);
+	json_object_put (data);
 	ck_assert_ptr_null (test_last_broadcast ());
 	clearBroadcastMock ();
 	BarSettingsDestroy (&app.settings);

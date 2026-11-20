@@ -52,7 +52,7 @@ overlap lint with the tests; the output of the two is then interleaved.
 - `make test-startup-smoke` - Start the real `pianobar` as a web-only daemon against a closed Pandora port (no account, network or sound card; needs Python 3) and check that stdin stays on `/dev/null` (no `lws: ZERO RANDOM FD`) and the startup failure appears on stderr; not part of `make test-all`, run in the CI `c-tests` job
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
-- `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors, leaks, UB aborts the run)
+- `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors and UB abort the run; on Linux LeakSanitizer is on too via `detect_leaks=1`, overridable with `ASAN_OPTIONS`, and runs in the CI `c-asan` job)
 - `make test-tsan` - Run tests with ThreadSanitizer (known miniaudio races are suppressed in `test/tsan.supp`)
 - `make test-valgrind` - Run tests with valgrind (Linux only)
 
