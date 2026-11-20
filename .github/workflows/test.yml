@@ -12,10 +12,12 @@ on:
 # file, dispatch builder-images.yml on the branch so its jobs see the new
 # packages.
 
-# A new push to a PR branch cancels that PR's run still in progress; pushes to
-# main always finish.
+# A new push to a PR branch cancels that PR's run still in progress. Pushes to
+# main get a group per commit, so none is cancelled or replaced while pending
+# (GitHub keeps only one pending run per group) and every main commit gets its
+# full run and Codecov base report.
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
