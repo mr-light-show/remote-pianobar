@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "../../src/bar_state.h"
+#include "../../src/log.h"
 #include "../../src/main.h"
 #include "../../src/settings.h"
 #include "../../src/ui.h"
@@ -30,6 +31,7 @@
 #include "../../src/websocket_bridge.h"
 #include "test_ws_capture.h"
 #include "../test_helpers.h"
+#include "../test_tmp.h"
 
 /* ---- connection table and delivery argument handling ---- */
 
@@ -161,6 +163,74 @@ START_TEST (test_ws_deliver_ignores_null_ctx_message_or_empty)
 	BarWsOutboxFree (ctx.outbox);
 }
 END_TEST
+
+#ifdef HAVE_DEBUGLOG
+/* The "Sending to client" debug line prints exactly the frame's payload. The
+ * payload is not NUL-terminated, so a precision of the truncation limit alone
+ * read (and logged) heap bytes past the end of a short frame. */
+START_TEST (test_ws_send_log_prints_only_the_frame_payload)
+{
+	BarApp_t app;
+	BarWsContext_t ctx;
+	BarWsConnection_t conns[1];
+	char sock;
+	char dir[256], path[300];
+
+	memset (&app, 0, sizeof (app));
+	memset (&ctx, 0, sizeof (ctx));
+	memset (conns, 0, sizeof (conns));
+	ctx.connections = conns;
+	ctx.maxConnections = 1;
+	ctx.writeFrame = count_write;
+	ctx.requestWritable = ignore_writable;
+	ctx.outbox = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (ctx.outbox);
+	app.wsContext = &ctx;
+	ck_assert_uint_ne (BarWsConnectionAdd (&ctx, &sock, "socketio"), 0);
+
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, sizeof (dir), "ws_send_log"));
+	snprintf (path, sizeof (path), "%s/pianobar.log", dir);
+	const unsigned int savedMask = log_get_debug_mask ();
+	log_set_debug_mask (DEBUG_WEBSOCKET);
+	ck_assert (log_set_file (path));
+
+	/* Leave freed, non-zero heap blocks of every small size behind, so the
+	 * frame's allocation is likely to reuse one and an over-read past the
+	 * payload finds 'X' bytes instead of a lucky NUL. */
+	enum { DIRTY_SIZES = 64 };
+	void *dirty[DIRTY_SIZES];
+	for (size_t i = 0; i < DIRTY_SIZES; i++) {
+		dirty[i] = malloc (16 + 8 * i);
+		ck_assert_ptr_nonnull (dirty[i]);
+		memset (dirty[i], 'X', 16 + 8 * i);
+	}
+	for (size_t i = 0; i < DIRTY_SIZES; i++) {
+		free (dirty[i]);
+	}
+
+	ck_assert (BarWebsocketSend (&app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE,
+			strdup ("2[\"a\"]")));
+	BarWsServiceOutbox (&ctx);
+	ck_assert_int_eq (BarWsHandleWritable (&ctx, &sock), 0);
+
+	log_close_file ();
+	log_set_debug_mask (savedMask);
+
+	FILE *f = fopen (path, "r");
+	ck_assert_ptr_nonnull (f);
+	char text[4096] = {0};
+	ck_assert_uint_gt (fread (text, 1, sizeof (text) - 1, f), 0);
+	fclose (f);
+	ck_assert_msg (strstr (text, "(6 bytes): 2[\"a\"]\n") != NULL,
+			"log line has bytes past the payload: %s", text);
+
+	unlink (path);
+	rmdir (dir);
+	BarWsConnectionRemove (&ctx, &sock);
+	BarWsOutboxFree (ctx.outbox);
+}
+END_TEST
+#endif
 
 /* ---- live server: connect, receive, disconnect ---- */
 
@@ -685,6 +755,9 @@ ws_edge_cases_suite (void)
 	tcase_add_test (tc, test_ws_handle_receive_ignores_missing_app_or_context);
 	tcase_add_test (tc, test_ws_send_rejects_missing_app_context_or_message);
 	tcase_add_test (tc, test_ws_deliver_ignores_null_ctx_message_or_empty);
+#ifdef HAVE_DEBUGLOG
+	tcase_add_test (tc, test_ws_send_log_prints_only_the_frame_payload);
+#endif
 	tcase_add_test (tc, test_ws_live_client_is_tracked_greeted_and_removed);
 	tcase_add_test (tc, test_ws_oversize_single_frame_is_dropped_not_sliced);
 	tcase_add_test (tc, test_ws_client_refused_when_table_full_then_reconnects);

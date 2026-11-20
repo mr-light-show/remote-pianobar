@@ -430,9 +430,11 @@ int BarWsHandleWritable (BarWsContext_t *ctx, void *wsi) {
 	size_t len = BarWsFrameLen (frame);
 	const char *text = (const char *) BarWsFrameData (frame);
 	bool isProgress = (len > 13 && strncmp (text, "2[ \"progress\"", 13) == 0);
+	/* The payload is not NUL-terminated: never print more than len bytes. */
+	const size_t shown = len < LOG_MESSAGE_TRUNCATE_LEN ? len : LOG_MESSAGE_TRUNCATE_LEN;
 	log_write (isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET,
 	           "Sending to client %llu (%zu bytes): %.*s%s\n",
-	           (unsigned long long) conn->id, len, (int) LOG_MESSAGE_TRUNCATE_LEN,
+	           (unsigned long long) conn->id, len, (int) shown,
 	           text, len > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
 	/* The frame keeps LWS_PRE bytes in front of its payload for lws_write,
