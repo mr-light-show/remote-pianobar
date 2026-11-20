@@ -2494,6 +2494,38 @@ START_TEST (test_station_info_carries_station_id)
 }
 END_TEST
 
+/* S5: a not-implemented action is refused to the client that sent it, for
+ * every kind of refusal (string and object payloads, each reason), and a
+ * second client is not told */
+START_TEST (test_not_implemented_action_errors_requester_only)
+{
+	static const char *messages[] = {
+		"2[\"action\",\"song.bookmark\"]",
+		"2[\"action\",\"query.history\"]",
+		"2[\"action\",\"app.settings\"]",
+		"2[\"action\",{\"command\":\"station.create\"}]",
+		"2[\"action\",{\"action\":\"station.selectQuickMix\"}]",
+	};
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	for (size_t i = 0; i < sizeof (messages) / sizeof (messages[0]); i++) {
+		TestWsCaptureClear ();
+		BarSocketIoHandleMessage (&f.app, messages[i], test_ws_cap.ids[1]);
+		TestWsCaptureFlush ();
+		ck_assert_msg (TestWsCaptureCount (1, "\"error\"") == 1,
+				"%s did not reach the requester", messages[i]);
+		ck_assert_msg (test_ws_cap.frameCount == 1, "%s reached another client", messages[i]);
+		ck_assert_int_eq (test_ws_cap.frameClient[0], 1);
+	}
+	/* Without a requester (not a received message) it is still broadcast */
+	TestWsCaptureClear ();
+	BarSocketIoHandleAction (&f.app, "app.settings", NULL, BAR_WS_DEST_BROADCAST);
+	TestWsCaptureFlush ();
+	ck_assert_uint_eq (test_ws_cap.frameCount, 2);
+	info_fixture_destroy (&f);
+}
+END_TEST
+
 START_TEST (test_capture_progress_broadcast) {
 	BarApp_t app;
 	PianoStation_t station;
@@ -2729,15 +2761,17 @@ START_TEST (test_message_events_dispatch_from_requester) {
 	BarUiPianoHttpMutexInit (&app);
 	BarWsConnId_t sender = test_ws_cap.ids[0];
 
-	/* "action" with a string payload */
+	/* "action" with a string payload: the refusal goes to the sender only */
 	BarSocketIoHandleMessage (&app, "2[\"action\",\"app.settings\"]", sender);
-	assert_broadcast_frame ("error");
+	assert_frame (0, 0, "error");
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert (strstr (test_ws_cap.frames[0], "app.settings") != NULL);
 
 	/* "action" with an object payload naming the action */
 	TestWsCaptureClear ();
 	BarSocketIoHandleMessage (&app, "2[\"action\",{\"action\":\"app.settings\"}]", sender);
-	assert_broadcast_frame ("error");
+	assert_frame (0, 0, "error");
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
 	ck_assert (strstr (test_ws_cap.frames[0], "app.settings") != NULL);
 
 	/* Table-dispatched events */
@@ -3109,6 +3143,7 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_set_station_mode_success);
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_info_success);
 	tcase_add_test(tc_handle, test_data_replies_go_to_requester_only);
+	tcase_add_test(tc_handle, test_not_implemented_action_errors_requester_only);
 	tcase_add_test(tc_handle, test_station_info_carries_station_id);
 	tcase_add_test(tc_handle, test_station_info_at_frame_limit_is_sent);
 	tcase_add_test(tc_handle, test_station_info_over_frame_limit_errors_requester_only);

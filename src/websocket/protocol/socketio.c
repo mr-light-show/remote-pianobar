@@ -134,12 +134,14 @@ static BarKeyShortcutId_t BarSocketIoTranslateAction (const char *command) {
 	return m ? m->actionId : (BarKeyShortcutId_t)-1;
 }
 
-/* Emit a localized "not implemented" error for a mapped but unsupported action */
+/* Emit a localized "not implemented" error for a mapped but unsupported
+ * action to the client that asked (a BAR_WS_DEST_BROADCAST requester, as when
+ * called without a client, broadcasts) */
 static void BarSocketIoEmitNotImplemented (BarApp_t *app, const char *operation,
-                                           const char *reasonKey) {
+                                           const char *reasonKey, BarWsConnId_t requester) {
 	const char *message = BarL10nGet (app ? &app->l10n : NULL,
 	        reasonKey ? reasonKey : "web.socket.not_implemented");
-	BarSocketIoEmitError (app, operation, message);
+	BarSocketIoEmitErrorTo (app, requester, operation, message);
 }
 
 /* Parse Socket.IO protocol message format */
@@ -1638,7 +1640,7 @@ void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *da
 
 	if (mapping->capability == BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED) {
 		log_write (DEBUG_WEBSOCKET, "Socket.IO: Action '%s' is not implemented\n", action);
-		BarSocketIoEmitNotImplemented (app, action, mapping->reasonKey);
+		BarSocketIoEmitNotImplemented (app, action, mapping->reasonKey, requester);
 		return;
 	}
 

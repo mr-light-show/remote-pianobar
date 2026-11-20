@@ -1654,7 +1654,7 @@ The following features are defined in the action mappings but are **not implemen
 | `app.settings` | Settings changes don't persist and are only temporary session changes |
 | `song.createStationFrom`, `station.change`, `station.create`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.selectQuickMix` (as `action` commands) | These map to terminal-prompt handlers, which the command worker never runs. Use the dedicated events of the same name (`station.change`, `station.delete`, `station.rename`, `station.addMusic`, `station.addGenre`, `station.addShared`, `station.createFrom`, `station.setQuickMix`) (create a station with `music.search` followed by `station.createFrom`) |
 
-Attempting to use these actions now emits an `error` event instead of silently doing nothing:
+Attempting to use these actions emits an `error` event to the client that sent the action (no other client is told) instead of silently doing nothing:
 
 ```json
 ["error", {"operation": "query.history", "message": "Song history is not available through the remote API yet."}]
