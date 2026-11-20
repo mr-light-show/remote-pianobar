@@ -130,6 +130,14 @@ parse (const char *json)
 
 typedef void (*Handler_t) (BarApp_t *, json_object *);
 
+/* Requester-aware handlers, adapted to Handler_t: no requester, so replies
+ * are broadcast */
+static void
+handle_get_station_info (BarApp_t *app, json_object *data)
+{
+	BarSocketIoHandleGetStationInfo (app, data, BAR_WS_DEST_BROADCAST);
+}
+
 /* An unknown station id: nothing is called, nothing is sent, and the mutex
  * the handler took for the lookup is released again */
 START_TEST (test_station_handlers_ignore_unknown_station)
@@ -142,7 +150,7 @@ START_TEST (test_station_handlers_ignore_unknown_station)
 		{BarSocketIoHandleRenameStation, "{\"stationId\":\"nope\",\"newName\":\"N\"}"},
 		{BarSocketIoHandleGetStationModes, "{\"stationId\":\"nope\"}"},
 		{BarSocketIoHandleSetStationMode, "{\"stationId\":\"nope\",\"modeId\":1}"},
-		{BarSocketIoHandleGetStationInfo, "{\"stationId\":\"nope\"}"},
+		{handle_get_station_info, "{\"stationId\":\"nope\"}"},
 		{BarSocketIoHandleDeleteSeed,
 				"{\"seedId\":\"X\",\"seedType\":\"artist\",\"stationId\":\"nope\"}"},
 		{BarSocketIoHandleDeleteFeedback, "{\"feedbackId\":\"F\",\"stationId\":\"nope\"}"},
@@ -198,7 +206,7 @@ START_TEST (test_station_handlers_report_failed_pandora_calls)
 	expect_failure_reported (&f, BarSocketIoHandleGetStationModes,
 			"{\"stationId\":\"S2\"}", PIANO_REQUEST_GET_STATION_MODES,
 			"station.getStationModes");
-	expect_failure_reported (&f, BarSocketIoHandleGetStationInfo,
+	expect_failure_reported (&f, handle_get_station_info,
 			"{\"stationId\":\"S2\"}", PIANO_REQUEST_GET_STATION_INFO,
 			"station.getStationInfo");
 	expect_failure_reported (&f, BarSocketIoHandleDeleteSeed,

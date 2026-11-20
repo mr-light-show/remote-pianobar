@@ -262,7 +262,7 @@ static void evtSetStationMode(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)r; BarSocketIoHandleSetStationMode(a, d);
 }
 static void evtGetStationInfo(BarApp_t *a, json_object *d, BarWsConnId_t r) {
-	(void)r; BarSocketIoHandleGetStationInfo(a, d);
+	BarSocketIoHandleGetStationInfo(a, d, r);
 }
 static void evtDeleteSeed(BarApp_t *a, json_object *d, BarWsConnId_t r) {
 	(void)r; BarSocketIoHandleDeleteSeed(a, d);
@@ -1159,10 +1159,12 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
-static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData);
+static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData,
+                                       BarWsConnId_t requester);
 
 /* Handle 'station.getInfo' event - fetch station info for seed/feedback management */
-void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
+void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data,
+                                     BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataGetStationInfo_t reqData;
@@ -1200,14 +1202,15 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
 			&reqData, "Fetching station info", "station.getStationInfo", &pRet, &wRet);
 	pthread_mutex_unlock(&app->pianoHttpMutex);
 	if (fetched) {
-		BarSocketIoEmitStationInfo(app, &reqData);
+		BarSocketIoEmitStationInfo(app, &reqData, requester);
 	}
 	
 	PianoDestroyStationInfo(&reqData.info);
 }
 
 /* Emit station info (seeds and feedback) to client */
-static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData) {
+static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData,
+                                       BarWsConnId_t requester) {
 	json_object *data, *artistsArray, *songsArray, *stationsArray, *feedbackArray;
 	json_object *itemObj;
 	const PianoArtist_t *artist;
@@ -1267,8 +1270,20 @@ static void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStation
 	}
 	json_object_object_add(data, "feedback", feedbackArray);
 	
-	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "stationInfo", data);
+	/* A frame over WS_FRAME_MAX_BYTES is dropped by the outbox, which would
+	 * leave the requester waiting for a reply that never comes: tell it. */
+	char *message = BarSocketIoFormatEventMessage("stationInfo", data);
 	json_object_put(data);
+	if (message && strlen(message) > WS_FRAME_MAX_BYTES) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: stationInfo is %zu bytes, over the %d byte frame limit\n",
+		           strlen(message), WS_FRAME_MAX_BYTES);
+		free(message);
+		BarSocketIoEmitErrorTo(app, requester, "station.getStationInfo",
+				BarL10nGet(&app->l10n, "web.socket.response_too_large"));
+		return;
+	}
+	/* Takes ownership of message (NULL if formatting failed: not sent) */
+	BarWebsocketSend(app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, message);
 }
 
 /* Handle 'station.deleteSeed' event */

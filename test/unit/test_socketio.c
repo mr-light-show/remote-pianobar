@@ -2075,7 +2075,7 @@ START_TEST (test_socketio_handle_get_station_info_success)
 	BarUiPianoCallSetTestHook (mock_get_station_info_ok);
 	data = json_object_new_object ();
 	json_object_object_add (data, "stationId", json_object_new_string ("S1"));
-	BarSocketIoHandleGetStationInfo (&app, data);
+	BarSocketIoHandleGetStationInfo (&app, data, BAR_WS_DEST_BROADCAST);
 	BarUiPianoCallClearTestHook ();
 	json_object_put (data);
 
@@ -2086,6 +2086,111 @@ START_TEST (test_socketio_handle_get_station_info_success)
 	BarStateDestroy (&app);
 	BarSettingsDestroy (&app.settings);
 	TestWsCaptureDetach (&app);
+}
+END_TEST
+
+/* Station info whose single feedback title is `g_infoTitleLen` bytes long */
+static size_t g_infoTitleLen;
+
+static bool
+mock_get_station_info_sized (BarApp_t *app, const PianoRequestType_t type, void *data,
+                             PianoReturn_t *pRet, CURLcode *wRet)
+{
+	(void) app;
+	if (type != PIANO_REQUEST_GET_STATION_INFO) {
+		return false;
+	}
+	PianoRequestDataGetStationInfo_t *req = data;
+	PianoSong_t *song = calloc (1, sizeof (*song));
+	ck_assert_ptr_nonnull (song);
+	song->title = malloc (g_infoTitleLen + 1);
+	ck_assert_ptr_nonnull (song->title);
+	memset (song->title, 'a', g_infoTitleLen);
+	song->title[g_infoTitleLen] = '\0';
+	req->info.feedback = song;
+	*pRet = PIANO_RET_OK;
+	*wRet = CURLE_OK;
+	return true;
+}
+
+typedef struct {
+	BarApp_t app;
+	PianoStation_t station;
+} InfoFixture_t;
+
+static void info_fixture_init (InfoFixture_t *f) {
+	memset (f, 0, sizeof (*f));
+	BarSettingsInit (&f->app.settings);
+	BarStateInit (&f->app);
+	BarUiPianoHttpMutexInit (&f->app);
+	f->station.id = "S1";
+	f->app.ph.stations = &f->station;
+	TestWsCaptureAttach (&f->app, 2, NULL);
+}
+
+static void info_fixture_destroy (InfoFixture_t *f) {
+	BarUiPianoHttpMutexDestroy (&f->app);
+	BarStateDestroy (&f->app);
+	BarSettingsDestroy (&f->app.settings);
+	TestWsCaptureDetach (&f->app);
+}
+
+/* station.getInfo for "S1" from client `requester` (index into the capture),
+ * answered with a feedback title of `titleLen` bytes; frames are flushed */
+static void info_fixture_request (InfoFixture_t *f, int requester, size_t titleLen) {
+	g_infoTitleLen = titleLen;
+	BarUiPianoCallSetTestHook (mock_get_station_info_sized);
+	json_object *data = json_tokener_parse ("{\"stationId\":\"S1\"}");
+	BarSocketIoHandleGetStationInfo (&f->app, data, test_ws_cap.ids[requester]);
+	BarUiPianoCallClearTestHook ();
+	json_object_put (data);
+	TestWsCaptureFlush ();
+}
+
+/* Length of the stationInfo frame the handler builds for a title of 0 bytes
+ * (the title is all 'a', so each extra byte adds exactly one) */
+static size_t info_base_frame_len (void) {
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	info_fixture_request (&f, 0, 0);
+	ck_assert_uint_ge (test_ws_cap.frameCount, 1);
+	size_t len = strlen (test_ws_cap.frames[0]);
+	info_fixture_destroy (&f);
+	return len;
+}
+
+/* S2: a stationInfo frame of exactly WS_FRAME_MAX_BYTES still goes out */
+START_TEST (test_station_info_at_frame_limit_is_sent)
+{
+	const size_t base = info_base_frame_len ();
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	info_fixture_request (&f, 1, WS_FRAME_MAX_BYTES - base);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"stationInfo\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"error\""), 0);
+	ck_assert_uint_eq (strlen (test_ws_cap.frames[0]), WS_FRAME_MAX_BYTES);
+	info_fixture_destroy (&f);
+}
+END_TEST
+
+/* S2: one byte over the limit would be dropped by the outbox and the client
+ * would only time out; the requester gets an error instead and no other
+ * client is told */
+START_TEST (test_station_info_over_frame_limit_errors_requester_only)
+{
+	const size_t base = info_base_frame_len ();
+	InfoFixture_t f;
+	info_fixture_init (&f);
+	info_fixture_request (&f, 1, WS_FRAME_MAX_BYTES - base + 1);
+
+	ck_assert_uint_eq (test_ws_cap.frameCount, 1);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"error\""), 1);
+	ck_assert_uint_eq (TestWsCaptureCount (0, "\""), 0);
+	ck_assert_uint_eq (TestWsCaptureCount (1, "\"stationInfo\""), 0);
+	ck_assert (strstr (test_ws_cap.frames[0], "station.getStationInfo") != NULL);
+	ck_assert (strstr (test_ws_cap.frames[0],
+			BarL10nGet (&f.app.l10n, "web.socket.response_too_large")) != NULL);
+	info_fixture_destroy (&f);
 }
 END_TEST
 
@@ -2591,6 +2696,11 @@ static bool mock_piano_call_records_mutex (BarApp_t *app, const PianoRequestType
 
 typedef void (*BarTestStationHandler_fn) (BarApp_t *, json_object *);
 
+/* Requester-aware handlers, adapted to the two-argument table type */
+static void test_info_handler (BarApp_t *app, json_object *data) {
+	BarSocketIoHandleGetStationInfo (app, data, BAR_WS_DEST_BROADCAST);
+}
+
 static void run_station_handler_under_probe (BarApp_t *app,
 		BarTestStationHandler_fn handler, const char *json, const char *name) {
 	json_object *data = json_tokener_parse (json);
@@ -2624,7 +2734,7 @@ START_TEST (test_station_handlers_hold_piano_mutex_across_station_use) {
 			"{\"stationId\":\"S1\"}", "getModes");
 	run_station_handler_under_probe (&app, BarSocketIoHandleSetStationMode,
 			"{\"stationId\":\"S1\",\"modeId\":1}", "setMode");
-	run_station_handler_under_probe (&app, BarSocketIoHandleGetStationInfo,
+	run_station_handler_under_probe (&app, test_info_handler,
 			"{\"stationId\":\"S1\"}", "getInfo");
 	run_station_handler_under_probe (&app, BarSocketIoHandleDeleteSeed,
 			"{\"seedId\":\"X\",\"seedType\":\"artist\",\"stationId\":\"S1\"}", "deleteSeed");
@@ -2886,6 +2996,8 @@ Suite *socketio_suite(void) {
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_modes_skips_quickmix);
 	tcase_add_test(tc_handle, test_socketio_handle_set_station_mode_success);
 	tcase_add_test(tc_handle, test_socketio_handle_get_station_info_success);
+	tcase_add_test(tc_handle, test_station_info_at_frame_limit_is_sent);
+	tcase_add_test(tc_handle, test_station_info_over_frame_limit_errors_requester_only);
 	tcase_add_test(tc_handle, test_socketio_handle_search_music_success);
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_sorts_snapshot);
 	tcase_add_test(tc_handle, test_socketio_build_stations_payload_quickmix_10_name_az);

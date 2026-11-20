@@ -317,6 +317,18 @@ describe('PianobarApp', () => {
     expect(toast).toBeTruthy();
   });
 
+  it('station.getStationInfo error stops the station info spinner', async () => {
+    const el = await mountConnectedApp();
+    (el as unknown as { infoLoading: boolean }).infoLoading = true;
+    hoisted.fire('error', {
+      operation: 'station.getStationInfo',
+      message: 'The response is too large to send.',
+    });
+    await el.updateComplete;
+    expect((el as unknown as { infoLoading: boolean }).infoLoading).toBe(false);
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
   it('error event uses generic message when message is omitted', async () => {
     const el = await mountConnectedApp();
     hoisted.fire('error', { operation: 'volume.set' });

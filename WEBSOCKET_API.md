@@ -65,7 +65,7 @@ ws.onerror = (error) => {
 
 - Unsent `progress`, `volume` and `stations` events are replaced by a newer event of the same kind unless another event lies between them. No other event is coalesced, and query replies are never reordered.
 - `progress` sampled for a previous song is dropped once the next song's `start` is queued.
-- A single frame over 256 KiB is refused and logged, not delivered; no connection is closed.
+- A single frame over 256 KiB is refused and logged, not delivered; no connection is closed. `stationInfo` checks its size first and sends its requester an `error` (`web.socket.response_too_large`) instead.
 - A client that falls behind (64 frames or 1 MiB unsent) is closed with code **1008** "Client event queue full". If the server's shared event queue overflows, every client is closed with code **1011** "Server event queue full". Clients should reconnect; the server sends `process` on connect, and a `query` brings back `stations`.
 
 **Client to server.** Commands from all clients run **one at a time, in the order the server received them**. Connections, keepalive pings (consumed on arrival: never queued, never answered with the busy error) and server events keep flowing while a command runs, but a slow command delays every later command, including cheap ones such as volume or pause. This is by design. One Pandora request can take up to `timeout` × `max_retry` (the player retries temporary network errors; 30 s × 5 = 150 s by default on a dead network), and a command may make several.
@@ -1051,6 +1051,10 @@ ws.send('2["station.getInfo",{"stationId":"3914377188324099182"}]');
 ```
 
 **Response Event:** `stationInfo`
+
+**Error:** If the reply would exceed the 256 KiB frame limit, the requester receives
+`2["error",{"operation":"station.getStationInfo","message":"The response is too large to send."}]`
+(the message is localized) instead of `stationInfo`.
 
 ---
 

@@ -139,7 +139,8 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, struct json_object *data);
 void BarSocketIoHandleSetStationMode(BarApp_t *app, struct json_object *data);
 
 /* Handle 'station.getInfo' - fetch station info for seed/feedback management */
-void BarSocketIoHandleGetStationInfo(BarApp_t *app, struct json_object *data);
+void BarSocketIoHandleGetStationInfo(BarApp_t *app, struct json_object *data,
+                                     BarWsConnId_t requester);
 
 /* Handle 'station.deleteSeed' and 'station.deleteFeedback' */
 void BarSocketIoHandleDeleteSeed(BarApp_t *app, struct json_object *data);
