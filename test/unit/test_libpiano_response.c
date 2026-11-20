@@ -401,6 +401,15 @@ START_TEST (test_response_create_station_null_token)
 }
 END_TEST
 
+/* An empty station list (or a NULL id) finds nothing; it must not assert:
+ * createStation searches the list before appending the first station. */
+START_TEST (test_find_station_by_id_empty_list_or_null_id)
+{
+	ck_assert_ptr_null (PianoFindStationById (NULL, "tok"));
+	ck_assert_ptr_null (PianoFindStationById (NULL, NULL));
+}
+END_TEST
+
 START_TEST (test_response_create_station_ok)
 {
 	PianoHandle_t ph;
@@ -672,6 +681,7 @@ Suite *libpiano_response_suite (void) {
 	tcase_add_test (tc, test_response_station_info_seeds_and_feedback);
 	tcase_add_test (tc, test_response_station_modes);
 	tcase_add_test (tc, test_response_create_station_null_token);
+	tcase_add_test (tc, test_find_station_by_id_empty_list_or_null_id);
 	tcase_add_test (tc, test_response_create_station_ok);
 	tcase_add_test (tc, test_response_playlist_null_encoding);
 	suite_add_tcase (s, tc);
