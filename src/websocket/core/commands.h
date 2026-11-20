@@ -29,8 +29,17 @@ THE SOFTWARE.
 
 #include "conn_id.h"
 
-/* Bounded FIFO that hands WebSocket commands from the receive callbacks
+/* Bounded queue that hands WebSocket commands from the receive callbacks
  * (producers, service thread) to the command worker (one consumer).
+ *
+ * Fair queueing: each requester's items stay in FIFO order, and Pop serves
+ * requesters round-robin, one item per turn (a requester with nothing queued
+ * joins at the back of the rotation). One client's burst therefore delays
+ * another client's command by at most one queued item per other requester
+ * (plus the running command). With a single requester this is a plain FIFO.
+ * The limits are global, shared by all requesters. The queue knows nothing
+ * about connections: a closed client's queued items are still delivered in
+ * their turn (its replies go nowhere); only Close drops queued items.
  *
  * An item is {requester connection ID, copied request bytes}: only immutable
  * owned bytes and a stable ID cross threads, never JSON nodes, station/song
@@ -61,7 +70,8 @@ void BarWsCommandQueueFree (BarWsCommandQueue_t *q);
 BarWsCommandResult_t BarWsCommandQueuePush (BarWsCommandQueue_t *q,
 		BarWsConnId_t requester, const char *bytes, size_t len);
 
-/* Block until an item is available and remove it. On true, *bytes is
+/* Block until an item is available and remove the next one in round-robin
+ * order (the oldest item of the requester whose turn it is). On true, *bytes is
  * heap-owned by the caller (free it) and any out pointer may be NULL to
  * discard that field (bytes then is freed here). Returns false, with outputs
  * untouched, once the queue is closed (queued items are dropped by Close). */

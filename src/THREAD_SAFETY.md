@@ -35,8 +35,8 @@ The WebSocket server has exactly **two** threads however many clients connect: t
 │ Playback Mgr Thread  │   │   Player Thread      │   │ WS Command Worker   │   │ WS Service Thread   │
 ├──────────────────────┤   ├──────────────────────┤   ├─────────────────────┤   ├─────────────────────┤
 │ - Auto-advance queue │   │ - Audio decoding     │   │ - WebUI commands    │   │ - libwebsockets     │
-│ - Fetch playlist     │   │ - Playback timing    │   │   (FIFO, one at a   │   │ - Connections, I/O  │
-│ - Start playback     │   │ - Buffer management  │   │   time; Pandora)    │   │ - Snapshots only    │
+│ - Fetch playlist     │   │ - Playback timing    │   │   (round-robin, one │   │ - Connections, I/O  │
+│ - Start playback     │   │ - Buffer management  │   │   at a time)        │   │ - Snapshots only    │
 └──────────────────────┘   └──────────────────────┘   └─────────────────────┘   └─────────────────────┘
          │                          │                          │                         │
          └──────────────────────────┴──────────────────────────┴─────────────────────────┘
@@ -64,7 +64,7 @@ Pianobar uses **several synchronization primitives**:
 | `app->stateRwlock` | Reader-writer lock: read for getters, write for setters and short libpiano request/response/reset critical sections touching playlist/station pointers | Every `ui_mode` (`BarStateUsesRwlock`) | [`bar_state.c`](bar_state.c) |
 | `app->player.lock` | Protects player control (doPause, songPlayed, songDuration, mode) | Always active | [`player.c`](player.c) |
 | `app->player.decoderLock` | Protects audio buffer (fabuf, lastTimestamp, decoderCond) | Always active | [`player.c`](player.c) |
-| Command queue lock | Protects the bounded command FIFO (service thread pushes, worker pops) | Web and both | [`websocket/core/commands.c`](websocket/core/commands.c) |
+| Command queue lock | Protects the bounded command queue (per-requester FIFOs served round-robin; service thread pushes, worker pops) | Web and both | [`websocket/core/commands.c`](websocket/core/commands.c) |
 | Outbox lock | Protects producer ingress, song generation and play-state watermark | Web and both | [`websocket/core/outbox.c`](websocket/core/outbox.c) |
 | libwebsockets internal | Protects WebSocket connection state | Managed by libwebsockets | N/A |
 
@@ -734,11 +734,13 @@ BarStateGetPlayerTime(app, &played, &duration);    // Locks/unlocks again
 |---|---|---|
 | Main (lifecycle owner) | `BarWebsocketInit`/`BarWebsocketDestroy` (they start and stop the worker; `BarWebsocketWorkerStart`/`Stop` are public only as test seams) | CLI input in Both mode |
 | Service thread (`BarWebsocketThread`) | lws context servicing, the connection table (IDs, per-client pending frames), writable callbacks, keepalive | Receive callbacks collect a message and queue a copy; the initial `process` snapshot on connect; the debounced volume broadcast and the 1 s system-volume poll (and, with `DEBUG_WEBSOCKET`, the diagnostics below), on an `lws_sul` timer armed only while such work is due (`lws_service` otherwise sleeps until socket activity or a producer's `lws_cancel_service`) |
-| Command worker (`BarWsWorkerThread`) | nothing shared; pops one command at a time | `BarSocketIoHandleMessage` for every client command, FIFO, with the handlers' own locking (below) |
+| Command worker (`BarWsWorkerThread`) | nothing shared; pops one command at a time | `BarSocketIoHandleMessage` for every client command, one at a time in fair order, with the handlers' own locking (below) |
 | Any producer (worker, playback manager, CLI) | nothing | `BarWebsocketSend` and friends: push to the outbox and `lws_cancel_service()`; never blocks on a client |
 | Playback manager | `ctx->progress` (progress de-duplication) | `BarWsBroadcastProgress` |
 
 Only the service thread closes connections (the overflow policies in `BarWsServiceOutbox`, write failures); no producer can touch the connection table.
+
+**Fair order.** The command queue keeps one FIFO per requester (connection ID) and the worker serves requesters round-robin, one command per turn: it takes the oldest command of the next requester after the one it served last, and a requester with nothing queued joins at the back of the rotation. A client that queues a burst (up to the global `WS_CMD_MAX_ITEMS`) therefore delays another client's command by at most one queued command per other requester, plus the command already running, rather than by the whole burst. Each client's own commands still run in the order it sent them, and with one client the order is plain FIFO. Commands, and so Pandora calls, remain serialized on the one worker. The queue does not track connections: when a client disconnects, its queued commands still run in their turn and their replies are dropped (unknown destination), as before; only closing the queue at shutdown drops queued commands. The rotation lives entirely under the command queue lock (no new lock, no change to the lock order).
 
 The service thread never runs a command, never takes `pianoHttpMutex` and never waits on the command queue (it only pushes, which does not wait). The initial `process` frame for a new connection is still built on the service thread: `BarSocketIoBuildProcessPayload` takes only `stateRwlock` (read, via `BarStateSnapshotPlayback`) and `player.lock`, which are never held across network I/O. Pandora HTTP runs under `pianoHttpMutex` only, and `stateRwlock` is taken after it for in-memory updates, so a slow Pandora call cannot make that snapshot wait. Moving it to the worker would delay a new client's first state behind any slow command.
 
@@ -746,7 +748,7 @@ The service thread never runs a command, never takes `pianoHttpMutex` and never 
 
 | Queue | Producer → consumer | Limits (`bar_constants.h`) | When full |
 |---|---|---|---|
-| Command queue (`commands.c`) | receive callback → worker | `WS_CMD_MAX_REQUEST_BYTES` (4 KiB per message, collected from its parts per connection), `WS_CMD_MAX_ITEMS` 32, `WS_CMD_MAX_BYTES` 64 KiB | Nothing is queued; the requester gets one `error` event (`web.socket.busy`) per overload |
+| Command queue (`commands.c`) | receive callback → worker | `WS_CMD_MAX_REQUEST_BYTES` (4 KiB per message, collected from its parts per connection), `WS_CMD_MAX_ITEMS` 32, `WS_CMD_MAX_BYTES` 64 KiB (global, shared by all clients) | Nothing is queued; the requester gets one `error` event (`web.socket.busy`) per overload |
 | Outbox ingress (`outbox.c`) | any producer → service thread | `WS_FRAME_MAX_BYTES` per frame, `WS_INGRESS_MAX_MSGS`, `WS_INGRESS_MAX_BYTES` | Every client is closed (1011) and resyncs on reconnect |
 | Per-client pending (`outbox.c`) | service thread → that client's writable callbacks | `WS_CLIENT_MAX_MSGS`, `WS_CLIENT_MAX_BYTES` | Only that client is closed (1008) |
 
