@@ -24,9 +24,22 @@ command -v python3 >/dev/null 2>&1 || { echo "web_mode_startup: python3 required
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/pianobar-startup.XXXXXX")
 DAEMON_PID=
+
+# True while pid runs. The daemon is reparented to PID 1 when it detaches; in
+# a container whose PID 1 never reaps (e.g. a GitHub Actions container job),
+# an exited daemon stays a zombie and kill -0 still succeeds, so a zombie
+# (Linux /proc state Z) counts as exited.
+alive() {
+	kill -0 "$1" 2>/dev/null || return 1
+	if [ -r "/proc/$1/stat" ]; then
+		state=$(sed 's/^.*) //' "/proc/$1/stat" | cut -d' ' -f1)
+		[ "$state" != Z ] || return 1
+	fi
+	return 0
+}
 cleanup() {
 	status=$?
-	if [ -n "$DAEMON_PID" ] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+	if [ -n "$DAEMON_PID" ] && alive "$DAEMON_PID"; then
 		kill "$DAEMON_PID" 2>/dev/null
 		sleep 1
 		kill -9 "$DAEMON_PID" 2>/dev/null
@@ -90,10 +103,10 @@ done
 [ -n "$DAEMON_PID" ] || fail "daemon never reported its PID"
 
 for _ in $(seq 1 150); do
-	kill -0 "$DAEMON_PID" 2>/dev/null || break
+	alive "$DAEMON_PID" || break
 	sleep 0.1
 done
-if kill -0 "$DAEMON_PID" 2>/dev/null; then
+if alive "$DAEMON_PID"; then
 	fail "daemon still running 15s after a failed login"
 fi
 wait "$LAUNCHER_PID" 2>/dev/null

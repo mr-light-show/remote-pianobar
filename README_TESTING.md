@@ -77,7 +77,12 @@ is passed through unchanged.
 - `TEST_SPLIT_SUITES="playback_integration Player"` splits more suites by tcase.
 - Each shard's log is printed when it finishes, then the summed count:
   `test-parallel: Checks: <N> in <shards> shards`. It equals the `Checks:`
-  count of a serial `./pianobar_test` run.
+  count of a serial `./pianobar_test` run. `TEST_PAR_LOGS=failed` prints only
+  failing shards in full (the others print their `Checks:` line).
+- `PIANOBAR_TEST_DEBUG_ALL=1` turns on every `DEBUG_*` log kind for the whole
+  run, so debug-only log statements execute (CI runs the ASan binary this way
+  in `c-asan`). The output is several MB; pair it with `TEST_PAR_LOGS=failed`.
+  Tests that check terminal output with debug off set their own mask.
 - Guards: the run fails if a shard exits non-zero, prints no `Checks:` line or
   reports `Checks: 0`, or if a `suite_create`/`tcase_create` argument is not a
   string literal. `pianobar_test` itself fails when `CK_RUN_SUITE` or

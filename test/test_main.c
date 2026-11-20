@@ -22,11 +22,13 @@ THE SOFTWARE.
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <check.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <pthread.h>
 
+#include "../src/log.h"
 #include "../src/main.h"
 #include "test_tmp.h"
 
@@ -108,6 +110,15 @@ int main(void) {
 	srunner_add_suite(sr, interrupt_suite());
 	srunner_add_suite(sr, libpiano_response_suite());
 	srunner_add_suite(sr, state_edge_paths_suite());
+
+	/* PIANOBAR_TEST_DEBUG_ALL=1 (CI c-asan): every DEBUG_* kind on, so debug-only
+	 * log statements run under the sanitizers. Tests that set their own debug
+	 * mask override this. The output is large; scripts/test-parallel.sh with
+	 * TEST_PAR_LOGS=failed prints only failing shards. */
+	const char *debugAll = getenv ("PIANOBAR_TEST_DEBUG_ALL");
+	if (debugAll != NULL && strcmp (debugAll, "1") == 0) {
+		log_set_debug_mask ((unsigned int) DEBUG_STATE * 2u - 1u);
+	}
 
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);
