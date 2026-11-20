@@ -38,9 +38,47 @@ static inline int free_loopback_port (void) {
 	return ntohs (addr.sin_port);
 }
 
-/*	"http://127.0.0.1:<free port>/<path>" in out; returns out */
+/*	A listening loopback socket on an ephemeral port (stored in *port) */
+static inline int bind_loopback_listener (int *port) {
+	int fd = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (fd, 0);
+	struct sockaddr_in addr;
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	addr.sin_port = 0;
+	ck_assert_int_eq (bind (fd, (struct sockaddr *) &addr, sizeof (addr)), 0);
+	ck_assert_int_eq (listen (fd, 1), 0);
+	socklen_t len = sizeof (addr);
+	ck_assert_int_eq (getsockname (fd, (struct sockaddr *) &addr, &len), 0);
+	*port = ntohs (addr.sin_port);
+	return fd;
+}
+
+/*	True when something accepts a TCP connection on this loopback port */
+static inline bool loopback_port_accepts (int port) {
+	int fd = socket (AF_INET, SOCK_STREAM, 0);
+	ck_assert_int_ge (fd, 0);
+	struct sockaddr_in addr;
+	memset (&addr, 0, sizeof (addr));
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+	addr.sin_port = htons (port);
+	const bool accepts = connect (fd, (struct sockaddr *) &addr, sizeof (addr)) == 0;
+	close (fd);
+	return accepts;
+}
+
+/*	"http://127.0.0.1:<free port>/<path>" in out; returns out. Another process
+ *	may take the port between the kernel handing it out and the caller using
+ *	it, so the port is probed once and replaced by a second one if something
+ *	already listens there. */
 static inline char *test_refused_url (char *out, size_t size, const char *path) {
-	snprintf (out, size, "http://127.0.0.1:%d/%s", free_loopback_port (), path);
+	int port = free_loopback_port ();
+	if (loopback_port_accepts (port)) {
+		port = free_loopback_port ();
+	}
+	snprintf (out, size, "http://127.0.0.1:%d/%s", port, path);
 	return out;
 }
 
