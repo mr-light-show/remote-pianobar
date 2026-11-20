@@ -43,6 +43,7 @@ trap 'exit 130' INT TERM
 
 fail() {
 	echo "web_mode_startup: FAIL: $*" >&2
+	echo "--- stdout ---" >&2; cat "$TMP/out" >&2
 	echo "--- stderr ---" >&2; cat "$TMP/err" >&2
 	exit 1
 }
@@ -78,9 +79,10 @@ export no_proxy= NO_PROXY=
 ) </dev/null >"$TMP/out" 2>"$TMP/err" &
 LAUNCHER_PID=$!
 
-# The banner names the daemon's PID; wait for it, then for the daemon to exit.
+# The banner names the daemon's PID (on stdout where the launcher forks, on
+# stderr where it re-executes itself); wait for it, then for the daemon to exit.
 for _ in $(seq 1 100); do
-	DAEMON_PID=$(sed -n 's/^Pianobar daemon started (PID: \([0-9][0-9]*\)).*/\1/p' "$TMP/err" | head -n 1)
+	DAEMON_PID=$(cat "$TMP/out" "$TMP/err" | sed -n 's/^Pianobar daemon started (PID: \([0-9][0-9]*\)).*/\1/p' | head -n 1)
 	[ -n "$DAEMON_PID" ] && break
 	kill -0 "$LAUNCHER_PID" 2>/dev/null || break
 	sleep 0.1
