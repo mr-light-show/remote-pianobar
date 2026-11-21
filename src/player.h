@@ -122,6 +122,7 @@ struct player {
 	bool synchronizationInitialized, audioNoDevice, dataSourceInitialized;
 	bool audioTerminalFailure;
 	bool audioNullBackend; /* test-only: engine device runs on miniaudio's null backend */
+	_Atomic bool audioHold; /* test-only: device callback delivers silence, consumes nothing */
 	bool threadJoinPending; /* lock: set before pthread_create, cleared only after join */
 
 	/* Private decoder state and audio objects. Audio objects require the
@@ -194,6 +195,10 @@ void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook);
  * device thread without hardware). PIANOBAR_TEST_NULL_AUDIO=1 does the same.
  * Either takes precedence over PIANOBAR_TEST_NO_DEVICE. Set before BarPlayerInit. */
 void BarPlayerSetNullAudioTestBackend (bool enabled);
+/* Test-only: while held, the device data callback outputs silence and reads
+ * no frames, so playback cannot advance or finish. Inert unless set; safe from
+ * any thread. Release it to let the song play out. */
+void BarPlayerSetAudioHoldTestGate (player_t *player, bool hold);
 /* Test-only: runs on the player thread after the stream and decoder open,
  * before the filter graph and data source are built. Set before starting it. */
 typedef void (*BarPlayerStreamOpenedTestHook) (player_t *player);

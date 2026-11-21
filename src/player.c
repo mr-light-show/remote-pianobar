@@ -102,6 +102,10 @@ void BarPlayerSetNullAudioTestBackend (bool enabled) {
 	nullAudioTestBackend = enabled;
 }
 
+void BarPlayerSetAudioHoldTestGate (player_t *player, bool hold) {
+	if (player != NULL) { atomic_store (&player->audioHold, hold); }
+}
+
 static BarPlayerStreamOpenedTestHook streamOpenedTestHook;
 
 void BarPlayerSetStreamOpenedTestHook (BarPlayerStreamOpenedTestHook hook) {
@@ -524,6 +528,14 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		return MA_AT_END;
 	}
 	
+	/* Test-only hold: deliver silence and consume no decoded audio. Reporting
+	 * a full read keeps miniaudio from treating the source as ended. */
+	if (atomic_load (&player->audioHold)) {
+		memset (pFramesOut, 0, frameCount * pFFmpeg->channels * sizeof (int16_t));
+		if (pFramesRead != NULL) { *pFramesRead = frameCount; }
+		return MA_SUCCESS;
+	}
+
 	/* Transition safeguard: the engine should normally be stopped for a
 	 * sustained pause. Keep silence until backend race testing proves this
 	 * callback cannot overlap the physical pause transition. */
