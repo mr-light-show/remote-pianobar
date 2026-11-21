@@ -1654,6 +1654,8 @@ START_TEST (test_null_audio_volume_changes_while_playing_and_paused)
 	pthread_t playerThread = 0;
 	if (!null_audio_app_start (&barApp, &http, "volume_changes_while_playing_and_paused")) { return; }
 
+	/* Hold playback so the song cannot end under the control steps. */
+	BarPlayerSetAudioHoldTestGate (&barApp.player, true);
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
 	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
 	ck_assert (BarPlayerSetVolume (&barApp.player, 50));
@@ -1666,6 +1668,8 @@ START_TEST (test_null_audio_volume_changes_while_playing_and_paused)
 	ck_assert_int_eq (BarPlayerGetVolume (&barApp.player), 0);
 	ck_assert (BarPlayerSetPaused (&barApp.player, false));
 	ck_assert (BarPlayerSetVolume (&barApp.player, 80));
+	ck_assert_int_eq (BarPlayerGetMode (&barApp.player), PLAYER_PLAYING);
+	BarPlayerSetAudioHoldTestGate (&barApp.player, false);
 	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
 	stop_player_thread (&barApp.player, &playerThread);
 	ck_assert_int_eq (BarPlayerGetVolume (&barApp.player), 80);
@@ -1703,7 +1707,8 @@ static void *null_audio_snapshot_worker (void *data) {
 }
 
 /* Controls, observations and the device callback contend for the same
- * reservation and decoderLock until the song ends naturally. */
+ * reservation and decoderLock while playback is held; the workers stop before
+ * the gate opens so the natural end never races a stalled control. */
 START_TEST (test_null_audio_concurrent_controls_until_song_end)
 {
 	BarApp_t barApp;
@@ -1712,21 +1717,24 @@ START_TEST (test_null_audio_concurrent_controls_until_song_end)
 	if (!null_audio_app_start (&barApp, &http, "concurrent_controls_until_song_end")) { return; }
 	NullAudioStress_t stress = { .player = &barApp.player };
 
+	BarPlayerSetAudioHoldTestGate (&barApp.player, true);
 	ck_assert (BarPlaybackStartSong (&barApp, &playerThread));
 	ck_assert_int_eq (pthread_create (&volumeThread, NULL, null_audio_volume_worker, &stress), 0);
 	ck_assert_int_eq (pthread_create (&snapshotThread, NULL, null_audio_snapshot_worker, &stress), 0);
 	ck_assert (wait_for_mode (&barApp.player, PLAYER_PLAYING, 10000));
-	for (unsigned i = 0; i < 6 && BarPlayerGetMode (&barApp.player) == PLAYER_PLAYING; ++i) {
+	for (unsigned i = 0; i < 6; ++i) {
 		bool paused = false;
 		BarPlayerTogglePaused (&barApp.player, &paused);
 		usleep (20000);
 	}
 	BarPlayerSetPaused (&barApp.player, false);
-	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
-	stop_player_thread (&barApp.player, &playerThread);
 	atomic_store (&stress.stop, true);
 	ck_assert_int_eq (pthread_join (volumeThread, NULL), 0);
 	ck_assert_int_eq (pthread_join (snapshotThread, NULL), 0);
+	ck_assert_int_eq (BarPlayerGetMode (&barApp.player), PLAYER_PLAYING);
+	BarPlayerSetAudioHoldTestGate (&barApp.player, false);
+	ck_assert (wait_for_mode (&barApp.player, PLAYER_FINISHED, 10000));
+	stop_player_thread (&barApp.player, &playerThread);
 	BarTestAssertDeviceStarted (&barApp.player, false);
 	ck_assert_uint_gt (stress.volumeOps, 0);
 
