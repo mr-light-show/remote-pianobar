@@ -388,7 +388,7 @@ bool BarL10nInit (BarL10nContext_t *ctx, const BarSettings_t *settings) {
 		bar_l10n_try_path (path, &pairs, &n, &cap);
 	}
 
-have_locale_file:
+have_locale_file: ;
 
 	size_t kept = 0;
 	for (size_t i = 0; i < n; i++) {
