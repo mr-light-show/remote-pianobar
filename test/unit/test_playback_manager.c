@@ -36,8 +36,8 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/playback_manager.h"
 #include "../../src/websocket/core/websocket.h"
-
-#ifdef WEBSOCKET_ENABLED
+#include "../test_helpers.h"
+#include "../../src/websocket_bridge.h"
 
 void BarUiActSkipSong (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
 void BarUiActPandoraDisconnect (BarApp_t *, PianoStation_t *, PianoSong_t *, int);
@@ -474,6 +474,18 @@ START_TEST(test_wait_stale_idle_snapshot_cannot_park_active_player) {
 }
 END_TEST
 
+typedef struct {
+	BarWsOutbox_t *outbox;
+	BarWsPending_t *message;
+} TakeArgs_t;
+
+/* Takes the outbox's queued messages once there are any */
+static bool outbox_took (void *arg) {
+	TakeArgs_t *t = arg;
+	t->message = BarWsOutboxTake (t->outbox);
+	return t->message != NULL;
+}
+
 START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	BarApp_t app = {0};
 	BarWsContext_t ctx = {0};
@@ -483,9 +495,8 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	BarStateInit (&app);
 	pthread_mutex_init (&app.player.lock, NULL);
 	pthread_cond_init (&app.player.cond, NULL);
-	for (int i = 0; i < BUCKET_COUNT; ++i) {
-		pthread_mutex_init (&ctx.buckets[i].mutex, NULL);
-	}
+	ctx.outbox = BarWsOutboxNew ();
+	ck_assert_ptr_nonnull (ctx.outbox);
 	app.wsContext = &ctx;
 	app.player.mode = PLAYER_PLAYING;
 	app.player.doPause = true;
@@ -499,9 +510,7 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 		usleep (50000);
 	}
 	ck_assert_ptr_eq (BarStateGetCurrentStation (&app), &station);
-	pthread_mutex_lock (&ctx.buckets[BUCKET_PROGRESS].mutex);
-	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_PROGRESS].mutex);
+	ck_assert_ptr_null (BarWsOutboxTake (ctx.outbox));
 	/* Resume before the minute deadline; the next ordinary tick must publish
 	 * actual progress, proving the paused deadline was abandoned on its wake. */
 	pthread_mutex_lock (&app.player.lock);
@@ -509,19 +518,23 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	app.player.pauseStartTime = 0;
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
-	usleep (1200000);
-	pthread_mutex_lock (&ctx.buckets[BUCKET_PROGRESS].mutex);
-	BarWsMessage_t *message = ctx.buckets[BUCKET_PROGRESS].message;
+	TakeArgs_t take = {.outbox = ctx.outbox};
+	ck_assert (wait_until (outbox_took, &take, 3000));
+	BarWsPending_t *message = take.message;
 	ck_assert_ptr_nonnull (message);
-	json_object *event = json_tokener_parse ((char *) message->data + 1);
+	ck_assert_ptr_null (message->next);
+	ck_assert_int_eq (message->key, BAR_WS_KEY_PROGRESS);
+	char *text = strndup ((const char *) BarWsFrameData (message->frame),
+			BarWsFrameLen (message->frame));
+	ck_assert_ptr_nonnull (text);
+	json_object *event = json_tokener_parse (text + 1);
+	free (text);
 	ck_assert_ptr_nonnull (event);
 	ck_assert_str_eq (json_object_get_string (json_object_array_get_idx (event, 0)), "progress");
 	json_object *payload = json_object_array_get_idx (event, 1);
 	ck_assert_int_eq (json_object_get_int (json_object_object_get (payload, "elapsed")), 7);
 	json_object_put (event);
-	BarWsMessageFree (message);
-	ctx.buckets[BUCKET_PROGRESS].message = NULL;
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_PROGRESS].mutex);
+	BarWsPendingFree (message);
 	pthread_mutex_lock (&app.player.lock);
 	app.player.doPause = true;
 	app.player.pauseStartTime = time (NULL);
@@ -529,14 +542,9 @@ START_TEST(test_manager_progress_only_while_active_after_pause_wakes) {
 	pthread_cond_broadcast (&app.player.cond);
 	pthread_mutex_unlock (&app.player.lock);
 	usleep (1200000);
-	pthread_mutex_lock (&ctx.buckets[BUCKET_PROGRESS].mutex);
-	ck_assert_ptr_null (ctx.buckets[BUCKET_PROGRESS].message);
-	pthread_mutex_unlock (&ctx.buckets[BUCKET_PROGRESS].mutex);
+	ck_assert_ptr_null (BarWsOutboxTake (ctx.outbox));
 	BarPlaybackManagerStop (&app);
-	for (int i = 0; i < BUCKET_COUNT; ++i) {
-		BarWsMessageFree (ctx.buckets[i].message);
-		pthread_mutex_destroy (&ctx.buckets[i].mutex);
-	}
+	BarWsOutboxFree (ctx.outbox);
 	pthread_cond_destroy (&app.player.cond);
 	pthread_mutex_destroy (&app.player.lock);
 	BarStateDestroy (&app);
@@ -699,6 +707,10 @@ START_TEST(test_manager_thread_one_loop_iteration) {
 }
 END_TEST
 
+static bool playlist_advanced(void *app) {
+	return BarStateGetPlaylist(app) == NULL;
+}
+
 /* Covers idle PLAYER_DEAD path: BarStateAdvancePlaylist + BarUiHistoryPrepend. */
 START_TEST(test_manager_idle_advances_playlist) {
 	BarApp_t app;
@@ -720,7 +732,7 @@ START_TEST(test_manager_idle_advances_playlist) {
 	pthread_mutex_lock(&app.player.lock);
 	pthread_cond_broadcast(&app.player.cond);
 	pthread_mutex_unlock(&app.player.lock);
-	usleep(100000);
+	ck_assert(wait_until(playlist_advanced, &app, 3000));
 
 	BarPlaybackManagerStop(&app);
 
@@ -733,6 +745,13 @@ START_TEST(test_manager_idle_advances_playlist) {
 }
 END_TEST
 
+static atomic_uint g_playlistOkCalls;
+
+static bool playlist_fetched (void *arg) {
+	(void) arg;
+	return atomic_load (&g_playlistOkCalls) > 0;
+}
+
 static bool
 mock_get_playlist_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
                       PianoReturn_t *pRet, CURLcode *wRet)
@@ -740,6 +759,7 @@ mock_get_playlist_ok (BarApp_t *app, const PianoRequestType_t type, void *data,
 	(void) app;
 	if (type == PIANO_REQUEST_GET_PLAYLIST) {
 		((PianoRequestDataGetPlaylist_t *) data)->retPlaylist = NULL;
+		atomic_fetch_add (&g_playlistOkCalls, 1);
 	}
 	*pRet = PIANO_RET_OK;
 	*wRet = CURLE_OK;
@@ -765,16 +785,69 @@ START_TEST(test_manager_fetches_playlist_when_next_station_set) {
 	pthread_cond_init(&app.player.cond, NULL);
 	app.player.mode = PLAYER_DEAD;
 	BarStateSetNextStation(&app, &st);
+	atomic_store (&g_playlistOkCalls, 0);
 	BarUiPianoCallSetTestHook (mock_get_playlist_ok);
 
 	ck_assert(BarPlaybackManagerStart(&app));
 	pthread_mutex_lock(&app.player.lock);
 	pthread_cond_broadcast(&app.player.cond);
 	pthread_mutex_unlock(&app.player.lock);
-	usleep(150000);
+	ck_assert(wait_until(playlist_fetched, NULL, 3000));
 
 	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
 	BarPlaybackManagerStop(&app);
+	BarUiPianoCallClearTestHook ();
+
+	pthread_mutex_destroy(&app.player.lock);
+	pthread_cond_destroy(&app.player.cond);
+	BarStateDestroy(&app);
+	BarSettingsDestroy (&app.settings);
+}
+END_TEST
+
+static atomic_uint cliManagerFetches;
+
+static bool
+mock_cli_get_playlist_counted (BarApp_t *app, const PianoRequestType_t type,
+                               void *data, PianoReturn_t *pRet, CURLcode *wRet)
+{
+	if (type == PIANO_REQUEST_GET_PLAYLIST) {
+		atomic_fetch_add (&cliManagerFetches, 1);
+	}
+	return mock_get_playlist_ok (app, type, data, pRet, wRet);
+}
+
+/* ui_mode=cli: the bridge runs the playback manager (the only song fetcher)
+ * without creating a WebSocket context, and a CLI station pick wakes it. */
+START_TEST(test_bridge_cli_mode_runs_playback_manager_without_websocket) {
+	BarApp_t app;
+	PianoStation_t st = { .id = "cli-st", .name = "CLI" };
+
+	memset(&app, 0, sizeof(app));
+	app.settings.npStationFormat = strdup ("Station \"%n\" (%i)");
+	ck_assert_ptr_nonnull (app.settings.npStationFormat);
+	app.settings.uiMode = BAR_UI_MODE_CLI;
+	BarStateInit(&app);
+	pthread_mutex_init(&app.player.lock, NULL);
+	pthread_cond_init(&app.player.cond, NULL);
+	app.player.mode = PLAYER_DEAD;
+	atomic_store (&cliManagerFetches, 0);
+	BarUiPianoCallSetTestHook (mock_cli_get_playlist_counted);
+
+	ck_assert(BarWsInit(&app));
+	ck_assert_ptr_null(app.wsContext);
+	ck_assert(BarWsStartPlaybackManager(&app));
+	usleep(50000); /* manager parks: no station selected yet */
+	BarStateSetNextStation(&app, &st);
+	for (int i = 0; i < 400 && atomic_load (&cliManagerFetches) == 0; i++) {
+		usleep(5000);
+	}
+	ck_assert_uint_ge(atomic_load (&cliManagerFetches), 1);
+
+	atomic_store_explicit (&app.doQuit, true, memory_order_relaxed);
+	BarWsStopPlaybackManager(&app);
+	BarWsDestroy(&app);
+	ck_assert_ptr_null(app.wsContext);
 	BarUiPianoCallClearTestHook ();
 
 	pthread_mutex_destroy(&app.player.lock);
@@ -909,7 +982,6 @@ START_TEST(test_wait_parked_idle_when_manager_running_and_parked) {
 	app.player.mode = PLAYER_DEAD;
 
 	ck_assert(BarPlaybackManagerStart(&app));
-	usleep(50000);
 	ck_assert(BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_TIMEOUT_MS));
 
 	BarPlaybackManagerStop(&app);
@@ -930,7 +1002,6 @@ START_TEST(test_wait_parked_idle_times_out_when_not_parked) {
 	app.player.mode = PLAYER_PLAYING;
 
 	ck_assert(BarPlaybackManagerStart(&app));
-	usleep(50000);
 	ck_assert(!BarPlaybackManagerWaitParkedIdle(&app, BAR_PLAYER_STOP_POLL_MS));
 
 	BarPlaybackManagerStop(&app);
@@ -975,6 +1046,7 @@ Suite *playback_manager_suite(void) {
 	tcase_add_test(tc, test_manager_thread_one_loop_iteration);
 	tcase_add_test(tc, test_manager_idle_advances_playlist);
 	tcase_add_test(tc, test_manager_fetches_playlist_when_next_station_set);
+	tcase_add_test(tc, test_bridge_cli_mode_runs_playback_manager_without_websocket);
 	tcase_add_test(tc, test_should_park_idle_when_dead_and_empty);
 	tcase_add_test(tc, test_should_not_park_when_next_station_set);
 	tcase_add_test(tc, test_should_not_park_when_not_dead);
@@ -989,19 +1061,3 @@ Suite *playback_manager_suite(void) {
 	return s;
 }
 
-#else
-
-START_TEST(test_playback_manager_stub_no_websocket) {
-	ck_assert(1);
-}
-END_TEST
-
-Suite *playback_manager_suite(void) {
-	Suite *s = suite_create("PlaybackManager");
-	TCase *tc = tcase_create("No-op");
-	tcase_add_test(tc, test_playback_manager_stub_no_websocket);
-	suite_add_tcase(s, tc);
-	return s;
-}
-
-#endif

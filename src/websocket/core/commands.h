@@ -1,0 +1,104 @@
+/*
+Copyright (c) 2025
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "conn_id.h"
+
+/* Bounded queue that hands WebSocket commands from the receive callbacks
+ * (producers, service thread) to the command worker (one consumer).
+ *
+ * Fair queueing: each requester's items stay in FIFO order, and Pop serves
+ * requesters round-robin, one item per turn (a requester with nothing queued
+ * joins at the back of the rotation). One client's burst therefore delays
+ * another client's command by at most one queued item per other requester
+ * (plus the running command). With a single requester this is a plain FIFO.
+ * The limits are global, shared by all requesters. The queue knows nothing
+ * about connections: a closed client's queued items are still delivered in
+ * their turn (its replies go nowhere); only Close drops queued items.
+ *
+ * An item is {requester connection ID, copied request bytes}: only immutable
+ * owned bytes and a stable ID cross threads, never JSON nodes, station/song
+ * pointers or transport handles. Limits are WS_CMD_MAX_ITEMS and
+ * WS_CMD_MAX_BYTES (bar_constants.h). */
+typedef struct BarWsCommandQueue BarWsCommandQueue_t;
+
+typedef enum {
+	BAR_WS_CMD_OK,     /* queued */
+	BAR_WS_CMD_FULL,   /* item or byte limit reached: admission failure */
+	BAR_WS_CMD_CLOSED, /* queue closed (shutdown), distinct from FULL */
+	BAR_WS_CMD_NOMEM   /* allocation failed or invalid arguments; not queued */
+} BarWsCommandResult_t;
+
+/* NULL on allocation failure */
+BarWsCommandQueue_t *BarWsCommandQueueNew (void);
+/* Frees the queue and any items still queued. The caller must ensure no
+ * other thread is still inside a queue call (Close, then join the consumer,
+ * then Free). */
+void BarWsCommandQueueFree (BarWsCommandQueue_t *q);
+
+/* Copy len bytes into a new item (the caller may modify or free bytes right
+ * after) and append it. The copy is NUL-terminated (the terminator is not
+ * counted in len). An empty queue accepts any request up to
+ * WS_CMD_MAX_REQUEST_BYTES; a len above WS_CMD_MAX_BYTES is refused with
+ * FULL, and an unallocatable one with NOMEM, both before allocating. NULL q returns CLOSED; NULL bytes with len > 0
+ * returns NOMEM (nothing is queued). */
+BarWsCommandResult_t BarWsCommandQueuePush (BarWsCommandQueue_t *q,
+		BarWsConnId_t requester, const char *bytes, size_t len);
+
+/* Block until an item is available and remove the next one in round-robin
+ * order (the oldest item of the requester whose turn it is). On true, *bytes is
+ * heap-owned by the caller (free it) and any out pointer may be NULL to
+ * discard that field (bytes then is freed here). Returns false, with outputs
+ * untouched, once the queue is closed (queued items are dropped by Close). */
+bool BarWsCommandQueuePop (BarWsCommandQueue_t *q, BarWsConnId_t *requester,
+		char **bytes, size_t *len);
+
+/* Reject all later pushes, drop and free every queued item, and wake every
+ * consumer blocked in Pop. Idempotent. */
+void BarWsCommandQueueClose (BarWsCommandQueue_t *q);
+
+/* Diagnostics. The consumer marks the command it runs from Begin (nowMs is
+ * its clock reading; the first BAR_WS_CMD_NAME_LEN bytes of the request are
+ * kept) until End, so another thread can tell a stuck command. Stats takes
+ * a snapshot under the queue lock (all zero for a NULL queue). */
+#define BAR_WS_CMD_NAME_LEN 40
+
+typedef struct {
+	size_t items;              /* queued, not counting the running command */
+	size_t bytes;
+	size_t waiting;            /* consumers blocked in Pop waiting for an item */
+	uint64_t started;          /* Begin calls so far */
+	bool running;              /* between Begin and End */
+	long long runningSinceMs;  /* nowMs given to Begin */
+	char name[BAR_WS_CMD_NAME_LEN + 1];
+} BarWsCommandQueueStats_t;
+
+void BarWsCommandQueueBegin (BarWsCommandQueue_t *q, const char *bytes,
+		long long nowMs);
+void BarWsCommandQueueEnd (BarWsCommandQueue_t *q);
+void BarWsCommandQueueStats (BarWsCommandQueue_t *q, BarWsCommandQueueStats_t *out);

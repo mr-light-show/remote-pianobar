@@ -20,19 +20,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#include "queue.h"
+#pragma once
 
-#include <stdlib.h>
+#include <stdint.h>
 
-/* Free message */
-void BarWsMessageFree(BarWsMessage_t *msg) {
-	if (!msg) {
-		return;
-	}
-	
-	if (msg->data) {
-		free(msg->data);
-	}
-	
-	free(msg);
-}
+/* Connection ID, assigned on the service thread; 0 is never assigned */
+typedef uint64_t BarWsConnId_t;
+#define BAR_WS_DEST_BROADCAST ((BarWsConnId_t) 0)
+/* No connection (e.g. the table was full); same value, different meaning */
+#define BAR_WS_CONN_NONE ((BarWsConnId_t) 0)
+

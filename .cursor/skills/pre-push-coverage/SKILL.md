@@ -34,14 +34,14 @@ Skip when the diff is only docs, locale YAML workflow, generated artifacts, or `
 PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
 ```
 
-Requires `lcov`. Produces `coverage.info` at repo root.
+Requires `lcov`. Builds in `build/coverage` and produces `coverage.info` at repo root. Run it on its own for the patch number: `make gates` also runs it, but under that load a few timing-dependent lines can differ.
 
 **Shell timeout:** ≥ **180000 ms**.
 
 If `lcov` fails on macOS with inconsistent-data warnings, retry capture with ignore (local only):
 
 ```bash
-lcov --capture --directory . --output-file coverage.info \
+lcov --capture --directory build/coverage --base-directory . --output-file coverage.info \
   --rc lcov_branch_coverage=1 --ignore-errors inconsistent
 lcov --remove coverage.info '/usr/*' '*/test/*' '*l10n_defaults_gen.c' \
   --output-file coverage.info --rc lcov_branch_coverage=1
@@ -78,14 +78,13 @@ Focus on **lines you added or changed**, not whole-file project coverage.
 |---------|----------------|
 | Early return (`NULL`, CLI vs WEB) | Separate `START_TEST` per branch |
 | Playback manager thread branches | Start/stop manager with state that selects park vs timed wait |
-| `#ifdef WEBSOCKET_ENABLED` | Tests under same guard in `test/unit/` |
 | Pandora HTTP | `BarUiPianoCallSetTestHook` mock |
 
 ## Agent push workflow
 
 ```
 1. Implement feature/fix
-2. make test-all (dev loop)
+2. make test-all (dev loop); make gates before push
 3. If test/** or Makefile changed → pre-push-ci-parity skill
 4. If src/** or webui/src/** changed → make test-coverage (this skill)
 5. Confirm ≥90% patch on touched production files

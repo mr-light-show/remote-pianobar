@@ -298,7 +298,6 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 	ck_assert_int_eq (s.sampleRate, 44100);
 	ck_assert_uint_eq (s.debug, 15);
 	ck_assert (s.gainMul > 1.49f && s.gainMul < 1.51f);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_WEB);
 	ck_assert_int_eq (s.websocketPort, 8123);
 	ck_assert_str_eq (s.websocketHost, "0.0.0.0");
@@ -307,7 +306,6 @@ START_TEST (test_settings_table_dispatch_realistic_player_and_web_config) {
 	ck_assert_str_eq (s.pidFile, expected);
 	snprintf (expected, sizeof (expected), "%s/pianobar.log", tmpl);
 	ck_assert_str_eq (s.logFile, expected);
-#endif
 
 	BarSettingsDestroy (&s);
 }
@@ -337,9 +335,7 @@ START_TEST (test_settings_table_dispatch_handles_typical_user_overrides_and_typo
 
 	ck_assert_int_eq (s.audioQuality, PIANO_AQ_HIGH);
 	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_COREAUDIO);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_BOTH);
-#endif
 	/* Invalid values should not clobber defaults. */
 	ck_assert_int_ne (s.volume, 200);
 	ck_assert_uint_ne (s.history, (unsigned int)-1);
@@ -388,9 +384,7 @@ START_TEST (test_settings_table_dispatch_remaining_backends_sorts_and_accounts) 
 	ck_assert_int_eq (s.sortOrder, BAR_SORT_QUICKMIX_01_NAME_ZA);
 	ck_assert_int_eq (s.audioBackend, BAR_AUDIO_BACKEND_JACK);
 	ck_assert_int_eq (s.volumeMode, BAR_VOLUME_MODE_PLAYER);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (s.uiMode, BAR_UI_MODE_CLI);
-#endif
 	ck_assert_uint_eq (s.accountCount, 2);
 	ck_assert_str_eq (s.accounts[0].id, "home");
 	ck_assert_str_eq (s.accounts[0].label, "Home Account");
@@ -446,10 +440,48 @@ START_TEST (test_settings_table_dispatch_invalid_websocket_port_ignored) {
 
 	BarSettings_t s;
 	read_settings_in_dir (&s, tmpl);
-#ifdef WEBSOCKET_ENABLED
 	/* Out-of-range values are ignored; default remains unset (0). */
 	ck_assert_int_eq (s.websocketPort, 0);
-#endif
+	BarSettingsDestroy (&s);
+}
+END_TEST
+
+/* Keys shorter than the "act_" prefix (and bare "act_") must be handled
+ * without comparing past the key's terminator; real act_ keys still work.
+ * Empty keys/values must not form out-of-range pointers while trimming
+ * (caught by UBSan), in both the main config and account files. */
+START_TEST (test_settings_short_keys_and_act_prefix) {
+	char tmpl[512];
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (tmpl, sizeof (tmpl), "piano_set"));
+	ck_assert_int_eq (mkdir_pianobar (tmpl), 0);
+
+	char accpath[512];
+	snprintf (accpath, sizeof (accpath), "%s/pianobar/short.conf", tmpl);
+	ck_assert_int_eq (write_file (accpath,
+			"=1\n"
+			"   =1\n"
+			"user = suser\r\n"
+			"password = spass\n"
+			"account_label ="), 0);
+
+	char cfg[512];
+	config_path (tmpl, cfg, sizeof (cfg));
+	ck_assert_int_eq (write_file (cfg,
+			"a = 1\n"
+			"ac = 1\n"
+			"act = 1\n"
+			"=1\n"
+			"   =1\n"
+			"act_ = 1\n"
+			"act_songlove = L\r\n"
+			"account = short:short.conf\n"
+			"unterminated ="), 0);
+
+	BarSettings_t s;
+	read_settings_in_dir (&s, tmpl);
+	ck_assert_int_eq (s.keys[BAR_KS_LOVE], 'L');
+	ck_assert_uint_eq (s.accountCount, 1);
+	ck_assert_str_eq (s.accounts[0].username, "suser");
 	BarSettingsDestroy (&s);
 }
 END_TEST
@@ -989,6 +1021,7 @@ Suite *settings_suite (void) {
 	tcase_add_test (tc, test_settings_table_dispatch_remaining_backends_sorts_and_accounts);
 	tcase_add_test (tc, test_settings_table_dispatch_auto_and_pulseaudio_backends);
 	tcase_add_test (tc, test_settings_table_dispatch_invalid_websocket_port_ignored);
+	tcase_add_test (tc, test_settings_short_keys_and_act_prefix);
 	tcase_add_test (tc, test_settings_table_dispatch_rejects_malformed_account_line);
 	tcase_add_test (tc, test_settings_table_dispatch_all_sort_orders);
 	tcase_add_test (tc, test_settings_rejects_missing_account_file_with_primary);

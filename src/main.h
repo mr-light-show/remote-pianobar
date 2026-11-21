@@ -48,25 +48,24 @@ typedef struct {
 	_Atomic sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
-	char *lastStationId;  /* Station ID to auto-resume after reconnect */
+	char *lastStationId;  /* Station ID to auto-resume after reconnect; use
+	                       * BarStateSetLastStationId/TakeLastStationId */
 	/* Serializes all use of `http` and overlapping PianoRequest/PianoResponse
 	 * work in BarUiPianoCall (recursive: re-login path calls BarUi again).
 	 * Placed after playlist/station fields so their offsets match pre-mutex
 	 * layouts used by tests; initialized in main after curl_easy_init.
 	 * See THREAD_SAFETY.md. */
 	pthread_mutex_t pianoHttpMutex;
-	/* WebSocket support (conditional compilation) */
-	#ifdef WEBSOCKET_ENABLED
+	/* WebSocket support */
 	void *wsContext;  /* BarWsContext_t */
 	pthread_t playbackThread;  /* Playback manager thread */
-	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: web/both getters/setters (not cli); see BarStateUsesRwlock */
+	pthread_rwlock_t stateRwlock;  /* Reader-writer lock: state getters/setters (all ui_modes); see BarStateUsesRwlock */
 	int lockFd;  /* Lock file descriptor for instance detection (-1 if not held) */
-	#endif
 	BarL10nContext_t l10n;
 	/* Auto-recovery of an unexpectedly dead Pandora session (see
 	 * BarSessionTryAutoRecover): one attempt per session death, cleared once a
 	 * song starts, so an outage cannot become a reconnect loop.  Written by the
-	 * playback manager and the WebSocket thread. */
+	 * playback manager and the WebSocket command worker. */
 	_Atomic bool autoRecoverInFlight;
 	_Atomic bool autoRecoverFailed;
 } BarApp_t;

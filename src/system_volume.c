@@ -500,14 +500,19 @@ int BarSystemVolumeParsePactlJsonVolume(const char *buf) {
 
 	int result = -1;
 
-	/* JSON is an array; take the first sink entry */
+	/* JSON is an array; take the first sink entry. Anything else (object,
+	 * scalar, ...) is not pactl's format and must not be walked. */
+	if (!json_object_is_type(root, json_type_array)) {
+		goto done;
+	}
 	struct json_object *entry = json_object_array_get_idx(root, 0);
 	if (!entry) {
 		goto done;
 	}
 
 	struct json_object *vol_obj;
-	if (!json_object_object_get_ex(entry, "volume", &vol_obj)) {
+	if (!json_object_object_get_ex(entry, "volume", &vol_obj) ||
+	    !json_object_is_type(vol_obj, json_type_object)) {
 		goto done;
 	}
 

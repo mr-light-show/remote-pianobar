@@ -191,7 +191,7 @@ describe('PianobarApp', () => {
     hoisted.fire('progress', { elapsed: 10, duration: 100 });
     hoisted.fire('playState', { paused: true });
     await el.updateComplete;
-    hoisted.fire('stop');
+    hoisted.fire('stop', {});
     await el.updateComplete;
     expect(el.shadowRoot?.querySelector('h1')?.textContent).toBe('T');
   });
@@ -315,6 +315,43 @@ describe('PianobarApp', () => {
     await el.updateComplete;
     const toast = document.querySelector('toast-notification');
     expect(toast).toBeTruthy();
+  });
+
+  it('station.getStationInfo error stops the station info spinner', async () => {
+    const el = await mountConnectedApp();
+    (el as unknown as { infoLoading: boolean }).infoLoading = true;
+    hoisted.fire('error', {
+      operation: 'station.getStationInfo',
+      message: 'The response is too large to send.',
+    });
+    await el.updateComplete;
+    expect((el as unknown as { infoLoading: boolean }).infoLoading).toBe(false);
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
+  it.each([
+    ['station.getGenres', 'genreLoading'],
+    ['station.getStationModes', 'modesLoading'],
+    ['music.search', 'searchLoading'],
+  ])('%s error stops only the %s spinner', async (operation, flag) => {
+    const el = await mountConnectedApp();
+    const loading = el as unknown as Record<string, boolean>;
+    const flags = ['genreLoading', 'modesLoading', 'searchLoading', 'infoLoading'];
+    for (const name of flags) loading[name] = true;
+    hoisted.fire('error', { operation, message: 'Failed' });
+    await el.updateComplete;
+    for (const name of flags) expect(loading[name]).toBe(name !== flag);
+    expect(document.querySelector('toast-notification')).toBeTruthy();
+  });
+
+  it('an error for another operation leaves the loading spinners alone', async () => {
+    const el = await mountConnectedApp();
+    const loading = el as unknown as Record<string, boolean>;
+    const flags = ['genreLoading', 'modesLoading', 'searchLoading', 'infoLoading'];
+    for (const name of flags) loading[name] = true;
+    hoisted.fire('error', { operation: 'station.rename', message: 'Failed' });
+    await el.updateComplete;
+    for (const name of flags) expect(loading[name]).toBe(true);
   });
 
   it('error event uses generic message when message is omitted', async () => {

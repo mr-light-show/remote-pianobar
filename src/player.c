@@ -96,6 +96,21 @@ enum { BAR_AUDIO_WAIT_TIMEOUT_SECONDS = 1 };
 typedef enum { AUDIO_NORMAL, AUDIO_TEARDOWN, AUDIO_OBSERVATION, AUDIO_PLAYBACK_CONTROL } AudioPolicy;
 static BarPlayerAudioFatalHook audioFatalHook;
 static BarPlayerJoinTestHook joinTestHook;
+static bool nullAudioTestBackend;
+
+void BarPlayerSetNullAudioTestBackend (bool enabled) {
+	nullAudioTestBackend = enabled;
+}
+
+void BarPlayerSetAudioHoldTestGate (player_t *player, bool hold) {
+	if (player != NULL) { atomic_store (&player->audioHold, hold); }
+}
+
+static BarPlayerStreamOpenedTestHook streamOpenedTestHook;
+
+void BarPlayerSetStreamOpenedTestHook (BarPlayerStreamOpenedTestHook hook) {
+	streamOpenedTestHook = hook;
+}
 
 void BarPlayerSetJoinTestHook (BarPlayerJoinTestHook hook) {
 	joinTestHook = hook;
@@ -303,6 +318,13 @@ static bool deviceSetStartedReserved (player_t *player, bool started, const char
 	return transitioned;
 }
 
+/* PLAYER_AUDIO_FAILED does not imply a sound node exists: setup can fail
+ * before ma_sound_init succeeds. Stopping or uninitializing a never-initialized
+ * ma_sound dereferences its NULL engine pointer (UBSan: null member access). */
+static bool soundLiveLocked (const player_t *player) {
+	return player->audioState != PLAYER_AUDIO_NONE && player->soundInitialized;
+}
+
 static bool stopSoundReserved (player_t *player, bool live, const char *operation) {
 	/* Device stop joins its callback. Publish a persistent source predicate
 	 * before that join, including rollback before any decoder has started. */
@@ -477,6 +499,21 @@ static void printError(const BarSettings_t * const settings,
  * ============================================================================
  */
 
+void BarPlayerCopyPcmFrames (int16_t *out, unsigned int outChannels,
+		const int16_t *in, unsigned int inChannels, size_t frames) {
+	if (outChannels == inChannels) {
+		memcpy (out, in, frames * inChannels * sizeof (int16_t));
+		return;
+	}
+	const unsigned int common = outChannels < inChannels ? outChannels : inChannels;
+	for (size_t frame = 0; frame < frames; ++frame) {
+		int16_t *dst = out + frame * outChannels;
+		const int16_t *src = in + frame * inChannels;
+		memcpy (dst, src, common * sizeof (int16_t));
+		memset (dst + common, 0, (outChannels - common) * sizeof (int16_t));
+	}
+}
+
 /* Read PCM frames from ffmpeg filter chain with proper partial frame buffering */
 static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource, 
 		void* pFramesOut, ma_uint64 frameCount, ma_uint64* pFramesRead) {
@@ -491,6 +528,14 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 		return MA_AT_END;
 	}
 	
+	/* Test-only hold: deliver silence and consume no decoded audio. Reporting
+	 * a full read keeps miniaudio from treating the source as ended. */
+	if (atomic_load (&player->audioHold)) {
+		memset (pFramesOut, 0, frameCount * pFFmpeg->channels * sizeof (int16_t));
+		if (pFramesRead != NULL) { *pFramesRead = frameCount; }
+		return MA_SUCCESS;
+	}
+
 	/* Transition safeguard: the engine should normally be stopped for a
 	 * sustained pause. Keep silence until backend race testing proves this
 	 * callback cannot overlap the physical pause transition. */
@@ -521,10 +566,11 @@ static ma_result ffmpeg_data_source_read(ma_data_source* pDataSource,
 				samplesToCopy = (int)(frameCount - framesRead);
 			}
 			
-			/* Copy from the offset position in the buffered frame */
-			memcpy(output + (framesRead * numChannels),
-			       frameData + (pFFmpeg->bufferedFrameOffset * numChannels),
-			       samplesToCopy * numChannels * sizeof(int16_t));
+			/* Copy from the offset position in the buffered frame. The output
+			 * holds pFFmpeg->channels per frame; never index it by the frame's. */
+			BarPlayerCopyPcmFrames(output + (framesRead * pFFmpeg->channels), pFFmpeg->channels,
+			       frameData + (pFFmpeg->bufferedFrameOffset * numChannels), numChannels,
+			       (size_t)samplesToCopy);
 			
 			framesRead += samplesToCopy;
 			pFFmpeg->cursor += samplesToCopy;
@@ -704,9 +750,11 @@ static ma_result ffmpeg_data_source_init(ffmpeg_data_source_t* pFFmpeg, player_t
 	pFFmpeg->bufferedFrame = NULL;
 	pFFmpeg->bufferedFrameOffset = 0;
 	
-	/* Get format info from the stream */
+	/* Get format info from the stream. Channels come from the configured
+	 * filter output, which is what the read callback copies; codecpar may
+	 * disagree with the decoder (e.g. parametric stereo signalled as mono). */
 	const AVCodecParameters* cp = player->st->codecpar;
-	pFFmpeg->channels = cp->ch_layout.nb_channels;
+	pFFmpeg->channels = (ma_uint32)av_buffersink_get_channels(player->fbufsink);
 	pFFmpeg->sampleRate = player->settings->sampleRate != 0 ? 
 	                      player->settings->sampleRate : cp->sample_rate;
 	
@@ -811,7 +859,22 @@ void BarPlayerInit(player_t * const p, BarSettings_t * const settings) {
 	} else {
 		engineConfig.noDevice = MA_FALSE;
 	}
-	ma_result result = ma_engine_init(&engineConfig, &p->engine);
+	ma_result result = MA_SUCCESS;
+	if (nullAudioTestBackend || getenv ("PIANOBAR_TEST_NULL_AUDIO") != NULL) {
+		/* Overrides no-device: a real device thread and data callback without
+		 * hardware. Never falls back to a hardware backend; a failure leaves
+		 * the engine uninitialized. A reinit reuses the lifetime context. */
+		const ma_backend backends[] = { ma_backend_null };
+		if (!p->nullContextInitialized) {
+			result = ma_context_init (backends, 1, NULL, &p->nullContext);
+			p->nullContextInitialized = result == MA_SUCCESS;
+		}
+		p->audioNullBackend = p->nullContextInitialized;
+		p->audioNoDevice = false;
+		engineConfig.pContext = &p->nullContext;
+		engineConfig.noDevice = MA_FALSE;
+	}
+	if (result == MA_SUCCESS) { result = ma_engine_init(&engineConfig, &p->engine); }
 	if (result != MA_SUCCESS) {
 		log_write(LOG_ERROR, "Failed to initialize audio engine: %d\n", result);
 		p->engineInitialized = false;
@@ -835,13 +898,17 @@ bool BarPlayerDestroy(player_t * const p) {
 	pthread_mutex_unlock (&p->lock);
 	if (joinPending) { BarPlayerFatalShutdown (p, "destroy before player join"); return false; }
 	if (!audioReserve (p, AUDIO_TEARDOWN, "destroy")) { return false; }
-	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (p);
 	pthread_mutex_unlock (&p->lock);
 	if (!cleanupSoundReserved (p, live, "destroy")) {
 		audioTerminal (p, "destroy");
 		return false;
 	}
 	if (p->engineInitialized) { ma_engine_uninit (&p->engine); }
+	if (p->nullContextInitialized) {
+		ma_context_uninit (&p->nullContext);
+		p->nullContextInitialized = false;
+	}
 	pthread_mutex_lock (&p->lock);
 	p->soundInitialized = false;
 	p->engineInitialized = false;
@@ -861,7 +928,7 @@ bool BarPlayerDestroy(player_t * const p) {
 
 bool BarPlayerReset(player_t * const p) {
 	if (p == NULL || !audioReserve (p, AUDIO_TEARDOWN, "reset")) { return false; }
-	const bool live = p->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (p);
 	const uint64_t epoch = p->controlEpoch;
 	pthread_mutex_unlock (&p->lock);
 	if (!cleanupSoundReserved (p, live, "reset")) {
@@ -893,6 +960,9 @@ bool BarPlayerReset(player_t * const p) {
 	p->streamIdx = -1;
 	p->lastTimestamp = 0;
 	p->interrupted = 0;
+	/* Same critical section and epoch check as doQuit: a stop racing this
+	 * reset either supersedes it above or aborts the new song. */
+	atomic_store_explicit (&p->stopRequested, false, memory_order_relaxed);
 	p->decodingFinished = false;
 	memset(&p->dataSource, 0, sizeof(p->dataSource));
 	audioCompleteLocked (p, PLAYER_AUDIO_NONE, true);
@@ -973,7 +1043,26 @@ bool BarIsAvErrStaleCdnUrl(int av_err) {
 	return false;
 }
 
-/* ffmpeg callback for blocking functions */
+static bool stopWasRequested (player_t * const player) {
+	return atomic_load_explicit (&player->stopRequested, memory_order_acquire);
+}
+
+/* True when an FFmpeg call failed only because a requested stop aborted it. */
+static bool abortedByStop (player_t * const player, int ret) {
+	return ret == AVERROR_EXIT && stopWasRequested (player);
+}
+
+/* A stop aborts FFmpeg I/O with AVERROR_EXIT: a skip, not a stream failure. */
+static void printStreamError (player_t * const player, const char * const msg, int ret) {
+	if (abortedByStop (player, ret)) {
+		log_write (DEBUG_AUDIO, "Player: %s: aborted by stop request\n", msg);
+	} else {
+		printError (player->settings, msg, ret);
+	}
+}
+
+/* ffmpeg callback for blocking functions. FFmpeg polls it during network
+ * open/read (every polling slice) and per packet on the player thread. */
 int BarPlayerFfmpegInterruptCb (void * const data) {
 	player_t * const player = data;
 	assert (player != NULL);
@@ -988,7 +1077,10 @@ int BarPlayerFfmpegInterruptCb (void * const data) {
 		atomic_compare_exchange_strong_explicit (&player->interrupted, &expected, 0, memory_order_relaxed, memory_order_relaxed);
 		return 1;
 	} else {
-		return 0;
+		/* Skip, disconnect and quit: lock-free, so this never contends with
+		 * controls or nests inside player.lock or decoderLock. Persistent
+		 * until the next song's reset, so every retry slice aborts too. */
+		return stopWasRequested (player) ? 1 : 0;
 	}
 }
 
@@ -1028,7 +1120,7 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 		snprintf(errSummary, sizeof errSummary, "error: %s",
 			avmsg[0] != '\0' ? avmsg : "unknown");
 		log_network_response(errSummary);
-		printError(player->settings, "Unable to open audio file", ret);
+		printStreamError (player, "Unable to open audio file", ret);
 		/* avformat_open_input frees fctx on failure (or it wasn't opened); clear the pointer */
 		if (player->fctx != NULL) {
 			avformat_free_context(player->fctx);
@@ -1041,7 +1133,7 @@ static bool openStream(player_t * const player, bool *staleCdn403) {
 	log_network_response("ok");
 
 	if ((ret = avformat_find_stream_info(player->fctx, NULL)) < 0) {
-		printError(player->settings, "find_stream_info", ret);
+		printStreamError (player, "find_stream_info", ret);
 		goto cleanup;
 	}
 
@@ -1147,9 +1239,11 @@ static bool openFilter(player_t * const player) {
 		goto cleanup;
 	}
 
-	/* Create aformat filter (sample format conversion) */
-	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d",
-			av_get_sample_fmt_name(avformat), getSampleRate(player));
+	/* Create aformat filter (sample format conversion). Pin the output layout
+	 * to the source's so the sink, and the device sized from it, have one
+	 * fixed channel count. */
+	snprintf(strbuf, sizeof(strbuf), "sample_fmts=%s:sample_rates=%d:channel_layouts=%s",
+			av_get_sample_fmt_name(avformat), getSampleRate(player), channelLayout);
 	if ((ret = avfilter_graph_create_filter(&fafmt,
 					avfilter_get_by_name("aformat"), "format", strbuf, NULL,
 					player->fgraph)) < 0) {
@@ -1340,7 +1434,12 @@ static int decode(player_t * const player) {
 			
 			pthread_mutex_lock(&player->decoderLock);
 			ret = av_buffersrc_write_frame(player->fabuf, frame);
-			assert(ret >= 0);
+			if (ret < 0) {
+				/* Network data: a mid-stream format change is rejected by the
+				 * source filter. Drop the frame; keep the opened format. */
+				log_write(DEBUG_AUDIO, "Filter rejected decoded frame (%d channels): %d\n",
+				          frame->ch_layout.nb_channels, ret);
+			}
 			pthread_cond_broadcast(&player->decoderCond);
 			pthread_mutex_unlock(&player->decoderLock);
 		}
@@ -1378,7 +1477,7 @@ static void audioTerminal (player_t *player, const char *operation) {
 
 bool BarPlayerStopAudio (player_t *player) {
 	if (player == NULL || !audioReserve (player, AUDIO_TEARDOWN, "stop")) { return false; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	pthread_mutex_unlock (&player->lock);
 	if (!stopSoundReserved (player, live, "stop")) {
 		audioTerminal (player, "stop");
@@ -1508,12 +1607,14 @@ void BarPlayerRequestStop (player_t *player) {
 	/* Publish before waiting so the current owner cannot commit stale success. */
 	pthread_mutex_lock (&player->lock);
 	player->doQuit = true;
+	/* Wakes a decoder blocked in a stalled FFmpeg network open/read. */
+	atomic_store_explicit (&player->stopRequested, true, memory_order_release);
 	++player->controlEpoch;
 	pthread_cond_broadcast (&player->cond);
 	pthread_cond_broadcast (&player->audioCond);
 	pthread_mutex_unlock (&player->lock);
 	if (!audioReserve (player, AUDIO_TEARDOWN, "request stop")) { return; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	player->doPause = false;
 	player->pauseStartTime = 0;
 	pthread_cond_broadcast (&player->cond);
@@ -1658,7 +1759,7 @@ cleanup:
 
 static bool cleanupSound (player_t *player) {
 	if (!audioReserve (player, AUDIO_TEARDOWN, "cleanup")) { return false; }
-	const bool live = player->audioState != PLAYER_AUDIO_NONE;
+	const bool live = soundLiveLocked (player);
 	pthread_mutex_unlock (&player->lock);
 	if (!cleanupSoundReserved (player, live, "cleanup")) {
 		audioTerminal (player, "cleanup");
@@ -1764,6 +1865,7 @@ void *BarPlayerThread(void *data) {
 		bool staleCdn403 = false;
 		if (openStream(player, &staleCdn403)) {
 			logRSSAudio("after openStream");
+			if (streamOpenedTestHook != NULL) { streamOpenedTestHook (player); }
 
 			pthread_mutex_lock (&player->lock);
 			uint64_t setupEpoch = player->controlEpoch;
@@ -1848,6 +1950,9 @@ void *BarPlayerThread(void *data) {
 				retry = (ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) &&
 						(atomic_load_explicit (&player->interrupted, memory_order_relaxed) == 0);
 			}
+		} else if (stopWasRequested (player)) {
+			/* Stopped while opening: no retry count, no playlist refresh. */
+			log_write (DEBUG_AUDIO, "Player: Stream open ended by stop request\n");
 		} else {
 			if (staleCdn403) {
 				pret = PLAYER_RET_STALE_URLS;

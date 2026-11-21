@@ -9,9 +9,9 @@ Comprehensive testing documentation for Remote Pianobar.
 | C Unit Tests | Check | 6 | 36+ | ✅ Passing |
 | Socket.IO Protocol | Check | 1 | 12 | ✅ Passing |
 | Web UI Components | Vitest | 5 | 36 | ✅ Passing |
-| E2E Browser Tests | Playwright | 3 | 21 | ✅ 13 passing, 8 skipped* |
+| E2E Browser Tests | Playwright | 3 | 21* | ✅ 21 passing (`make test-e2e-fake`, CI job `e2e-fake`) |
 
-\* Skipped tests require a running pianobar instance
+\* 9 specs need a running pianobar (`PIANOBAR_RUNNING=1`) and are skipped otherwise; `make test-e2e-fake` runs all 21 against a fake Pandora, see [E2E without a Pandora account](#e2e-without-a-pandora-account-fake-pandora).
 
 **Total Test Coverage:** 105+ tests across C and TypeScript codebases
 
@@ -33,6 +33,9 @@ cd webui && npm test -- --run
 
 # 3. E2E browser tests
 cd webui && npm run test:e2e
+
+# 3b. E2E against the real pianobar binary and a local fake Pandora (no account)
+make test-e2e-fake
 ```
 
 ---
@@ -67,9 +70,17 @@ make test
 # Run with verbose output
 CK_VERBOSITY=verbose ./pianobar_test
 
-# Run specific suite
-./pianobar_test --suite socketio
+# Run one suite (Check suite name), or one tcase of a suite
+CK_RUN_SUITE="Socket.IO Protocol" ./pianobar_test
+CK_RUN_SUITE=playback_integration CK_RUN_CASE=core ./pianobar_test
+
+# Run every suite in its own process, several at a time
+make test-par
 ```
+
+An unknown `CK_RUN_SUITE` or `CK_RUN_CASE` name fails the run instead of
+running zero tests. `make test-par` (`scripts/test-parallel.sh`) runs the same
+tests as `./pianobar_test`; see [README_TESTING.md](README_TESTING.md#parallel-test-runs).
 
 ### Test Files
 
@@ -77,8 +88,8 @@ CK_VERBOSITY=verbose ./pianobar_test
 
 **`test/unit/test_playback_manager.c`** - Post-cleanup mode refresh (`BarPlaybackManagerRefreshCachedModeAfterCleanup`) and `BarPlaybackManagerCompleteSongCleanup` (no full manager thread)
 
-**`test/unit/test_bar_state.c`** - Bar state and lock behavior (17+ tests when `WEBSOCKET_ENABLED`)
-- `BarStateUsesRwlock` false for CLI and NULL app; `DEBUG_STATE` lock logging in BOTH and WEB (stderr suppressed)
+**`test/unit/test_bar_state.c`** - Bar state and lock behavior (17+ tests)
+- `BarStateUsesRwlock` true in every ui_mode (CLI included), false for NULL app; `DEBUG_STATE` lock logging in BOTH and WEB (stderr suppressed)
 - Init/destroy stateRwlock in BOTH and WEB modes
 - Station getters/setters under stateRwlock (NextStation, CurrentStation)
 - Station lookup: `BarStateFindStationById` (NULL list, one station), `BarStateGetStationList`
@@ -300,7 +311,26 @@ To run tests that require a live pianobar instance:
 # Terminal 2: Run E2E tests with server flag
 cd webui
 PIANOBAR_RUNNING=1 npm run test:e2e
+
+# Instance not on http://localhost:8080? Override the URL:
+PIANOBAR_RUNNING=1 PIANOBAR_URL=http://127.0.0.1:9001 npm run test:e2e
 ```
+
+### E2E without a Pandora account (fake Pandora)
+
+`make test-e2e-fake` (or `scripts/e2e-fake.sh [playwright args]`) runs the Playwright suite (Chromium, one worker, `list` reporter) against the **real** `pianobar` binary with no account, network or sound card:
+
+- `test/e2e-fake-pandora/fake_pandora.py` (Python 3, standard library only) implements the Pandora JSON calls pianobar makes (`auth.partnerLogin`, `auth.userLogin`, `user.getStationList`, `station.getPlaylist`, feedback, settings, ...) with three canned stations and 30-second tracks built from `test/fixtures/tone.mp3`. Unknown methods are logged as `UNKNOWN METHOD` and answered with a Pandora-style error.
+- The script creates a throw-away `HOME` and config (`ui_mode = web`, free loopback ports, made-up partner credentials and Blowfish keys, `rpc_host = 127.0.0.1`), plus a self-signed certificate generated at run time (needs `openssl`; trusted via `ca_bundle`, never committed).
+- Pianobar sends plain-HTTP calls to port 80 only, so the config sets `control_proxy` to the fake; it answers proxy-form requests and `CONNECT` (upgraded to TLS) on one port.
+- Audio uses the null backend (`PIANOBAR_TEST_NULL_AUDIO=1`), a production-binary test hook.
+- Pianobar waits for a station in web mode, so the script sends `station.change` over the WebSocket before Playwright starts. Pianobar and the fake are stopped on exit; the exit code is Playwright's.
+
+Set `E2E_KEEP=1` to keep the temp directory (logs, config) and `E2E_PROJECT=firefox` to change browser (install it with `npx playwright install firefox`).
+
+CI runs this in the `e2e-fake` job of `.github/workflows/test.yml` on every push and pull request.
+
+**Writing specs that need a server:** declare them with `test(title, fn)` and call `test.skip(!process.env.PIANOBAR_RUNNING, 'requires a running pianobar')` inside the body. The `test.skip(cond, title, fn)` form does not register a test, so it never runs. A file-level `beforeEach` that blocks the WebSocket (used for the disconnected-state specs) must not apply to server specs; keep those in their own `describe`.
 
 ### Writing E2E Tests
 

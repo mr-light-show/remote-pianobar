@@ -40,7 +40,8 @@ THE SOFTWARE.
 #include "../../src/player.h"
 #include "../../src/settings.h"
 #include "../audio_fixture_callback.h"
-/* Exercise the real CLI cleanup in both WebSocket and NOWEBSOCKET builds. */
+#include "../test_helpers.h"
+/* Pull in main.c static helpers and app types for tests. */
 #define main BarTestMainProgram
 #include "../../src/main.c"
 #undef main
@@ -221,13 +222,6 @@ static void returning_audio_fatal_hook (player_t *player, const char *operation)
 	if (fatal_hook_saw_unlocked_decoder) { pthread_mutex_unlock (&player->decoderLock); }
 }
 
-static bool fail_final_join (pthread_t thread, void **retval, unsigned int seconds) {
-	(void)retval;
-	ck_assert (pthread_equal (thread, pthread_self ()));
-	ck_assert_uint_eq (seconds, 10);
-	return false;
-}
-
 static void *joined_player_worker (void *data) { return data; }
 
 /* Break caught: an exited but unjoined worker allows condition/engine teardown. */
@@ -277,29 +271,6 @@ START_TEST (test_player_production_fatal_shutdown_exits_failure)
 }
 END_TEST
 
-/* Break caught: a failed CLI join permits teardown of a live player's app. */
-START_TEST (test_main_final_join_is_terminal_before_shared_state_cleanup)
-{
-	BarApp_t app = {0};
-	player_thread_test_setup (&app.player, &app.settings);
-	BarPlayerSetMode (&app.player, PLAYER_FINISHED);
-	BarPlayerSetJoinTestHook (fail_final_join);
-	BarPlayerSetAudioFatalTestHook (returning_audio_fatal_hook);
-	fatal_hook_calls = 0;
-	pthread_t worker = pthread_self ();
-	BarMainPlayerCleanup (&app, &worker);
-	ck_assert_int_eq (fatal_hook_calls, 1);
-	ck_assert (fatal_hook_saw_unlocked_player && fatal_hook_saw_unlocked_decoder);
-	ck_assert (app.player.engineInitialized && app.player.synchronizationInitialized);
-	ck_assert_int_eq (BarPlayerGetMode (&app.player), PLAYER_FINISHED);
-	ck_assert (!BarPlayerDestroy (&app.player));
-	BarPlayerSetJoinTestHook (NULL);
-	BarPlayerSetAudioFatalTestHook (NULL);
-	app.player.audioTerminalFailure = false;
-	player_thread_test_teardown (&app.player, &app.settings);
-}
-END_TEST
-
 /* Break caught: main enters shared-resource destruction after a terminal
  * player failure whose test hook returned to its caller. */
 START_TEST (test_main_finalization_rejects_terminal_player)
@@ -309,6 +280,119 @@ START_TEST (test_main_finalization_rejects_terminal_player)
 	ck_assert_int_eq (BarMainFinalizationStatus (&app), EXIT_FAILURE);
 	app.player.audioTerminalFailure = false;
 	ck_assert_int_eq (BarMainFinalizationStatus (&app), EXIT_SUCCESS);
+}
+END_TEST
+
+/* Two-station list fixture for startup autostart selection. */
+typedef struct {
+	BarApp_t app;
+	PianoStation_t a, b;
+	BarAccount_t acct;
+} AutostartFixture;
+
+static void autostart_fixture_init (AutostartFixture *f, BarUiMode_t mode,
+		const char *globalId) {
+	memset (f, 0, sizeof (*f));
+	f->app.settings.uiMode = mode;
+	f->app.settings.autostartStation = (char *) globalId;
+	f->a.id = (char *) "st-a";
+	f->a.name = (char *) "Station A";
+	f->b.id = (char *) "st-b";
+	f->b.name = (char *) "Station B";
+	f->a.head.next = &f->b.head;
+	f->app.ph.stations = &f->a;
+	BarStateInit (&f->app);
+}
+
+static void autostart_fixture_done (AutostartFixture *f) {
+	f->app.ph.stations = NULL;
+	BarStateDestroy (&f->app);
+}
+
+/* Regression: autostart_station was ignored because the startup call was
+ * dropped; the configured station must be queued before playback begins. */
+START_TEST (test_main_autostart_selects_configured_station)
+{
+	AutostartFixture f;
+	autostart_fixture_init (&f, BAR_UI_MODE_BOTH, "st-b");
+	BarMainGetInitialStation (&f.app);
+	ck_assert_ptr_eq (BarStateGetNextStation (&f.app), &f.b);
+	autostart_fixture_done (&f);
+}
+END_TEST
+
+/* Break caught: an unknown id must not select anything or block on a prompt,
+ * in every UI mode (stdin is never read). */
+START_TEST (test_main_autostart_unknown_station_does_not_block)
+{
+	const BarUiMode_t modes[] = {BAR_UI_MODE_CLI, BAR_UI_MODE_WEB, BAR_UI_MODE_BOTH};
+	for (size_t i = 0; i < sizeof (modes) / sizeof (*modes); i++) {
+		AutostartFixture f;
+		autostart_fixture_init (&f, modes[i], "no-such-station");
+		f.app.input.fds[0] = -1;
+		f.app.input.fds[1] = -1;
+		BarMainGetInitialStation (&f.app);
+		ck_assert_ptr_null (BarStateGetNextStation (&f.app));
+		ck_assert_ptr_null (BarStateGetCurrentStation (&f.app));
+		autostart_fixture_done (&f);
+	}
+}
+END_TEST
+
+/* Unset and empty autostart_station both leave the selection untouched; the
+ * empty value is the documented way to disable autostart (no error). */
+START_TEST (test_main_autostart_unset_or_empty_selects_nothing)
+{
+	const BarUiMode_t modes[] = {BAR_UI_MODE_CLI, BAR_UI_MODE_WEB};
+	const char *const ids[] = {NULL, ""};
+	for (size_t i = 0; i < sizeof (modes) / sizeof (*modes); i++) {
+		for (size_t j = 0; j < sizeof (ids) / sizeof (*ids); j++) {
+			AutostartFixture f;
+			autostart_fixture_init (&f, modes[i], ids[j]);
+			f.app.input.fds[0] = -1;
+			f.app.input.fds[1] = -1;
+			BarMainGetInitialStation (&f.app);
+			ck_assert_ptr_null (BarStateGetNextStation (&f.app));
+			autostart_fixture_done (&f);
+		}
+	}
+}
+END_TEST
+
+/* The active account's autostart wins over the global value (same rule as
+ * the Pandora reconnect path). */
+START_TEST (test_main_autostart_prefers_active_account)
+{
+	AutostartFixture f;
+	autostart_fixture_init (&f, BAR_UI_MODE_WEB, "st-b");
+	f.acct.id = (char *) "second";
+	f.acct.autostartStation = (char *) "st-a";
+	f.app.settings.accounts = &f.acct;
+	f.app.settings.accountCount = 1;
+	BarMainGetInitialStation (&f.app);
+	ck_assert_ptr_eq (BarStateGetNextStation (&f.app), &f.a);
+	f.app.settings.accounts = NULL;
+	autostart_fixture_done (&f);
+}
+END_TEST
+
+/* Global autostart_station belongs to the primary account only: an active
+ * account without its own value (or with an empty one) starts nothing. */
+START_TEST (test_main_autostart_account_without_value_selects_nothing)
+{
+	const char *const ids[] = {NULL, ""};
+	for (size_t j = 0; j < sizeof (ids) / sizeof (*ids); j++) {
+		AutostartFixture f;
+		autostart_fixture_init (&f, BAR_UI_MODE_WEB, "st-b");
+		f.acct.id = (char *) "second";
+		f.acct.autostartStation = (char *) ids[j];
+		f.app.settings.accounts = &f.acct;
+		f.app.settings.accountCount = 1;
+		BarMainGetInitialStation (&f.app);
+		ck_assert_ptr_null (BarStateGetNextStation (&f.app));
+		f.app.settings.accounts = NULL;
+		autostart_fixture_done (&f);
+	}
 }
 END_TEST
 
@@ -364,10 +448,8 @@ static int gate_audio_wait_boundary (pthread_cond_t *cond, pthread_mutex_t *mute
 	 * Check both other application locks separately, never nested. */
 	ck_assert_int_eq (pthread_mutex_trylock (&boundary->player->decoderLock), 0);
 	ck_assert_int_eq (pthread_mutex_unlock (&boundary->player->decoderLock), 0);
-#ifdef WEBSOCKET_ENABLED
 	ck_assert_int_eq (pthread_rwlock_trywrlock (&boundary->app->stateRwlock), 0);
 	ck_assert_int_eq (pthread_rwlock_unlock (&boundary->app->stateRwlock), 0);
-#endif
 	ck_assert_int_eq (pthread_mutex_lock (mutex), 0);
 	return result;
 }
@@ -448,9 +530,7 @@ START_TEST (test_player_owner_release_at_command_deadline_never_steals_audio)
 	player_t *player = &app.player;
 	ma_audio_buffer buffer;
 	player_thread_test_setup (player, &app.settings);
-#ifdef WEBSOCKET_ENABLED
 	app.settings.uiMode = BAR_UI_MODE_BOTH;
-#endif
 	BarStateInit (&app);
 	player_stopped_sound_fixture (player, &buffer);
 	ck_assert (BarPlayerSetVolume (player, 50));
@@ -1087,9 +1167,7 @@ static void player_thread_test_setup (player_t *player, BarSettings_t *settings)
 	memset (player, 0, sizeof (*player));
 	memset (settings, 0, sizeof (*settings));
 	BarSettingsInit (settings);
-#ifdef WEBSOCKET_ENABLED
 	settings->uiMode = BAR_UI_MODE_CLI;
-#endif
 	settings->timeout = 2;
 	BarPlayerInit (player, settings);
 }
@@ -3025,8 +3103,9 @@ START_TEST (test_player_thread_connection_refused)
 	BarSettings_t settings;
 	player_thread_test_setup (&player, &settings);
 
+	char url[64];
 	const uintptr_t ret = run_player_thread_sync (&player,
-	                                              "http://127.0.0.1:9/refused.mp3");
+	                                              test_refused_url (url, sizeof (url), "refused.mp3"));
 	ck_assert_int_eq (ret, PLAYER_RET_SOFTFAIL);
 	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
 
@@ -3083,7 +3162,8 @@ START_TEST (test_player_thread_quit_before_open)
 	player.doQuit = true;
 	pthread_mutex_unlock (&player.lock);
 
-	const uintptr_t ret = run_player_thread_sync (&player, "http://127.0.0.1:9/x.mp3");
+	char url[64];
+	const uintptr_t ret = run_player_thread_sync (&player, test_refused_url (url, sizeof (url), "x.mp3"));
 	ck_assert_int_eq (ret, PLAYER_RET_OK);
 	ck_assert_int_eq (BarPlayerGetMode (&player), PLAYER_FINISHED);
 
@@ -3325,6 +3405,205 @@ START_TEST (test_player_ffmpeg_interrupt_cb_skip_and_quit)
 }
 END_TEST
 
+/* Break caught: skip, disconnect and quit publish doQuit, but a thread
+ * blocked in an FFmpeg network read only sees the interrupt callback. */
+START_TEST (test_ffmpeg_interrupt_cb_returns_1_when_stop_requested)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+	BarPlayerRequestStop (&player);
+	/* Not one-shot: every polling slice of the blocked read must abort. */
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert_int_eq (atomic_load (&player.interrupted), 0);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+/* Break caught: a skip carries over and aborts the next song's open, or a
+ * pause is mistaken for a stop and aborts a stalled read. */
+START_TEST (test_ffmpeg_interrupt_cb_returns_0_after_song_start_reset)
+{
+	player_t player;
+	BarSettings_t settings;
+	player_thread_test_setup (&player, &settings);
+
+	BarPlayerRequestStop (&player);
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 1);
+	ck_assert (BarPlayerReset (&player));
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+	BarPlayerSetMode (&player, PLAYER_PLAYING);
+	ck_assert (BarPlayerSetPaused (&player, true));
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+	ck_assert (BarPlayerSetPaused (&player, false));
+	ck_assert_int_eq (BarPlayerFfmpegInterruptCb (&player), 0);
+
+	player_thread_test_teardown (&player, &settings);
+}
+END_TEST
+
+/* Break caught: the copy writes the source frame's channel count into a
+ * buffer sized for the device's, overrunning it when they differ. */
+START_TEST (test_player_copy_pcm_frames_bounds_channel_mismatch)
+{
+	const int16_t stereo[] = {1, 2, 3, 4, 5, 6};
+	const int16_t mono[] = {7, 8, 9};
+	int16_t *out = malloc (6 * sizeof (*out));
+	ck_assert_ptr_nonnull (out);
+
+	BarPlayerCopyPcmFrames (out, 2, stereo, 2, 3);
+	ck_assert_mem_eq (out, stereo, sizeof stereo);
+
+	/* Exactly three mono samples: a stride-2 write lands outside under ASan. */
+	int16_t *narrow = malloc (3 * sizeof (*narrow));
+	ck_assert_ptr_nonnull (narrow);
+	BarPlayerCopyPcmFrames (narrow, 1, stereo, 2, 3);
+	ck_assert_int_eq (narrow[0], 1);
+	ck_assert_int_eq (narrow[1], 3);
+	ck_assert_int_eq (narrow[2], 5);
+	free (narrow);
+
+	memset (out, 0x5a, 6 * sizeof (*out));
+	BarPlayerCopyPcmFrames (out, 2, mono, 1, 3);
+	const int16_t widened[] = {7, 0, 8, 0, 9, 0};
+	ck_assert_mem_eq (out, widened, sizeof widened);
+
+	BarPlayerCopyPcmFrames (out, 2, stereo, 2, 0);
+	ck_assert_mem_eq (out, widened, sizeof widened);
+	free (out);
+}
+END_TEST
+
+static bool player_fixture_url (const char *rel, char *buf, size_t len)
+{
+	char resolved[PATH_MAX];
+	if (realpath (rel, resolved) == NULL) {
+		return false;
+	}
+	return snprintf (buf, len, "file://%s", resolved) < (int) len;
+}
+
+/* Simulates a container whose codec parameters report fewer channels than
+ * the opened decoder (and so the filter graph) produces. */
+static void force_codecpar_mono (player_t *player)
+{
+	av_channel_layout_uninit (&player->st->codecpar->ch_layout);
+	av_channel_layout_default (&player->st->codecpar->ch_layout, 1);
+}
+
+typedef struct {
+	ma_uint32 channels;
+	int sinkChannels;
+	ma_uint64 frames;
+	bool guardIntact, nonSilent;
+} SourceChannelRead;
+
+enum { SOURCE_READ_FRAMES = 480, SOURCE_READ_GUARD = 256 };
+
+/* Plays a fixture on the player thread and reads its data source directly
+ * into heap buffers sized exactly from the source's reported format. */
+static void read_fixture_source (const char *rel, BarPlayerStreamOpenedTestHook hook,
+		SourceChannelRead *result)
+{
+	player_t player;
+	BarSettings_t settings;
+	char url[PATH_MAX + 16];
+	memset (result, 0, sizeof (*result));
+	result->guardIntact = true;
+	ck_assert (player_fixture_url (rel, url, sizeof url));
+	player_thread_test_setup (&player, &settings);
+	BarPlayerSetStreamOpenedTestHook (hook);
+	player.url = strdup (url);
+	BarPlayerSetMode (&player, PLAYER_WAITING);
+	player.threadJoinPending = true;
+	pthread_t worker;
+	ck_assert_int_eq (pthread_create (&worker, NULL, BarPlayerThread, &player), 0);
+	ck_assert (BarPlayerWaitForMode (&player, PLAYER_PLAYING, 5000));
+	ma_format format;
+	ma_uint32 sampleRate;
+	ck_assert_int_eq (ma_data_source_get_data_format (&player.dataSource, &format,
+		&result->channels, &sampleRate, NULL, 0), MA_SUCCESS);
+	ck_assert_int_eq (format, ma_format_s16);
+	pthread_mutex_lock (&player.decoderLock);
+	result->sinkChannels = av_buffersink_get_channels (player.fbufsink);
+	pthread_mutex_unlock (&player.decoderLock);
+	const size_t samples = (size_t) SOURCE_READ_FRAMES * result->channels;
+	for (unsigned read = 0; read < 200; ++read) {
+		int16_t *buffer = malloc ((samples + SOURCE_READ_GUARD) * sizeof (*buffer));
+		ck_assert_ptr_nonnull (buffer);
+		for (size_t i = 0; i < SOURCE_READ_GUARD; ++i) { buffer[samples + i] = 0x5a5a; }
+		ma_uint64 count = 0;
+		const ma_result ret = ma_data_source_read_pcm_frames (&player.dataSource, buffer,
+			SOURCE_READ_FRAMES, &count);
+		for (size_t i = 0; i < SOURCE_READ_GUARD; ++i) {
+			result->guardIntact &= buffer[samples + i] == 0x5a5a;
+		}
+		for (size_t i = 0; i < count * result->channels; ++i) {
+			result->nonSilent |= buffer[i] != 0;
+		}
+		free (buffer);
+		result->frames += count;
+		if (ret != MA_SUCCESS || count == 0) { break; }
+	}
+	BarPlayerRequestStop (&player);
+	ck_assert (BarPlayerJoinThreadWithTimeout (&player, worker, NULL, 2));
+	BarPlayerSetStreamOpenedTestHook (NULL);
+	free (player.url);
+	player.url = NULL;
+	player_thread_test_teardown (&player, &settings);
+}
+
+/* Break caught: the data source (and so the miniaudio buffers) is sized from
+ * the container's codec parameters while the filter graph delivers the
+ * decoder's channel count; a stereo decode behind mono parameters overruns. */
+START_TEST (test_player_source_channels_follow_filter_output_not_codec_parameters)
+{
+	SourceChannelRead read;
+	read_fixture_source ("test/fixtures/tone_stereo.mp3", force_codecpar_mono, &read);
+	ck_assert_int_eq (read.sinkChannels, 2);
+	ck_assert_int_eq (read.channels, 2);
+	ck_assert_msg (read.guardIntact, "source read wrote past a buffer sized for its own format");
+	ck_assert (read.nonSilent);
+	ck_assert_uint_gt (read.frames, 0);
+}
+END_TEST
+
+/* Normal streams keep their channel count: mono stays mono, stereo stereo,
+ * and the whole 0.5 s fixture decodes within the reported format. */
+START_TEST (test_player_mono_and_stereo_fixtures_keep_channel_count)
+{
+	static const char *const fixtures[] = {"test/fixtures/tone.mp3", "test/fixtures/tone_stereo.mp3"};
+	SourceChannelRead read;
+	read_fixture_source (fixtures[_i], NULL, &read);
+	ck_assert_int_eq (read.channels, (ma_uint32) _i + 1);
+	ck_assert_int_eq (read.sinkChannels, _i + 1);
+	ck_assert (read.guardIntact);
+	ck_assert (read.nonSilent);
+	ck_assert_uint_ge (read.frames, 44100 / 2);
+}
+END_TEST
+
+/* A stream whose channel count changes mid-song (stereo frames first, then
+ * mono) must neither overrun nor abort; mismatched frames are
+ * rejected by the filter source and the rest plays in the opened format. */
+START_TEST (test_player_mid_stream_channel_change_stays_in_opened_format)
+{
+	SourceChannelRead read;
+	read_fixture_source ("test/fixtures/tone_channel_change.mp3", NULL, &read);
+	/* Which layout the probe picks depends on the FFmpeg version (8 opens it
+	 * mono, 6.1 stereo); the source must match the filter output either way. */
+	ck_assert (read.channels == 1 || read.channels == 2);
+	ck_assert_int_eq (read.channels, read.sinkChannels);
+	ck_assert (read.guardIntact);
+	ck_assert (read.nonSilent);
+	ck_assert_uint_gt (read.frames, 0);
+}
+END_TEST
+
 Suite *player_suite(void) {
 	Suite *s;
 	TCase *tc_basic;
@@ -3368,6 +3647,8 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_thread, test_player_thread_double_interrupt_during_playback);
 	tcase_add_test (tc_thread, test_player_thread_truncated_mp3_fixture_fails_open);
 	tcase_add_test (tc_thread, test_player_ffmpeg_interrupt_cb_skip_and_quit);
+	tcase_add_test (tc_thread, test_ffmpeg_interrupt_cb_returns_1_when_stop_requested);
+	tcase_add_test (tc_thread, test_ffmpeg_interrupt_cb_returns_0_after_song_start_reset);
 	suite_add_tcase (s, tc_thread);
 	TCase *tc_audio = tcase_create ("Audio reservation");
 	TCase *tc_priming = tcase_create ("Startup priming");
@@ -3379,6 +3660,14 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_lifecycle, test_player_destroy_requires_successful_join);
 	tcase_add_test (tc_lifecycle, test_player_production_fatal_shutdown_exits_failure);
 	suite_add_tcase (s, tc_lifecycle);
+	TCase *tc_autostart = tcase_create ("Startup autostart station");
+	tcase_set_timeout (tc_autostart, 10);
+	tcase_add_test (tc_autostart, test_main_autostart_selects_configured_station);
+	tcase_add_test (tc_autostart, test_main_autostart_unknown_station_does_not_block);
+	tcase_add_test (tc_autostart, test_main_autostart_unset_or_empty_selects_nothing);
+	tcase_add_test (tc_autostart, test_main_autostart_prefers_active_account);
+	tcase_add_test (tc_autostart, test_main_autostart_account_without_value_selects_nothing);
+	suite_add_tcase (s, tc_autostart);
 	TCase *tc_regression = tcase_create ("Concurrent regression guards");
 	tcase_set_timeout (tc_regression, 10);
 	tcase_add_test (tc_regression, test_player_release_build_reentrancy_rejects_without_waiting);
@@ -3387,7 +3676,6 @@ Suite *player_suite(void) {
 	tcase_add_test (tc_regression, test_player_pause_resume_stop_stress_finishes_without_owner);
 	suite_add_tcase (s, tc_regression);
 	tcase_set_timeout (tc_audio, 10);
-	tcase_add_test (tc_audio, test_main_final_join_is_terminal_before_shared_state_cleanup);
 	tcase_add_test (tc_audio, test_main_finalization_rejects_terminal_player);
 	tcase_add_test (tc_audio, test_player_stop_timeout_preserves_blocked_owner_and_unlocks_before_fatal);
 	tcase_add_test (tc_audio, test_player_owner_release_at_command_deadline_never_steals_audio);
@@ -3440,6 +3728,13 @@ Suite *player_suite(void) {
 	tcase_set_timeout (tc_monitor, 10);
 	tcase_add_test (tc_monitor, test_player_paused_monitor_leaves_audio_available_for_volume);
 	suite_add_tcase (s, tc_monitor);
+	TCase *tc_channels = tcase_create ("Channel count");
+	tcase_set_timeout (tc_channels, 10);
+	tcase_add_test (tc_channels, test_player_copy_pcm_frames_bounds_channel_mismatch);
+	tcase_add_test (tc_channels, test_player_source_channels_follow_filter_output_not_codec_parameters);
+	tcase_add_loop_test (tc_channels, test_player_mono_and_stereo_fixtures_keep_channel_count, 0, 2);
+	tcase_add_test (tc_channels, test_player_mid_stream_channel_change_stays_in_opened_format);
+	suite_add_tcase (s, tc_channels);
 	
 	return s;
 }

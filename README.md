@@ -66,7 +66,9 @@ original pianobar installed, remove it first to avoid conflicts.
    ```
 
 2. Open https://github.com/mr-light-show/remote-pianobar/releases and
-   download `remote-pianobar_macos14.dmg`.
+   download `remote-pianobar_macos12.dmg`. The binary targets macOS 12 or
+   later (Apple Silicon) and links the Homebrew libraries listed below, so
+   `brew install` them first.
 
 3. Open the DMG, then run the included `install.sh` (with sudo) or copy
    the app to your desired location (see INSTALL.txt in the DMG).
@@ -129,12 +131,6 @@ Then type:
 
 ```bash
 gmake clean && gmake
-```
-
-WebSocket/Remote API is included by default. To build without it:
-
-```bash
-make NOWEBSOCKET=1 clean && make NOWEBSOCKET=1
 ```
 
 You can run the client directly from the source directory now:

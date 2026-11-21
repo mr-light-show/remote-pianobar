@@ -48,6 +48,11 @@ bool log_is_any_debug_enabled(void);
 /* True when log_write(DEBUG_CLI, ...) would emit (debug_mask & DEBUG_CLI); HAVE_DEBUGLOG only. */
 bool log_is_debug_cli_enabled(void);
 
+/* True when log_write (kind, ...) would emit: always for LOG_ERROR, else when
+ * the kind's bit is in the debug mask (never without HAVE_DEBUGLOG). Lets a
+ * caller skip diagnostics work, e.g. arming a timer, when nothing is logged. */
+bool log_is_enabled (logKind kind);
+
 /* Log message. LOG_ERROR always emits; DEBUG_* use debug_mask (DEBUG_CLI OR'd at init when any bit set);
  * other DEBUG_* kinds emit when the corresponding PIANOBAR_DEBUG bit is set. */
 void log_write(logKind kind, const char *format, ...)
@@ -60,3 +65,15 @@ void log_network_response(const char *summary);
 /* Atomically set or get the debug mask (normally set once by log_init). */
 void         log_set_debug_mask (unsigned int mask);
 unsigned int log_get_debug_mask (void);
+
+/* Also append every emitted log line (LOG_ERROR and enabled DEBUG_* kinds) to
+ * path, as plain text without colour codes, in addition to stderr. Used for
+ * ui_mode both/cli, where log_file would otherwise be ignored. Opens the file
+ * in append mode (0644); a previously set file is closed. Returns false (and
+ * logs one LOG_ERROR to stderr) when path is NULL/empty or cannot be opened,
+ * leaving the previous file, if any, in place. Call before threads start. */
+bool log_set_file (const char *path);
+
+/* Stop copying lines to the log file and close it. Call only after every
+ * thread that may call log_write has stopped (or before they were started). */
+void log_close_file (void);

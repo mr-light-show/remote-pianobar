@@ -85,6 +85,12 @@ PianoReturn_t PianoRequest (PianoHandle_t *ph, PianoRequest_t *req,
 
 					req->secure = true;
 
+					if (ph->partner.authToken == NULL) {
+						/* partnerLogin did not yield a token */
+						ret = PIANO_RET_INVALID_RESPONSE;
+						goto cleanup;
+					}
+
 					json_object_object_add (j, "loginType",
 							json_object_new_string ("user"));
 					json_object_object_add (j, "username",
@@ -99,7 +105,11 @@ PianoReturn_t PianoRequest (PianoHandle_t *ph, PianoRequest_t *req,
 					CURL * const curl = curl_easy_init ();
 					urlencAuthToken = curl_easy_escape (curl,
 							ph->partner.authToken, 0);
-					assert (urlencAuthToken != NULL);
+					if (urlencAuthToken == NULL) {
+						curl_easy_cleanup (curl);
+						ret = PIANO_RET_OUT_OF_MEMORY;
+						goto cleanup;
+					}
 					snprintf (req->urlPath, sizeof (req->urlPath),
 							PIANO_RPC_PATH "method=auth.userLogin&"
 							"auth_token=%s&partner_id=%i", urlencAuthToken,
@@ -506,7 +516,10 @@ PianoReturn_t PianoRequest (PianoHandle_t *ph, PianoRequest_t *req,
 	if (method != NULL) {
 		char *urlencAuthToken;
 
-		assert (ph->user.authToken != NULL);
+		if (ph->user.authToken == NULL || ph->user.listenerId == NULL) {
+			ret = PIANO_RET_INVALID_RESPONSE;
+			goto cleanup;
+		}
 
 		CURL * const curl = curl_easy_init ();
 		if (curl == NULL) {

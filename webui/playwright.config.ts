@@ -9,7 +9,9 @@ export default defineConfig({
   reporter: 'html',
   
   use: {
-    baseURL: process.env.PIANOBAR_RUNNING ? 'http://localhost:8080' : 'http://localhost:4173',
+    baseURL: process.env.PIANOBAR_RUNNING
+      ? (process.env.PIANOBAR_URL || 'http://localhost:8080')
+      : 'http://localhost:4173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
@@ -31,6 +33,7 @@ export default defineConfig({
 
   // Run preview server before tests (for testing without pianobar)
   // Set PIANOBAR_RUNNING=1 to test against actual pianobar instance
+  // (PIANOBAR_URL overrides the default http://localhost:8080)
   webServer: process.env.PIANOBAR_RUNNING ? undefined : {
     command: 'npm run preview',
     url: 'http://localhost:4173',

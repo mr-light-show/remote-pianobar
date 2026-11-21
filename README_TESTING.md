@@ -32,24 +32,72 @@ make test
 
 ### Comprehensive Testing
 
-To run all tests including linting and memory leak detection:
+To run all tests plus static analysis:
 ```bash
 make test-all
 ```
 
-This will:
-1. Run unit tests
-2. Run static analysis (cppcheck)
-3. Rebuild with AddressSanitizer and run tests again
+This runs `make test` (unit tests) and `make lint` (cppcheck). It does not run
+the sanitizers; use `make test-asan` or `make test-tsan` for those.
+
+Builds are serial by default. Pass `-jN` (for example
+`make -j"$(getconf _NPROCESSORS_ONLN)" test-all`) to compile in parallel and to
+overlap lint with the tests; the output of the two is then interleaved.
 
 ### Individual Test Targets
 
 - `make test` - Run unit tests only
+- `make test-par` - Run the same tests as `make test`, one suite per process, several at a time (see [Parallel test runs](#parallel-test-runs)); `make test-coverage`, `make test-asan` and `make test-tsan` run their tests this way
 - `make test-integration` - Run integration tests (sets `PIANOBAR_INTEGRATION=1`)
+- `make test-e2e-fake` - Run the web UI Playwright E2E suite against the real `pianobar` binary and a local fake Pandora API (no account; needs Python 3, openssl, Node and Playwright's Chromium); see [TESTING.md](TESTING.md#e2e-without-a-pandora-account-fake-pandora)
+- `make test-startup-smoke` - Start the real `pianobar` as a web-only daemon against a closed Pandora port (no account, network or sound card; needs Python 3) and check that stdin stays on `/dev/null` (no `lws: ZERO RANDOM FD`) and the startup failure appears on stderr; not part of `make test-all`, run in the CI `c-tests` job
+- `make gates` - Run the pre-push gates concurrently: Docker `test-ci-local` (coverage and `test-asan`), `test-coverage`, `test-all`, `test-asan`, `test-tsan` (see DEVELOPMENT.md, "All gates at once")
 - `make lint` - Run static analysis on source code
 - `make lint-test` - Run static analysis on test code
-- `make test-asan` - Run tests with AddressSanitizer (memory leak detection)
+- `make test-asan` - Run tests with AddressSanitizer and UndefinedBehaviorSanitizer (memory errors and UB abort the run; on Linux LeakSanitizer is on too via `detect_leaks=1`, overridable with `ASAN_OPTIONS`, and runs in the CI `c-asan` job)
+- `make test-tsan` - Run tests with ThreadSanitizer (known miniaudio races are suppressed in `test/tsan.supp`)
 - `make test-valgrind` - Run tests with valgrind (Linux only)
+
+### Parallel test runs
+
+`make test-par` runs `scripts/test-parallel.sh ./pianobar_test`: every
+`suite_create("...")` name under `test/` runs as its own
+`CK_RUN_SUITE="<name>" ./pianobar_test` process, and `playback_integration`
+(the longest suite) is split further into one process per tcase
+(`CK_RUN_CASE`). The environment (`PIANOBAR_INTEGRATION`, `ASAN_OPTIONS`, ...)
+is passed through unchanged.
+
+- While iterating, `make test-suite S=<suite> [C=<tcase>]` builds the default
+  variant and runs one suite (or one tcase) with `PIANOBAR_INTEGRATION=1
+  PIANOBAR_TEST_NO_DEVICE=1`; it fails when the name matches nothing.
+- `TEST_JOBS=N` sets the worker count. The default is `min(4, ncpu/2)`,
+  because the playback suites use real-time waits and can flake on an
+  oversubscribed host. `TEST_JOBS=1` runs `./pianobar_test` once, unsharded,
+  which is exactly the serial run.
+- `TEST_SPLIT_SUITES="playback_integration Player"` splits more suites by tcase.
+- Each shard's log is printed when it finishes, then the summed count:
+  `test-parallel: Checks: <N> in <shards> shards`. It equals the `Checks:`
+  count of a serial `./pianobar_test` run. `TEST_PAR_LOGS=failed` prints only
+  failing shards in full (the others print their `Checks:` line).
+- `PIANOBAR_TEST_DEBUG_ALL=1` turns on every `DEBUG_*` log kind for the whole
+  run, so debug-only log statements execute (CI runs the ASan binary this way
+  in `c-asan`). The output is several MB; pair it with `TEST_PAR_LOGS=failed`.
+  Tests that check terminal output with debug off set their own mask.
+- Guards: the run fails if a shard exits non-zero, prints no `Checks:` line or
+  reports `Checks: 0`, or if a `suite_create`/`tcase_create` argument is not a
+  string literal. `pianobar_test` itself fails when `CK_RUN_SUITE` or
+  `CK_RUN_CASE` matches no test, so a renamed or unregistered suite cannot be
+  skipped silently.
+- Coverage counters from the shards are merged by gcov at process exit
+  (`-fprofile-update=atomic`); `coverage.info` totals equal the serial run's.
+- `CK_XML_LOG_FILE_NAME` and `CK_LOG_FILE_NAME` are per process: with
+  `make test-par` every shard would overwrite the same file. Use
+  `./pianobar_test` (or `TEST_JOBS=1`) when you need one Check log.
+
+Each variant builds in its own directory (`build/default`, `build/coverage`,
+`build/asan`, `build/tsan`; see DEVELOPMENT.md, "Build directories"), so
+running `make test-coverage` and then `make test-asan` keeps both builds, and
+switching back rebuilds nothing.
 
 ### Cleaning Test Files
 
@@ -74,7 +122,9 @@ test/
 │   └── test_playback_integration.c
 └── fixtures/                # Test data files
     ├── test_config.ini
-    └── tone.mp3             # Short MP3 for player integration tests
+    ├── tone.mp3             # Short MP3 for player integration tests
+    ├── tone_stereo.mp3      # Stereo variant for channel-count tests
+    └── tone_channel_change.mp3  # Stereo then mono, for mid-stream changes
 ```
 
 ## Current Test Coverage
@@ -114,9 +164,47 @@ PIANOBAR_INTEGRATION=1 ./pianobar_test
 CI runs them during `make test-coverage` (`PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1`).
 
 Requirements:
-- `test/fixtures/tone.mp3` (committed; regenerate with ffmpeg if needed)
+- `test/fixtures/tone.mp3` (committed; regenerate with ffmpeg if needed). It is a deliberately near-silent 440 Hz sine (peak about -60 dBFS, amplitude 0.001) so a local run on speakers does not beep. It is not pure digital silence because `test_player.c` asserts decoded samples exceed `0.00001f`. Regenerate with:
+  ```sh
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t):s=44100:d=0.5:c=mono" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 1 test/fixtures/tone.mp3
+  ```
+  Keep duration (0.5 s), rate (44100 Hz), mono, and 64 kb/s so timing-based tests keep their assumptions. Verify with `ffmpeg -i test/fixtures/tone.mp3 -af astats -f null -`: the peak should be well above 0.00001 (about -100 dBFS) and below about -55 dBFS.
+- `test/fixtures/tone_stereo.mp3` and `test/fixtures/tone_channel_change.mp3` (committed) back the player channel-count tests. The first is the same tone in stereo (660 Hz on the right). The second is 0.25 s of stereo followed by 0.25 s of mono, concatenated without Xing or ID3 headers, so FFmpeg reports mono codec parameters while the first decoded frames are stereo:
+  ```sh
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t)|0.001*sin(2*PI*660*t):s=44100:d=0.5:c=stereo" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 test/fixtures/tone_stereo.mp3
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t)|0.001*sin(2*PI*660*t):s=44100:d=0.25:c=stereo" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 2 -write_xing 0 -id3v2_version 0 s.mp3
+  ffmpeg -f lavfi -i "aevalsrc=0.001*sin(2*PI*440*t):s=44100:d=0.25:c=mono" \
+    -c:a libmp3lame -b:a 64k -ar 44100 -ac 1 -write_xing 0 -id3v2_version 0 m.mp3
+  cat s.mp3 m.mp3 > test/fixtures/tone_channel_change.mp3
+  ```
 - Headless CI uses `PIANOBAR_TEST_NO_DEVICE=1` (miniaudio `noDevice`); without it, audio tests skip if the engine cannot init
 - `BarSettingsRead()`-style defaults (partner keys, station format) for lifecycle/manager paths
+
+#### Null audio backend (real device thread, no hardware)
+
+`PIANOBAR_TEST_NO_DEVICE=1` replaces the device with test-driven engine reads, so
+the device thread, the decoder/device handoff and their locks never run. The
+`null_audio_device` test case instead opens the lifetime engine on miniaudio's
+**null backend** (`ma_backend_null`): a real device thread pulls the data callback
+in real time without audio hardware. It covers natural song end, pause/resume,
+volume changes, skip mid-song, concurrent controls, repeated start/stop and
+engine init/destroy, and reruns the device-aware integration tests on that device.
+
+- Tests select it with `BarPlayerSetNullAudioTestBackend (true)` (a checked fixture,
+  so it is set in the forked test process before `BarPlayerInit`); this takes
+  precedence over `PIANOBAR_TEST_NO_DEVICE`. Setting `PIANOBAR_TEST_NULL_AUDIO=1`
+  does the same for a whole run.
+- It never falls back to a hardware backend. If the null backend is unavailable
+  the engine stays uninitialized and each test prints
+  `SKIP <test>: miniaudio null audio backend unavailable in this build`.
+- Each test that ran prints `null-audio: <test> ran on the null device backend`.
+- Requires `PIANOBAR_INTEGRATION=1`; it runs in CI and in `make test-ci-local`.
+  Run it alone with
+  `CK_RUN_SUITE=playback_integration CK_RUN_CASE=null_audio_device PIANOBAR_INTEGRATION=1 ./pianobar_test`.
+- Production default is unchanged.
 
 Production code exposes `BarUiPianoCallSetTestHook()` / `BarUiPianoCallClearTestHook()`
 so playlist fetch can be mocked without network access.
@@ -133,11 +221,12 @@ Codecov patch coverage reflects **only what CI uploads** — it does **not** mer
 | `make test-coverage` | Full WebSocket test binary + integration + headless audio | Yes (`c-tests` flag) | Matches GitHub Actions `test.yml`; always use this before judging patch % |
 | `make test` | Unit tests only (no integration) | No | Fast dev loop; lower coverage than CI |
 | `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all` | Same tests as CI except no `--coverage` | No | Pre-push CI parity when `Makefile` / `test/**` changed |
-| `make NOWEBSOCKET=1 test` | Base tests only; no WebSocket objects linked | No | Separate binary; `#ifdef WEBSOCKET_ENABLED` code is **not** exercised |
-| `make test-asan` | ASan rebuild + unit tests | No | Memory checking only |
+| `make test-asan` | ASan + UBSan rebuild + unit tests | No | Memory and undefined-behavior checking |
+| `make test-tsan` | TSan rebuild + unit tests | No | Data races; suppressions in `test/tsan.supp` |
+| `make test-e2e-fake` | Playwright E2E (Chromium) against real `pianobar` + `test/e2e-fake-pandora/fake_pandora.py` | No | Not part of `make test-all`; exercises the web UI end to end, no coverage data |
 | `cd webui && npm test -- --run --coverage` | Vitest | Yes (`web-tests` flag) | Separate upload; combined with `c-tests` for default patch gate |
 
-**Implication:** production lines compiled only under `NOWEBSOCKET=1`, or only when integration env vars are unset, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
+**Implication:** production lines exercised only when integration env vars are set, can show as uncovered on the PR even if another local run hit them. The authoritative patch number is the CI run on `make test-coverage` with `PIANOBAR_INTEGRATION=1` and `PIANOBAR_TEST_NO_DEVICE=1`.
 
 The `codecov/patch/c-tests` gate scopes to **`src/**/*.c` only** — changed headers (`*.h`) and docs (`*.md`) in `src/` are excluded from the patch denominator because they are not executable.
 

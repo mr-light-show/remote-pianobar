@@ -28,6 +28,9 @@ THE SOFTWARE.
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 #include <time.h>
 #include <limits.h>
 
@@ -44,6 +47,11 @@ THE SOFTWARE.
 #endif
 
 static _Atomic unsigned int debug_mask = 0;
+
+/* Optional copy of every emitted line (ui_mode both/cli); -1 when unset.
+ * An O_APPEND descriptor written with one write() per line, so lines from
+ * different threads cannot interleave and no lock is needed. */
+static _Atomic int log_file_fd = -1;
 
 void log_set_debug_mask (unsigned int mask) {
 	atomic_store_explicit (&debug_mask, mask, memory_order_relaxed);
@@ -132,7 +140,8 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 {
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
-	const struct tm *tm_info = localtime(&ts.tv_sec);
+	struct tm tm_info;
+	localtime_r(&ts.tv_sec, &tm_info);
 	const char *color = "";
 
 	switch (kind) {
@@ -149,7 +158,7 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 	/* Timestamp and kind prefix share the same color; message body is default color */
 	fprintf(stderr, "%s[%02d:%02d:%02d.%03ld]%s ",
 	        color,
-	        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
+	        tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec,
 	        (long)(ts.tv_nsec / 1000000),
 	        COLOR_RESET);
 	fprintf(stderr, "%s%-*s:%s ",
@@ -160,6 +169,88 @@ static void log_with_timestamp(logKind kind, const char *format, va_list args)
 	vfprintf(stderr, format, args);
 }
 #endif
+
+/* Copy one log line to the log file as plain text (no colour codes). */
+static void log_to_file(logKind kind, const char *format, va_list args)
+{
+	const int fd = atomic_load_explicit(&log_file_fd, memory_order_relaxed);
+	if (fd < 0) {
+		return;
+	}
+
+	char stackBuf[2048];
+	char *buf = stackBuf;
+	const size_t cap = sizeof(stackBuf);
+	size_t len = 0;
+
+#ifdef HAVE_DEBUGLOG
+	struct timespec ts;
+	struct tm tm_info;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	localtime_r(&ts.tv_sec, &tm_info);
+	const int prefix = snprintf(buf, cap, "[%02d:%02d:%02d.%03ld] %-*s: ",
+	        tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec,
+	        (long)(ts.tv_nsec / 1000000),
+	        LOG_KIND_LABEL_FIELD_WIDTH, log_kind_prefix_label(kind));
+	len = prefix > 0 ? (size_t)prefix : 0;
+#else
+	(void) kind;
+#endif
+
+	va_list copy;
+	va_copy(copy, args);
+	const int body = vsnprintf(buf + len, cap - len, format, copy);
+	va_end(copy);
+	if (body < 0) {
+		return;
+	}
+
+	char *heap = NULL;
+	size_t out = len + (size_t)body;
+	if ((size_t)body >= cap - len) {
+		/* Longer than the stack buffer: format again into an exact-size one. */
+		heap = malloc(out + 1);
+		if (heap != NULL) {
+			memcpy(heap, stackBuf, len);
+			va_copy(copy, args);
+			(void) vsnprintf(heap + len, (size_t)body + 1, format, copy);
+			va_end(copy);
+			buf = heap;
+		} else {
+			out = cap - 1;	/* out of memory: keep the truncated line */
+		}
+	}
+
+	/* Nowhere left to report a failing log file, so the result is dropped. */
+	const ssize_t written = write(fd, buf, out);
+	(void) written;
+	free(heap);
+}
+
+bool log_set_file(const char *path)
+{
+	if (path == NULL || path[0] == '\0') {
+		return false;
+	}
+	const int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+	if (fd < 0) {
+		log_write(LOG_ERROR, "Cannot open log file %s: %s\n", path, strerror(errno));
+		return false;
+	}
+	const int old = atomic_exchange_explicit(&log_file_fd, fd, memory_order_relaxed);
+	if (old >= 0) {
+		close(old);
+	}
+	return true;
+}
+
+void log_close_file(void)
+{
+	const int old = atomic_exchange_explicit(&log_file_fd, -1, memory_order_relaxed);
+	if (old >= 0) {
+		close(old);
+	}
+}
 
 bool log_is_any_debug_enabled(void)
 {
@@ -179,6 +270,18 @@ bool log_is_debug_cli_enabled(void)
 #endif
 }
 
+bool log_is_enabled (logKind kind)
+{
+	if (kind == LOG_ERROR) {
+		return true;
+	}
+#ifdef HAVE_DEBUGLOG
+	return (log_get_debug_mask () & (unsigned int) kind) != 0;
+#else
+	return false;
+#endif
+}
+
 void log_write(logKind kind, const char *format, ...)
 {
 	va_list args;
@@ -186,15 +289,23 @@ void log_write(logKind kind, const char *format, ...)
 
 	if (kind == LOG_ERROR) {
 		/* Always log errors */
+		va_list fileArgs;
+		va_copy(fileArgs, args);
 #ifdef HAVE_DEBUGLOG
 		log_with_timestamp(LOG_ERROR, format, args);
 #else
 		log_to_stderr(format, args);
 #endif
+		log_to_file(LOG_ERROR, format, fileArgs);
+		va_end(fileArgs);
 	} else {
 #ifdef HAVE_DEBUGLOG
 		if ((debug_mask & kind) != 0) {
+			va_list fileArgs;
+			va_copy(fileArgs, args);
 			log_with_timestamp(kind, format, args);
+			log_to_file(kind, format, fileArgs);
+			va_end(fileArgs);
 		}
 #endif
 	}

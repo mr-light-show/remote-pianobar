@@ -11,8 +11,6 @@ cli:
   session_auto_recover: "Pandora session error; reconnecting to resume playback... "
   session_auto_recover_failed: "Automatic reconnect failed.\n"
   no_tracks_left: "No tracks left.\n"
-  wait_station_web: "Waiting for station selection via web interface...\n"
-  select_station: "Select station: "
   password_helper: "Requesting password from external helper... "
   password_ok: "Ok.\n"
   password_exit_status: "Error: Exit status %i.\n"
@@ -32,6 +30,8 @@ cli:
   invalid_song_url: "Invalid song url.\n"
   piano_reinit_failed: "Failed to reset Pandora session: %s\n"
   player_stop_timeout: "Timed out waiting for playback to stop.\n"
+  station_gone: "The station no longer exists.\n"
+  song_gone: "The song is no longer available.\n"
   player_thread_detach: "Player thread did not exit within 10s, detaching\n"
   piano_init_failed: "Initialization failed: %s\n"
   press_help: "Press %c for a list of commands.\n"
@@ -95,6 +95,14 @@ web:
     not_implemented_bookmark: "Song bookmarking is no longer supported by Pandora."
     not_implemented_history: "Song history is not available through the remote API yet."
     not_implemented_settings: "Runtime settings changes are not available through the remote API yet."
+    not_implemented_interactive: "This action asks for input on the player terminal and is not available through the generic action command."
+    busy: "The player is busy. Try again in a moment."
+    response_too_large: "The response is too large to send."
+    request_too_large: "The request is too large and was ignored."
+    station_not_found: "The station was not found."
+    station_id_missing: "No station was specified."
+    station_modes_quickmix: "Modes are not available for QuickMix."
+    invalid_search: "Enter a search term."
 
   # Web UI only (Lit); flat keys web.ui.* in generated JSON / locale files
   ui:

@@ -24,6 +24,7 @@ THE SOFTWARE.
 #include <stddef.h>
 
 static _Atomic(_Atomic sig_atomic_t *) g_interrupted = NULL;
+static atomic_bool g_shutdown = false;
 
 void BarInterruptSetTarget (_Atomic sig_atomic_t *target) {
 	atomic_store_explicit (&g_interrupted, target, memory_order_relaxed);
@@ -39,4 +40,12 @@ void BarInterruptIncrement (void) {
 	if (target != NULL) {
 		atomic_fetch_add_explicit (target, 1, memory_order_relaxed);
 	}
+}
+
+void BarInterruptSetShutdown (bool shutdown) {
+	atomic_store (&g_shutdown, shutdown);
+}
+
+bool BarInterruptShutdownRequested (void) {
+	return atomic_load (&g_shutdown);
 }

@@ -1,13 +1,16 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
-test.beforeEach(async ({ page }) => {
-  // HTTP route does not intercept WebSocket; use routeWebSocket so the app stays disconnected.
+// Specs in this file check the disconnected UI, except "UI States with Server".
+// HTTP route does not intercept WebSocket; use routeWebSocket so the app stays disconnected.
+const blockWebSocket = async ({ page }: { page: Page }) => {
   await page.routeWebSocket(/socket\.io/, ws => {
     ws.close();
   });
-});
+};
 
 test.describe('UI States', () => {
+  test.beforeEach(blockWebSocket);
+
   test('shows fallback album art when disconnected', async ({ page }) => {
     await page.goto('/');
 
@@ -36,8 +39,11 @@ test.describe('UI States', () => {
     
     // Should show 0:00 / 0:00 or similar
   });
+});
 
-  test.skip(() => !process.env.PIANOBAR_RUNNING, 'updates UI when track changes', async ({ page }) => {
+test.describe('UI States with Server', () => {
+  test('updates UI when track changes', async ({ page }) => {
+    test.skip(!process.env.PIANOBAR_RUNNING, 'requires a running pianobar');
     await page.goto('/');
 
     // Wait for connection
@@ -56,6 +62,8 @@ test.describe('UI States', () => {
 });
 
 test.describe('Responsive Design', () => {
+  test.beforeEach(blockWebSocket);
+
   test('renders correctly on mobile viewport', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 667 }); // iPhone SE
     await page.goto('/');
@@ -86,6 +94,8 @@ test.describe('Responsive Design', () => {
 });
 
 test.describe('Accessibility', () => {
+  test.beforeEach(blockWebSocket);
+
   test('has no automatic accessibility violations', async ({ page }) => {
     await page.goto('/');
 

@@ -54,46 +54,6 @@ static struct json_object *BarJsonStringOrEmpty (const char *s)
 	return json_object_new_string (s != NULL ? s : "");
 }
 
-/* Helper: Create JSON object for a song with common fields
- * includeTrackToken: whether to include trackToken field
- * stationFieldName: optional field name for station ("songStationName" or "stationName"), NULL to skip */
-static json_object* BarSocketIoCreateSongJson(BarApp_t *app, PianoSong_t *song, 
-                                                bool includeTrackToken, 
-                                                const char *stationFieldName) {
-	json_object *songObj;
-	PianoStation_t *songStation;
-	
-	if (!song) {
-		return NULL;
-	}
-	
-	songObj = json_object_new_object();
-	
-	/* Core song fields - use empty string as fallback for safety */
-	json_object_object_add(songObj, "title",    BarJsonStringOrEmpty(song->title));
-	json_object_object_add(songObj, "artist",   BarJsonStringOrEmpty(song->artist));
-	json_object_object_add(songObj, "album",    BarJsonStringOrEmpty(song->album));
-	json_object_object_add(songObj, "coverArt", BarJsonStringOrEmpty(song->coverArt));
-	json_object_object_add(songObj, "rating",   json_object_new_int(song->rating));
-	json_object_object_add(songObj, "duration", json_object_new_int(song->length));
-	
-	/* Optional: track token */
-	if (includeTrackToken) {
-		json_object_object_add(songObj, "trackToken", BarJsonStringOrEmpty(song->trackToken));
-	}
-	
-	/* Optional: station name the song came from */
-	if (stationFieldName && song->stationId && app) {
-		songStation = BarStateFindStationById(app, song->stationId);
-		if (songStation) {
-			const char *displayName = songStation->displayName ? songStation->displayName : songStation->name;
-			json_object_object_add(songObj, stationFieldName, BarJsonStringOrEmpty(displayName));
-		}
-	}
-	
-	return songObj;
-}
-
 /* Action capability: whether the action is fully implemented or known-unimplemented */
 typedef enum {
 	BAR_SOCKETIO_ACTION_DISPATCH,        /* fully implemented — route to dispatch table */
@@ -128,17 +88,19 @@ static const BarActionMapping_t actionMappings[] = {
 	{"song.bookmark",          BAR_KS_BOOKMARK,             BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_bookmark"},
 	{"song.explain",           BAR_KS_EXPLAIN,              BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
 	{"song.info",              BAR_KS_INFO,                 BAR_SOCKETIO_ACTION_DISPATCH,        NULL},
-	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG, BAR_SOCKETIO_ACTION_DISPATCH,       NULL},
+	{"song.createStationFrom", BAR_KS_CREATESTATIONFROMSONG, BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
 
-	/* Station */
-	{"station.change",        BAR_KS_SELECTSTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.create",        BAR_KS_CREATESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.delete",        BAR_KS_DELETESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.rename",        BAR_KS_RENAMESTATION,  BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.addMusic",      BAR_KS_ADDMUSIC,       BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.addGenre",      BAR_KS_GENRESTATION,   BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.addShared",     BAR_KS_ADDSHARED,      BAR_SOCKETIO_ACTION_DISPATCH, NULL},
-	{"station.selectQuickMix",BAR_KS_SELECTQUICKMIX, BAR_SOCKETIO_ACTION_DISPATCH, NULL},
+	/* Station: these map to terminal-prompt handlers, which the command
+	 * worker must never run (it would wait on stdin); clients use the
+	 * dedicated events (station.change, station.createFrom, ...) instead */
+	{"station.change",        BAR_KS_SELECTSTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.create",        BAR_KS_CREATESTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.delete",        BAR_KS_DELETESTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.rename",        BAR_KS_RENAMESTATION,  BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.addMusic",      BAR_KS_ADDMUSIC,       BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.addGenre",      BAR_KS_GENRESTATION,   BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.addShared",     BAR_KS_ADDSHARED,      BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
+	{"station.selectQuickMix",BAR_KS_SELECTQUICKMIX, BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED, "web.socket.not_implemented_interactive"},
 	/* station.mode, station.seeds, music.search, query.stations handled by dedicated events */
 
 	/* Query */
@@ -172,12 +134,22 @@ static BarKeyShortcutId_t BarSocketIoTranslateAction (const char *command) {
 	return m ? m->actionId : (BarKeyShortcutId_t)-1;
 }
 
-/* Emit a localized "not implemented" error for a mapped but unsupported action */
+/* Emit a localized "not implemented" error for a mapped but unsupported
+ * action to the client that asked (a BAR_WS_DEST_BROADCAST requester, as when
+ * called without a client, broadcasts) */
 static void BarSocketIoEmitNotImplemented (BarApp_t *app, const char *operation,
-                                           const char *reasonKey) {
+                                           const char *reasonKey, BarWsConnId_t requester) {
 	const char *message = BarL10nGet (app ? &app->l10n : NULL,
 	        reasonKey ? reasonKey : "web.socket.not_implemented");
-	BarSocketIoEmitError (app, operation, message);
+	BarSocketIoEmitErrorTo (app, requester, operation, message);
+}
+
+/* Tell the requester (or everyone, for BAR_WS_DEST_BROADCAST) that a request
+ * could not be served, with the localized text `key`: a client waiting for a
+ * reply must not be left to its own timeout */
+static void BarSocketIoEmitRequestRejected (BarApp_t *app, BarWsConnId_t requester,
+                                            const char *operation, const char *key) {
+	BarSocketIoEmitErrorTo (app, requester, operation, BarL10nGet (&app->l10n, key));
 }
 
 /* Parse Socket.IO protocol message format */
@@ -185,7 +157,6 @@ static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName,
                                           json_object **data) {
 	const char *ptr = message;
 	BarSocketIoType_t type;
-	json_object *arr, *event, *payload;
 	
 	if (!message || !eventName || !data) {
 		return SOCKETIO_ERROR;
@@ -203,20 +174,20 @@ static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName,
 	
 	/* For EVENT type (2), parse JSON array: ["eventName", {...}] */
 	if (type == SOCKETIO_EVENT) {
-		arr = json_tokener_parse(ptr);
+		json_object *arr = json_tokener_parse(ptr);
 		if (!arr || !json_object_is_type(arr, json_type_array)) {
 			if (arr) json_object_put(arr);
 			return SOCKETIO_ERROR;
 		}
 		
 		/* Get event name (first array element) */
-		event = json_object_array_get_idx(arr, 0);
+		json_object *event = json_object_array_get_idx(arr, 0);
 		if (event && json_object_is_type(event, json_type_string)) {
 			*eventName = strdup(json_object_get_string(event));
 		}
 		
 		/* Get data payload (second array element, optional) */
-		payload = json_object_array_get_idx(arr, 1);
+		json_object *payload = json_object_array_get_idx(arr, 1);
 		if (payload) {
 			*data = json_object_get(payload); /* Increment reference count */
 		}
@@ -233,8 +204,8 @@ static BarSocketIoType_t BarSocketIoParse(const char *message, char **eventName,
  * ============================================================================
  */
 
-/* Canonical event handler type: (app, data, wsi) */
-typedef void (*BarSocketIoEventFn)(BarApp_t *, json_object *, void *);
+/* Canonical event handler type: (app, data, requester) */
+typedef void (*BarSocketIoEventFn)(BarApp_t *, json_object *, BarWsConnId_t);
 
 typedef struct {
 	const char        *name;
@@ -242,11 +213,11 @@ typedef struct {
 } BarSocketIoEvent_t;
 
 /* Thin adapters for handlers whose native signatures differ from the canonical type */
-static void evtHandleQuery(BarApp_t *a, json_object *d, void *w) {
-	(void)d; BarSocketIoHandleQuery(a, w);
+static void evtHandleQuery(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)d; BarSocketIoHandleQuery(a, r);
 }
-static void evtHandleStationChange(BarApp_t *a, json_object *d, void *w) {
-	(void)w;
+static void evtHandleStationChange(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r;
 	if (!d) { return; }
 	if (json_object_is_type(d, json_type_string)) {
 		const char *id = json_object_get_string(d);
@@ -259,55 +230,55 @@ static void evtHandleStationChange(BarApp_t *a, json_object *d, void *w) {
 		}
 	}
 }
-static void evtEmitStations(BarApp_t *a, json_object *d, void *w) {
-	(void)d; (void)w;
+static void evtEmitStations(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)d; (void)r;
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Query stations received\n");
 	BarSocketIoEmitStations(a);
 }
-static void evtGetGenres(BarApp_t *a, json_object *d, void *w) {
-	(void)d; (void)w; BarSocketIoHandleGetGenres(a);
+static void evtGetGenres(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)d; BarSocketIoHandleGetGenres(a, r);
 }
-static void evtPingNoop(BarApp_t *a, json_object *d, void *w) {
-	(void)a; (void)d; (void)w; /* client keepalive; no response needed */
+static void evtPingNoop(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)a; (void)d; (void)r; /* client keepalive; no response needed */
 }
-static void evtSetQuickMix(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleSetQuickMix(a, d);
+static void evtSetQuickMix(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleSetQuickMix(a, d);
 }
-static void evtDeleteStation(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleDeleteStation(a, d);
+static void evtDeleteStation(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleDeleteStation(a, d);
 }
-static void evtCreateStationFrom(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleCreateStationFrom(a, d);
+static void evtCreateStationFrom(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleCreateStationFrom(a, d);
 }
-static void evtAddGenre(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleAddGenre(a, d);
+static void evtAddGenre(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleAddGenre(a, d);
 }
-static void evtSearchMusic(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleSearchMusic(a, d);
+static void evtSearchMusic(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	BarSocketIoHandleSearchMusic(a, d, r);
 }
-static void evtAddMusic(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleAddMusic(a, d);
+static void evtAddMusic(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleAddMusic(a, d);
 }
-static void evtAddShared(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleAddShared(a, d);
+static void evtAddShared(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleAddShared(a, d);
 }
-static void evtRenameStation(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleRenameStation(a, d);
+static void evtRenameStation(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleRenameStation(a, d);
 }
-static void evtGetStationModes(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleGetStationModes(a, d);
+static void evtGetStationModes(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	BarSocketIoHandleGetStationModes(a, d, r);
 }
-static void evtSetStationMode(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleSetStationMode(a, d);
+static void evtSetStationMode(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleSetStationMode(a, d);
 }
-static void evtGetStationInfo(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleGetStationInfo(a, d);
+static void evtGetStationInfo(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	BarSocketIoHandleGetStationInfo(a, d, r);
 }
-static void evtDeleteSeed(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleDeleteSeed(a, d);
+static void evtDeleteSeed(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleDeleteSeed(a, d);
 }
-static void evtDeleteFeedback(BarApp_t *a, json_object *d, void *w) {
-	(void)w; BarSocketIoHandleDeleteFeedback(a, d);
+static void evtDeleteFeedback(BarApp_t *a, json_object *d, BarWsConnId_t r) {
+	(void)r; BarSocketIoHandleDeleteFeedback(a, d);
 }
 
 static const BarSocketIoEvent_t eventHandlers[] = {
@@ -339,7 +310,7 @@ static const BarSocketIoEvent_t eventHandlers[] = {
 };
 
 /* Handle incoming Socket.IO message */
-void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
+void BarSocketIoHandleMessage (BarApp_t *app, const char *message, BarWsConnId_t requester) {
 	BarSocketIoType_t type;
 	char *eventName = NULL;
 	json_object *data = NULL;
@@ -359,7 +330,7 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 
 	if (type == SOCKETIO_CONNECT) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Client connected\n");
-		BarSocketIoHandleQuery(app, wsi);
+		BarSocketIoHandleQuery(app, requester);
 		goto cleanup;
 	}
 
@@ -371,15 +342,15 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	if (strcmp(eventName, "action") == 0) {
 		if (data && json_object_is_type(data, json_type_string)) {
 			const char *action = json_object_get_string(data);
-			BarSocketIoHandleAction(app, action, NULL, wsi);
+			BarSocketIoHandleAction(app, action, NULL, requester);
 		} else if (data && json_object_is_type(data, json_type_object)) {
 			json_object *actionObj;
 			if (json_object_object_get_ex(data, "action", &actionObj)) {
 				const char *action = json_object_get_string(actionObj);
-				if (action) { BarSocketIoHandleAction(app, action, data, wsi); }
+				if (action) { BarSocketIoHandleAction(app, action, data, requester); }
 			} else if (json_object_object_get_ex(data, "command", &actionObj)) {
 				const char *action = json_object_get_string(actionObj);
-				if (action) { BarSocketIoHandleAction(app, action, data, wsi); }
+				if (action) { BarSocketIoHandleAction(app, action, data, requester); }
 			}
 		}
 		goto cleanup;
@@ -388,7 +359,7 @@ void BarSocketIoHandleMessage(BarApp_t *app, const char *message, void *wsi) {
 	/* Table-driven dispatch for all other events */
 	for (const BarSocketIoEvent_t *e = eventHandlers; e->name != NULL; e++) {
 		if (strcmp(eventName, e->name) == 0) {
-			e->fn(app, data, wsi);
+			e->fn(app, data, requester);
 			goto cleanup;
 		}
 	}
@@ -399,38 +370,6 @@ cleanup:
 	if (data) {
 		json_object_put(data);
 	}
-}
-
-/* Global broadcast callback (set by WebSocket core) */
-static void (*g_broadcastCallback)(const char *message, size_t len) = NULL;
-
-/* Thread-local unicast target - each thread has its own value
- * WebSocket thread: Sets this when handling query actions
- * CLI thread: Always NULL (never set)
- * This eliminates race conditions from shared global variable */
-static pthread_key_t g_unicastTargetKey;
-static pthread_once_t g_unicastTargetKeyOnce = PTHREAD_ONCE_INIT;
-
-/* Initialize TLS key (called once) */
-static void init_unicast_target_key(void) {
-	pthread_key_create(&g_unicastTargetKey, NULL);
-}
-
-/* Set broadcast callback */
-void BarSocketIoSetBroadcastCallback(void (*callback)(const char *, size_t)) {
-	g_broadcastCallback = callback;
-}
-
-/* Set unicast target (NULL for broadcast mode) */
-void BarSocketIoSetUnicastTarget(void *wsi) {
-	pthread_once(&g_unicastTargetKeyOnce, init_unicast_target_key);
-	pthread_setspecific(g_unicastTargetKey, wsi);
-}
-
-/* Get unicast target (for websocket.c to check) */
-void *BarSocketIoGetUnicastTarget(void) {
-	pthread_once(&g_unicastTargetKeyOnce, init_unicast_target_key);
-	return pthread_getspecific(g_unicastTargetKey);
 }
 
 /* Format Socket.IO event message */
@@ -465,8 +404,10 @@ char *BarSocketIoFormatEventMessage(const char *event, json_object *data) {
 	return formatted;
 }
 
-/* Emit event to all connected clients */
-void BarSocketIoEmit(const char *event, json_object *data) {
+/* Queue event for `dest`; BAR_WS_KEY_NONE frames are ordered, keyed ones
+ * replace an unsent frame with the same key (see BarWebsocketSend) */
+static void BarSocketIoEmitKeyed (BarApp_t *app, BarWsConnId_t dest, BarWsKey_t key,
+                                  const char *event, json_object *data) {
 	char *message;
 	
 	if (!event) {
@@ -474,93 +415,61 @@ void BarSocketIoEmit(const char *event, json_object *data) {
 		return;
 	}
 	
-	/* Use separate debug flag for progress events */
-	bool isProgress = (strcmp(event, "progress") == 0);
-	logKind dbgFlag = isProgress ? DEBUG_WEBSOCKET_PROGRESS : DEBUG_WEBSOCKET;
-
-	log_write(dbgFlag, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Emit event='%s' (data=%p)\n", event, data);
 
 	message = BarSocketIoFormatEventMessage(event, data);
 	if (!message) {
-		log_write(dbgFlag, "Socket.IO: Failed to format message for event '%s'\n", event);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Failed to format message for event '%s'\n", event);
 		return;
 	}
 
-	log_write(dbgFlag, "Socket.IO: Formatted message (len=%zu): %.*s%s\n",
+	log_write(DEBUG_WEBSOCKET, "Socket.IO: Formatted message (len=%zu): %.*s%s\n",
 	           strlen(message), (int)LOG_MESSAGE_TRUNCATE_LEN, message, strlen(message) > LOG_MESSAGE_TRUNCATE_LEN ? "..." : "");
 
-	/* Broadcast to all clients if callback is set */
-	if (g_broadcastCallback) {
-		log_write(dbgFlag, "Socket.IO: Calling broadcast callback\n");
-		g_broadcastCallback(message, strlen(message));
-		log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Broadcast callback returned\n");
-	} else {
-		log_write(dbgFlag, "Socket.IO: Emit '%s' (no broadcast callback set)\n", event);
+	/* Takes ownership of message */
+	if (!BarWebsocketSend (app, dest, key, message)) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Emit '%s' not queued (no server or ingress full)\n", event);
 	}
-
-	free(message);
-	log_write(DEBUG_WEBSOCKET_PROGRESS, "Socket.IO: Emit complete for event '%s'\n", event);
 }
 
-/* Emit 'start' event (song started) */
-void BarSocketIoEmitStart(BarApp_t *app) {
-	if (!app) {
-		return;
-	}
-
-	json_object *data = BarSocketIoBuildStartPayload (app);
-	if (data == NULL) {
-		return;
-	}
-
-	BarSocketIoEmit("start", data);
-	json_object_put(data);
+/* Queue event for `dest` as an ordered (unkeyed) frame */
+void BarSocketIoEmit (BarApp_t *app, BarWsConnId_t dest, const char *event,
+                      json_object *data) {
+	BarSocketIoEmitKeyed (app, dest, BAR_WS_KEY_NONE, event, data);
 }
 
-/* Emit 'stop' event (song stopped) */
-void BarSocketIoEmitStop(BarApp_t *app) {
-	BarSocketIoEmit("stop", NULL);
-}
-
-/* Emit 'volume' event */
+/* Broadcast 'volume' event (latest value wins) */
 void BarSocketIoEmitVolume(BarApp_t *app, int volume) {
 	json_object *data = json_object_new_int(volume);
-	BarSocketIoEmit("volume", data);
+	BarSocketIoEmitKeyed (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_VOLUME, "volume", data);
 	json_object_put(data);
 }
 
-/* Emit 'progress' event */
-void BarSocketIoEmitProgress(BarApp_t *app, unsigned int elapsed,
-                              unsigned int duration) {
-	json_object *data;
-	float percentage = 0.0;
-	
-	if (duration > 0) {
-		percentage = (elapsed * 100.0) / duration;
-	}
-	
-	data = json_object_new_object();
-	json_object_object_add(data, "elapsed",    json_object_new_int(elapsed));
-	json_object_object_add(data, "duration",   json_object_new_int(duration));
-	json_object_object_add(data, "percentage", json_object_new_double(percentage));
-	
-	BarSocketIoEmit("progress", data);
-	json_object_put(data);
-}
-
-/* Emit 'stations' event (station list) */
-void BarSocketIoEmitStations(BarApp_t *app) {
+/* Emit 'stations' event (station list) to `dest`: a broadcast is a keyed
+ * snapshot, a reply to one client stays ordered */
+static void BarSocketIoEmitStationsTo (BarApp_t *app, BarWsConnId_t dest) {
 	if (!app) {
 		return;
 	}
 
 	json_object *stations = BarSocketIoBuildStationsPayload (app);
-	BarSocketIoEmit("stations", stations);
+	BarSocketIoEmitKeyed (app, dest, dest == BAR_WS_DEST_BROADCAST ?
+			BAR_WS_KEY_STATIONS : BAR_WS_KEY_NONE, "stations", stations);
 	json_object_put(stations);
+}
+
+/* Emit 'stations' event (station list) */
+void BarSocketIoEmitStations(BarApp_t *app) {
+	BarSocketIoEmitStationsTo (app, BAR_WS_DEST_BROADCAST);
 }
 
 /* Emit 'process' event (full state) */
 void BarSocketIoEmitProcess(BarApp_t *app) {
+	BarSocketIoEmitProcessTo (app, BAR_WS_DEST_BROADCAST);
+}
+
+/* Emit 'process' event (full state) to `dest` */
+void BarSocketIoEmitProcessTo (BarApp_t *app, BarWsConnId_t dest) {
 	if (!app) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess called with null app\n");
 		return;
@@ -570,16 +479,13 @@ void BarSocketIoEmitProcess(BarApp_t *app) {
 	if (data == NULL) {
 		return;
 	}
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess calling emit\n");
-	BarSocketIoEmit("process", data);
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess freeing data object\n");
+	BarSocketIoEmit(app, dest, "process", data);
 	json_object_put(data);
-	log_write(DEBUG_WEBSOCKET, "Socket.IO: EmitProcess complete\n");
 }
 
 /* --- Payload builders (snapshot app state; caller json_object_put()s the result) --- */
 
-struct json_object *BarSocketIoBuildStartPayload (BarApp_t *app) {
+struct json_object *BarSocketIoBuildStartPayload (const BarApp_t *app) {
 	if (!app) return NULL;
 
 	BarPlaybackSnapshot_t snap;
@@ -611,7 +517,7 @@ struct json_object *BarSocketIoBuildStartPayload (BarApp_t *app) {
 	return data;
 }
 
-struct json_object *BarSocketIoBuildStationsPayload (BarApp_t *app) {
+struct json_object *BarSocketIoBuildStationsPayload (const BarApp_t *app) {
 	if (!app) return json_object_new_array ();
 
 	BarStationSnapshotList_t snap;
@@ -644,6 +550,9 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 	BarStateSnapshotPlayback (app, &pbSnap);
 
 	struct json_object *data = json_object_new_object ();
+	/* Clients compare its major version with their own (VERSION is "dev" for
+	 * local builds; the release workflow sets it from the tag) */
+	json_object_object_add (data, "version", json_object_new_string (VERSION));
 	json_object_object_add (data, "playing", json_object_new_boolean (pbSnap.hasSong));
 
 	bool paused = BarStateGetPlayerPaused (app);
@@ -699,17 +608,8 @@ struct json_object *BarSocketIoBuildProcessPayload (BarApp_t *app) {
 	return data;
 }
 
-/* Emit 'process' event to specific client only (unicast) */
-void BarSocketIoEmitProcessUnicast(BarApp_t *app, void *wsi) {
-	/* Set unicast target before emitting */
-	BarSocketIoSetUnicastTarget(wsi);
-	BarSocketIoEmitProcess(app);
-	/* Clear unicast target to return to broadcast mode */
-	BarSocketIoSetUnicastTarget(NULL);
-}
-
-/* Emit 'song.explanation' event (explanation text) */
-void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
+/* Emit 'song.explanation' event (explanation text) to `dest` */
+void BarSocketIoEmitExplanationTo (BarApp_t *app, BarWsConnId_t dest, const char *explanation) {
 	json_object *data;
 	char *explanation_copy;
 	
@@ -726,17 +626,14 @@ void BarSocketIoEmitExplanation(BarApp_t *app, const char *explanation) {
 	data = json_object_new_object();
 	json_object_object_add(data, "explanation", BarJsonStringOrEmpty(explanation_copy));
 	
-	BarSocketIoEmit("song.explanation", data);
+	BarSocketIoEmit(app, dest, "song.explanation", data);
 	json_object_put(data);
 	free(explanation_copy);
 }
 
-/* Emit 'error' event (error notification) */
-void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message) {
-	BarSocketIoEmitErrorEx(app, operation, message, NULL);
-}
-
-void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId) {
+/* Emit 'error' event (error notification) to `dest` */
+static void BarSocketIoEmitErrorDest (BarApp_t *app, BarWsConnId_t dest,
+		const char *operation, const char *message, const char *stationId) {
 	json_object *data;
 	const char *friendlyMessage;
 	const BarL10nContext_t *l10n = app ? &app->l10n : NULL;
@@ -755,24 +652,37 @@ void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *me
 		json_object_object_add(data, "stationId", BarJsonStringOrEmpty(stationId));
 	}
 	
-	BarSocketIoEmit("error", data);
+	BarSocketIoEmit(app, dest, "error", data);
 	json_object_put(data);
 }
 
+/* Emit 'error' event (error notification) */
+void BarSocketIoEmitError(BarApp_t *app, const char *operation, const char *message) {
+	BarSocketIoEmitErrorEx(app, operation, message, NULL);
+}
+
+void BarSocketIoEmitErrorTo (BarApp_t *app, BarWsConnId_t dest, const char *operation, const char *message) {
+	BarSocketIoEmitErrorDest (app, dest, operation, message, NULL);
+}
+
+void BarSocketIoEmitErrorEx(BarApp_t *app, const char *operation, const char *message, const char *stationId) {
+	BarSocketIoEmitErrorDest (app, BAR_WS_DEST_BROADCAST, operation, message, stationId);
+}
+
 /* Emit 'pandora.disconnected' event (reason: "user", "idle_timeout", "connection_lost", etc.) */
-void BarSocketIoEmitPandoraDisconnected(const char *reason) {
+void BarSocketIoEmitPandoraDisconnected (BarApp_t *app, const char *reason) {
 	json_object *data;
 	if (!reason) {
 		reason = "unknown";
 	}
 	data = json_object_new_object();
 	json_object_object_add(data, "reason", BarJsonStringOrEmpty(reason));
-	BarSocketIoEmit("pandora.disconnected", data);
+	BarSocketIoEmit(app, BAR_WS_DEST_BROADCAST, "pandora.disconnected", data);
 	json_object_put(data);
 }
 
 /* If Piano request failed with auth/connection error, notify clients (reactive disconnect) */
-static void BarSocketIoOnPandoraRequestFailed(PianoReturn_t pRet) {
+static void BarSocketIoOnPandoraRequestFailed(BarApp_t *app, PianoReturn_t pRet) {
 	switch (pRet) {
 	case PIANO_RET_INVALID_LOGIN:
 	case PIANO_RET_P_INVALID_AUTH_TOKEN:
@@ -780,17 +690,20 @@ static void BarSocketIoOnPandoraRequestFailed(PianoReturn_t pRet) {
 	case PIANO_RET_P_USER_NOT_AUTHORIZED:
 	case PIANO_RET_P_DEVICE_NOT_FOUND:
 	case PIANO_RET_P_INSUFFICIENT_CONNECTIVITY:
-		BarSocketIoEmitPandoraDisconnected("connection_lost");
+		BarSocketIoEmitPandoraDisconnected(app, "connection_lost");
 		break;
 	default:
 		break;
 	}
 }
 
-/* Wrapper: call Piano API with logging; on failure, log + BarSocketIoOnPandoraRequestFailed + BarSocketIoEmitError. Messages derived from actionName. */
-static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
+/* Call Piano API with logging; on failure, log + BarSocketIoOnPandoraRequestFailed
+ * + an error event to `errorDest` (BAR_WS_DEST_BROADCAST broadcasts). Messages
+ * derived from actionName. Reply-style handlers pass their requester so a failed
+ * lookup does not fail another client's wait for the same operation. */
+static bool BarSocketIoPianoCallLoggedTo(BarApp_t *app, PianoRequestType_t type,
 	void *data, const char *actionName,
-	const char *operation,
+	const char *operation, BarWsConnId_t errorDest,
 	PianoReturn_t *pRet, CURLcode *wRet) {
 	bool ok = BarUiPianoCallLogged(app, type, data, actionName, pRet, wRet);
 	if (ok) {
@@ -798,61 +711,65 @@ static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
 		return true;
 	}
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Failed: %s\n", actionName);
-	BarSocketIoOnPandoraRequestFailed(*pRet);
+	BarSocketIoOnPandoraRequestFailed(app, *pRet);
 	char buf[BAR_BUF_SMALL];
 	snprintf(buf, sizeof(buf), "Failed: %s", actionName);
-	BarSocketIoEmitError(app, operation, buf);
+	BarSocketIoEmitErrorTo(app, errorDest, operation, buf);
 	return false;
 }
 
-/* Emit 'playState' event (paused/resumed state) */
-void BarSocketIoEmitPlayState(BarApp_t *app) {
-	if (!app) {
-		return;
-	}
-	
-	json_object *data = json_object_new_object();
-	
-	pthread_mutex_lock(&app->player.lock);
-	json_object_object_add(data, "paused", json_object_new_boolean(app->player.doPause));
-	pthread_mutex_unlock(&app->player.lock);
-	
-	BarSocketIoEmit("playState", data);
-	json_object_put(data);
+/* Wrapper for state-changing actions: the error is broadcast */
+static bool BarSocketIoPianoCallLogged(BarApp_t *app, PianoRequestType_t type,
+	void *data, const char *actionName,
+	const char *operation,
+	PianoReturn_t *pRet, CURLcode *wRet) {
+	return BarSocketIoPianoCallLoggedTo(app, type, data, actionName, operation,
+			BAR_WS_DEST_BROADCAST, pRet, wRet);
 }
 
-/* Emit 'query.upcoming.result' event (upcoming songs list) */
-void BarSocketIoEmitUpcoming(BarApp_t *app, PianoSong_t *firstSong, int maxSongs) {
-	json_object *songs, *songObj;
-	PianoSong_t *song;
-	int count = 0;
-	
-	if (!app) {
-		return;
+/* Emit 'query.upcoming.result' event (up to maxSongs queued songs) to `dest`.
+ * The queue is copied under the state lock (BarStateSnapshotUpcoming), so no
+ * song pointer is held while another thread truncates or drains the queue.
+ * Returns false when nothing is queued after the playing song. */
+bool BarSocketIoEmitUpcomingTo (BarApp_t *app, BarWsConnId_t dest, int maxSongs) {
+	BarSongSnapshotList_t snap;
+
+	if (!app || maxSongs <= 0) {
+		return false;
 	}
-	
-	songs = json_object_new_array();
-	
-	/* Iterate through upcoming songs (limited to maxSongs) */
-	song = firstSong;
-	while (song && count < maxSongs) {
-		/* Create song JSON without trackToken, but with stationName */
-		songObj = BarSocketIoCreateSongJson(app, song, false, "stationName");
-		if (songObj) {
-			json_object_array_add(songs, songObj);
+	if (!BarStateSnapshotUpcoming (app, (size_t) maxSongs, &snap)) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: Upcoming snapshot failed\n");
+		return true;
+	}
+	if (snap.count == 0) {
+		return false;
+	}
+
+	json_object *songs = json_object_new_array();
+	for (size_t i = 0; i < snap.count; i++) {
+		const BarSongSnapshot_t *song = &snap.items[i];
+		json_object *songObj = json_object_new_object();
+		json_object_object_add(songObj, "title",    BarJsonStringOrEmpty(song->title));
+		json_object_object_add(songObj, "artist",   BarJsonStringOrEmpty(song->artist));
+		json_object_object_add(songObj, "album",    BarJsonStringOrEmpty(song->album));
+		json_object_object_add(songObj, "coverArt", BarJsonStringOrEmpty(song->coverArt));
+		json_object_object_add(songObj, "rating",   json_object_new_int(song->rating));
+		json_object_object_add(songObj, "duration", json_object_new_int((int) song->duration));
+		if (song->stationName) {
+			json_object_object_add(songObj, "stationName", BarJsonStringOrEmpty(song->stationName));
 		}
-		
-		song = (PianoSong_t *)song->head.next;
-		count++;
+		json_object_array_add(songs, songObj);
 	}
-	
-	BarSocketIoEmit("query.upcoming.result", songs);
+	BarStateFreeSongSnapshot (&snap);
+
+	BarSocketIoEmit(app, dest, "query.upcoming.result", songs);
 	json_object_put(songs);
+	return true;
 }
 
-/* Emit 'genres' event (genre categories and stations) */
-void BarSocketIoEmitGenres(BarApp_t *app) {
-	json_object *data, *categories, *categoryObj, *genresArray, *genreObj;
+/* Emit 'genres' event (genre categories and stations) to `dest` */
+void BarSocketIoEmitGenres(BarApp_t *app, BarWsConnId_t dest) {
+	json_object *data, *categories, *genreObj;
 	PianoGenreCategory_t *category;
 	PianoGenre_t *genre;
 	
@@ -866,12 +783,12 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 	/* Iterate through genre categories */
 	category = app->ph.genreStations;
 	while (category != NULL) {
-		categoryObj = json_object_new_object();
+		json_object *categoryObj = json_object_new_object();
 		
 		json_object_object_add(categoryObj, "name", BarJsonStringOrEmpty(category->name));
 		
 		/* Create genres array for this category */
-		genresArray = json_object_new_array();
+		json_object *genresArray = json_object_new_array();
 		genre = category->genres;
 		
 		while (genre != NULL) {
@@ -893,12 +810,12 @@ void BarSocketIoEmitGenres(BarApp_t *app) {
 	
 	json_object_object_add(data, "categories", categories);
 	
-	BarSocketIoEmit("genres", data);
+	BarSocketIoEmit(app, dest, "genres", data);
 	json_object_put(data);
 }
 
 /* Handle 'station.getGenres' event from client */
-void BarSocketIoHandleGetGenres(BarApp_t *app) {
+void BarSocketIoHandleGetGenres(BarApp_t *app, BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	
@@ -908,17 +825,23 @@ void BarSocketIoHandleGetGenres(BarApp_t *app) {
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Get genres request\n");
 	
+	/* The genre list lives in app->ph and is only replaced or freed under
+	 * pianoHttpMutex (PianoResponse, session reset): hold it while reading. */
+	pthread_mutex_lock(&app->pianoHttpMutex);
+
 	/* Fetch genre stations if not already cached */
 	if (app->ph.genreStations == NULL) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Fetching genre stations from API\n");
-		if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
-				"Receiving genre stations", "station.getGenres", &pRet, &wRet)) {
+		if (!BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_GET_GENRE_STATIONS, NULL,
+				"Receiving genre stations", "station.getGenres", requester, &pRet, &wRet)) {
+			pthread_mutex_unlock(&app->pianoHttpMutex);
 			return;
 		}
 	}
 	
 	/* Emit genres to client */
-	BarSocketIoEmitGenres(app);
+	BarSocketIoEmitGenres(app, requester);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
 /* Handle 'station.addGenre' event from client */
@@ -1038,9 +961,12 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 		return;
 	}
 	
-	/* Find the station */
+	/* Resolve and use the station inside pianoHttpMutex: stations are only
+	 * freed (delete, session reset) while it is held. */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - station not found\n");
 		return;
 	}
@@ -1049,6 +975,7 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	
 	/* Check if station is shared (QuickMix) and transform if needed */
 	if (!BarWsTransformIfShared(app, station)) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: addMusic - failed to transform\n");
 		BarSocketIoEmitError(app, "station.addMusic", "Failed to transform station");
 		return;
@@ -1061,6 +988,7 @@ void BarSocketIoHandleAddMusic(BarApp_t *app, json_object *data) {
 	/* Add music to station */
 	BarSocketIoPianoCallLogged(app, PIANO_REQUEST_ADD_SEED, &reqData,
 			"Adding music to station", "station.addMusic", &pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
 /* Handle 'station.rename' event from client */
@@ -1092,9 +1020,11 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 		return;
 	}
 	
-	/* Find the station */
+	/* Resolve and use the station inside pianoHttpMutex */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - station not found\n");
 		return;
 	}
@@ -1103,6 +1033,7 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	
 	/* Check if station is shared and transform if needed */
 	if (!BarWsTransformIfShared(app, station)) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: renameStation - failed to transform\n");
 		BarSocketIoEmitError(app, "station.rename", "Failed to transform station");
 		return;
@@ -1113,15 +1044,21 @@ void BarSocketIoHandleRenameStation(BarApp_t *app, json_object *data) {
 	reqData.newName = (char *)newName;
 	
 	/* Rename station */
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_RENAME_STATION, &reqData,
-			"Renaming station", "station.rename", &pRet, &wRet)) {
+	const bool renamed = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_RENAME_STATION,
+			&reqData, "Renaming station", "station.rename", &pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+	if (renamed) {
 		BarUpdateStationDisplayNames(app);
 		BarSocketIoEmitStations(app);
 	}
 }
 
+static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData,
+                                        BarWsConnId_t requester);
+
 /* Handle 'station.getModes' event - fetch available modes for a station */
-void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
+void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data,
+                                      BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataGetStationModes_t reqData;
@@ -1129,49 +1066,69 @@ void BarSocketIoHandleGetStationModes(BarApp_t *app, json_object *data) {
 	const char *stationId;
 	PianoStation_t *station;
 	
-	if (!app || !data) {
+	if (!app) {
+		return;
+	}
+	if (!data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid parameters\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	/* Extract stationId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - missing stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	stationId = json_object_get_string(stationIdObj);
 	if (!stationId) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - invalid stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
-	/* Find the station */
+	/* Resolve and use the station inside pianoHttpMutex */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - station not found\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_not_found");
 		return;
 	}
 	
 	if (station->isQuickMix) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationModes - QuickMix not supported\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationModes",
+				"web.socket.station_modes_quickmix");
 		return;
 	}
 	
-	/* Fetch station modes */
+	/* Fetch station modes (the result is owned by reqData) */
 	memset(&reqData, 0, sizeof(reqData));
 	reqData.station = station;
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_MODES, &reqData,
-			"Fetching station modes", "station.getStationModes", &pRet, &wRet)) {
-		BarSocketIoEmitStationModes(app, &reqData);
+	const bool fetched = BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_GET_STATION_MODES,
+			&reqData, "Fetching station modes", "station.getStationModes", requester,
+			&pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+	if (fetched) {
+		BarSocketIoEmitStationModes(app, &reqData, requester);
 	}
 	
 	PianoDestroyStationMode(reqData.retModes);
 }
 
 /* Emit station modes to client */
-void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData) {
-	json_object *data, *modesArray, *modeObj;
+static void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_t *reqData,
+                                        BarWsConnId_t requester) {
+	json_object *data, *modesArray;
 	const PianoStationMode_t *mode;
 	int i = 0;
 	
@@ -1184,7 +1141,7 @@ void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_
 	
 	mode = reqData->retModes;
 	PianoListForeachP(mode) {
-		modeObj = json_object_new_object();
+		json_object *modeObj = json_object_new_object();
 		json_object_object_add(modeObj, "id",          json_object_new_int(i));
 		json_object_object_add(modeObj, "name",        BarJsonStringOrEmpty (mode->name));
 		json_object_object_add(modeObj, "description", BarJsonStringOrEmpty (mode->description));
@@ -1195,7 +1152,7 @@ void BarSocketIoEmitStationModes(BarApp_t *app, PianoRequestDataGetStationModes_
 	
 	json_object_object_add(data, "modes", modesArray);
 	
-	BarSocketIoEmit("stationModes", data);
+	BarSocketIoEmit(app, requester, "stationModes", data);
 	json_object_put(data);
 }
 
@@ -1224,9 +1181,11 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	stationId = json_object_get_string(stationIdObj);
 	modeId = json_object_get_int(modeIdObj);
 	
-	/* Find the station */
+	/* Resolve and use the station inside pianoHttpMutex */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: setStationMode - station not found\n");
 		return;
 	}
@@ -1239,10 +1198,16 @@ void BarSocketIoHandleSetStationMode(BarApp_t *app, json_object *data) {
 	
 	BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SET_STATION_MODE, &reqData,
 			"Setting station mode", "station.setStationMode", &pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
 }
 
+static void BarSocketIoEmitStationInfo(BarApp_t *app, const char *stationId,
+                                       PianoRequestDataGetStationInfo_t *reqData,
+                                       BarWsConnId_t requester);
+
 /* Handle 'station.getInfo' event - fetch station info for seed/feedback management */
-void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
+void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data,
+                                     BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataGetStationInfo_t reqData;
@@ -1250,51 +1215,77 @@ void BarSocketIoHandleGetStationInfo(BarApp_t *app, json_object *data) {
 	const char *stationId;
 	PianoStation_t *station;
 	
-	if (!app || !data) {
+	if (!app) {
+		return;
+	}
+	if (!data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid parameters\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	/* Extract stationId */
 	if (!json_object_object_get_ex(data, "stationId", &stationIdObj)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - missing stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
 	stationId = json_object_get_string(stationIdObj);
-	
-	/* Find the station */
-	station = BarStateFindStationById(app, stationId);
-	if (!station) {
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
+	if (!stationId) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - invalid stationId\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_id_missing");
 		return;
 	}
 	
-	/* Fetch station info */
+	/* Resolve and use the station inside pianoHttpMutex */
+	pthread_mutex_lock(&app->pianoHttpMutex);
+	station = BarStateFindStationById(app, stationId);
+	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: getStationInfo - station not found\n");
+		BarSocketIoEmitRequestRejected(app, requester, "station.getStationInfo",
+				"web.socket.station_not_found");
+		return;
+	}
+	
+	/* Fetch station info (the result is owned by reqData) */
 	memset(&reqData, 0, sizeof(reqData));
 	reqData.station = station;
 	
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &reqData,
-			"Fetching station info", "station.getStationInfo", &pRet, &wRet)) {
-		BarSocketIoEmitStationInfo(app, &reqData);
+	const bool fetched = BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_GET_STATION_INFO,
+			&reqData, "Fetching station info", "station.getStationInfo", requester,
+			&pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+	if (fetched) {
+		BarSocketIoEmitStationInfo(app, stationId, &reqData, requester);
 	}
 	
 	PianoDestroyStationInfo(&reqData.info);
 }
 
 /* Emit station info (seeds and feedback) to client */
-void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t *reqData) {
+static void BarSocketIoEmitStationInfo(BarApp_t *app, const char *stationId,
+                                       PianoRequestDataGetStationInfo_t *reqData,
+                                       BarWsConnId_t requester) {
 	json_object *data, *artistsArray, *songsArray, *stationsArray, *feedbackArray;
 	json_object *itemObj;
-	PianoArtist_t *artist;
+	const PianoArtist_t *artist;
 	PianoSong_t *song;
-	PianoStation_t *station;
+	const PianoStation_t *station;
 	
 	if (!app || !reqData) {
 		return;
 	}
 	
 	data = json_object_new_object();
+	
+	/* Which station this describes: replies go to the requester only, but a
+	 * client with several requests in flight still needs to match them */
+	json_object_object_add(data, "stationId", BarJsonStringOrEmpty (stationId));
 	
 	/* Artist seeds */
 	artistsArray = json_object_new_array();
@@ -1343,8 +1334,20 @@ void BarSocketIoEmitStationInfo(BarApp_t *app, PianoRequestDataGetStationInfo_t 
 	}
 	json_object_object_add(data, "feedback", feedbackArray);
 	
-	BarSocketIoEmit("stationInfo", data);
+	/* A frame over WS_FRAME_MAX_BYTES is dropped by the outbox, which would
+	 * leave the requester waiting for a reply that never comes: tell it. */
+	char *message = BarSocketIoFormatEventMessage("stationInfo", data);
 	json_object_put(data);
+	if (message && strlen(message) > WS_FRAME_MAX_BYTES) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: stationInfo is %zu bytes, over the %d byte frame limit\n",
+		           strlen(message), WS_FRAME_MAX_BYTES);
+		free(message);
+		BarSocketIoEmitErrorTo(app, requester, "station.getStationInfo",
+				BarL10nGet(&app->l10n, "web.socket.response_too_large"));
+		return;
+	}
+	/* Takes ownership of message (NULL if formatting failed: not sent) */
+	BarWebsocketSend(app, requester, BAR_WS_KEY_NONE, message);
 }
 
 /* Handle 'station.deleteSeed' event */
@@ -1374,9 +1377,18 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	seedType = json_object_get_string(seedTypeObj);
 	stationId = json_object_get_string(stationIdObj);
 	
-	/* Find the station */
+	/* A JSON null value is present but has no string form */
+	if (!seedId || !seedType || !stationId) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - invalid seedId, seedType or stationId\n");
+		return;
+	}
+	
+	/* Resolve and use the station inside pianoHttpMutex; the seeds fetched
+	 * below are owned by infoReqData and need no lock. */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteSeed - station not found\n");
 		return;
 	}
@@ -1385,8 +1397,10 @@ void BarSocketIoHandleDeleteSeed(BarApp_t *app, json_object *data) {
 	memset(&infoReqData, 0, sizeof(infoReqData));
 	infoReqData.station = station;
 	
-	if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData,
-			"Fetching station info", "station.deleteSeed", &pRet, &wRet)) {
+	const bool fetched = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO,
+			&infoReqData, "Fetching station info", "station.deleteSeed", &pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+	if (!fetched) {
 		return;
 	}
 	
@@ -1462,9 +1476,18 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	feedbackId = json_object_get_string(feedbackIdObj);
 	stationId = json_object_get_string(stationIdObj);
 	
-	/* Find the station */
+	/* A JSON null value is present but has no string form */
+	if (!feedbackId || !stationId) {
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - invalid feedbackId or stationId\n");
+		return;
+	}
+	
+	/* Resolve and use the station inside pianoHttpMutex; the feedback
+	 * fetched below is owned by infoReqData and needs no lock. */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: deleteFeedback - station not found\n");
 		return;
 	}
@@ -1473,8 +1496,10 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 	memset(&infoReqData, 0, sizeof(infoReqData));
 	infoReqData.station = station;
 	
-	if (!BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO, &infoReqData,
-			"Fetching station info", "station.deleteFeedback", &pRet, &wRet)) {
+	const bool fetched = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_GET_STATION_INFO,
+			&infoReqData, "Fetching station info", "station.deleteFeedback", &pRet, &wRet);
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+	if (!fetched) {
 		return;
 	}
 	
@@ -1497,7 +1522,8 @@ void BarSocketIoHandleDeleteFeedback(BarApp_t *app, json_object *data) {
 }
 
 /* Emit 'searchResults' event (music search results) */
-void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResult) {
+static void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResult,
+                                         BarWsConnId_t requester) {
 	json_object *data, *categories, *categoryObj, *resultsArray, *resultObj;
 	PianoArtist_t *artist;
 	PianoSong_t *song;
@@ -1558,33 +1584,46 @@ void BarSocketIoEmitSearchResults(BarApp_t *app, PianoSearchResult_t *searchResu
 	
 	json_object_object_add(data, "categories", categories);
 	
-	BarSocketIoEmit("searchResults", data);
+	BarSocketIoEmit(app, requester, "searchResults", data);
 	json_object_put(data);
 }
 
+static void BarSocketIoEmitSearchResults(BarApp_t *app, struct PianoSearchResult *searchResult,
+                                         BarWsConnId_t requester);
+
 /* Handle 'music.search' event from client */
-void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
+void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data,
+                                  BarWsConnId_t requester) {
 	PianoReturn_t pRet;
 	CURLcode wRet;
 	PianoRequestDataSearch_t reqData;
 	json_object *queryObj;
 	const char *query;
 	
-	if (!app || !data) {
+	if (!app) {
+		return;
+	}
+	if (!data) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid parameters\n");
+		BarSocketIoEmitRequestRejected(app, requester, "music.search",
+				"web.socket.invalid_search");
 		return;
 	}
 	
 	/* Extract query from data */
 	if (!json_object_object_get_ex(data, "query", &queryObj)) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - missing query\n");
+		BarSocketIoEmitRequestRejected(app, requester, "music.search",
+				"web.socket.invalid_search");
 		return;
 	}
 	
 	query = json_object_get_string(queryObj);
 	
-	if (!query) {
+	if (!query || !*query) {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: music.search - invalid query\n");
+		BarSocketIoEmitRequestRejected(app, requester, "music.search",
+				"web.socket.invalid_search");
 		return;
 	}
 	
@@ -1595,15 +1634,16 @@ void BarSocketIoHandleSearchMusic(BarApp_t *app, json_object *data) {
 	memset(&reqData.searchResult, 0, sizeof(reqData.searchResult));
 	
 	/* Perform the search */
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_SEARCH, &reqData,
-			"Searching", "music.search", &pRet, &wRet)) {
-		BarSocketIoEmitSearchResults(app, &reqData.searchResult);
+	if (BarSocketIoPianoCallLoggedTo(app, PIANO_REQUEST_SEARCH, &reqData,
+			"Searching", "music.search", requester, &pRet, &wRet)) {
+		BarSocketIoEmitSearchResults(app, &reqData.searchResult, requester);
 		PianoDestroySearchResult(&reqData.searchResult);
 	}
 }
 
 /* Handle 'action' event from client */
-void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *data, void *wsi) {
+void BarSocketIoHandleAction (BarApp_t *app, const char *action, json_object *data,
+                              BarWsConnId_t requester) {
 	BarKeyShortcutId_t actionId;
 	
 	if (!app || !action || !app->wsContext) {
@@ -1674,7 +1714,7 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 
 	if (mapping->capability == BAR_SOCKETIO_ACTION_NOT_IMPLEMENTED) {
 		log_write (DEBUG_WEBSOCKET, "Socket.IO: Action '%s' is not implemented\n", action);
-		BarSocketIoEmitNotImplemented (app, action, mapping->reasonKey);
+		BarSocketIoEmitNotImplemented (app, action, mapping->reasonKey, requester);
 		return;
 	}
 
@@ -1691,6 +1731,19 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 		context |= BAR_DC_PANDORA_DISCONNECTED;
 	}
 	
+	/* When Pandora is disconnected, treat playback.play as reconnect so clients can always send "play" */
+	if (actionId == BAR_KS_PLAY && (context & BAR_DC_PANDORA_DISCONNECTED)) {
+		actionId = BAR_KS_PANDORA_RECONNECT;
+		log_write(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
+	}
+
+	/* Actions that use the selection resolve it, and run, inside
+	 * pianoHttpMutex: stations and songs are only freed while it is held. */
+	const bool hold = BarUiDispatchHoldsPianoLock (actionId);
+	if (hold) {
+		BarUiPianoHold (app);
+	}
+	
 	/* Add station context if station is selected */
 	PianoStation_t *currentStation = BarStateGetCurrentStation(app);
 	if (currentStation) {
@@ -1701,12 +1754,6 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 	PianoSong_t *currentSong = BarStateGetPlaylist(app);
 	if (currentSong) {
 		context |= BAR_DC_SONG;
-	}
-	
-	/* When Pandora is disconnected, treat playback.play as reconnect so clients can always send "play" */
-	if (actionId == BAR_KS_PLAY && (context & BAR_DC_PANDORA_DISCONNECTED)) {
-		actionId = BAR_KS_PANDORA_RECONNECT;
-		log_write(DEBUG_WEBSOCKET, "Socket.IO: playback.play → pandora-reconnect (Pandora disconnected)\n");
 	}
 	
 	/* Check if action can be executed in current context */
@@ -1725,38 +1772,42 @@ void BarSocketIoHandleAction(BarApp_t *app, const char *action, json_object *dat
 			errorMsg = "Action cannot be performed in current context";
 		}
 		
+		if (hold) {
+			BarUiPianoRelease (app);
+		}
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Action '%s' failed: %s\n", action, errorMsg);
 		BarSocketIoEmitError(app, action, errorMsg);
 		return;
 	}
 
-	/* For query actions (explain, upcoming), set unicast target so response
-	 * only goes to the requesting client, not all clients */
-	bool useUnicast = (actionId == BAR_KS_EXPLAIN || actionId == BAR_KS_UPCOMING);
-	if (useUnicast && wsi) {
-		BarSocketIoSetUnicastTarget(wsi);
+	/* Query actions (explain, upcoming) reply to the requesting client only.
+	 * The context check above is the one BarUiDispatchById would make.
+	 * Received messages always carry a requester; without one (direct
+	 * callers) the terminal callbacks run as before. */
+	if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_EXPLAIN) {
+		BarUiActExplainTo (app, currentStation, currentSong, requester);
+	} else if (requester != BAR_WS_DEST_BROADCAST && actionId == BAR_KS_UPCOMING) {
+		BarUiActPrintUpcomingTo (app, requester);
+	} else {
+		/* Execute action directly by ID on the command worker
+		 * 
+		 * THREAD SAFETY: This call may trigger state lock acquisition via:
+		 * - BarStateGet* / BarStateSet* use stateRwlock (BarStateUsesRwlock)
+		 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
+		 * - BarUiPianoCall (Pandora HTTP) serializes on app->pianoHttpMutex
+		 * 
+		 * Lock ordering: pianoHttpMutex → stateRwlock; stateRwlock and
+		 * player.lock are never nested. See src/THREAD_SAFETY.md for details */
+		BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
 	}
-	
-	/* Execute action directly by ID in WebSocket thread
-	 * 
-	 * THREAD SAFETY: This call may trigger state lock acquisition via:
-	 * - BarStateGet* / BarStateSet* use stateRwlock in web and both (BarStateUsesRwlock)
-	 * - Action callbacks may acquire player.lock (e.g., BarUiActPlay)
-	 * - BarUiPianoCall (Pandora HTTP) serializes on app->pianoHttpMutex
-	 * 
-	 * Lock ordering is safe: stateRwlock → player.lock (if both needed)
-	 * See src/THREAD_SAFETY.md for details */
-	BarUiDispatchById(app, actionId, currentStation, currentSong, false, context);
-	
-	/* Clear unicast target after query actions */
-	if (useUnicast) {
-		BarSocketIoSetUnicastTarget(NULL);
+	if (hold) {
+		BarUiPianoRelease (app);
 	}
 	
 	/* Note: Play/pause/toggle broadcast completed snapshots in ui_act.c.
 	 * song.love / song.ban emit a full `process` (not `start`) via BarWsBroadcastProcess
 	 * in BarUiActLoveSong/BarUiActBanSong after a successful PIANO_REQUEST_RATE_SONG —
-	 * do not add BarSocketIoEmitStart here (duplicate). */
+	 * do not add a `start` broadcast here (duplicate). */
 }
 
 /* Handle 'changeStation' event from client */
@@ -1769,8 +1820,7 @@ void BarSocketIoHandleChangeStation(BarApp_t *app, const char *stationId) {
 	
 	if (BarUiSwitchStationById(app, stationId)) {
 		/* Clear saved station - user made explicit choice */
-		free(app->lastStationId);
-		app->lastStationId = NULL;
+		free(BarStateTakeLastStationId(app));
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station switch initiated\n");
 	} else {
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
@@ -1872,10 +1922,14 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Delete station request: %s\n", stationId);
 	
-	/* Find station by ID */
+	/* Resolve the station, delete it, and find the QuickMix station inside
+	 * pianoHttpMutex: the station list is only changed or freed while it is
+	 * held. The switch happens by ID after the mutex is released. */
+	pthread_mutex_lock(&app->pianoHttpMutex);
 	station = BarStateFindStationById(app, stationId);
 	
 	if (!station) {
+		pthread_mutex_unlock(&app->pianoHttpMutex);
 		log_write(DEBUG_WEBSOCKET, "Socket.IO: Station not found: %s\n", stationId);
 		return;
 	}
@@ -1885,31 +1939,32 @@ void BarSocketIoHandleDeleteStation(BarApp_t *app, json_object *data) {
 	/* Check if this is the currently playing station */
 	wasCurrentStation = (station == BarStateGetCurrentStation(app));
 	
-	/* Delete the station */
-	if (BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_STATION, station,
-			"Deleting station", "station.delete", &pRet, &wRet)) {
+	/* Delete the station; `station` is freed on success */
+	const bool deleted = BarSocketIoPianoCallLogged(app, PIANO_REQUEST_DELETE_STATION,
+			station, "Deleting station", "station.delete", &pRet, &wRet);
+	char *quickMixId = NULL;
+	if (deleted && wasCurrentStation) {
+		const PianoStation_t *curStation = BarStateGetStationList(app);
+		PianoListForeachP (curStation) {
+			if (curStation->isQuickMix && curStation->id != NULL) {
+				quickMixId = strdup(curStation->id);
+				break;
+			}
+		}
+	}
+	pthread_mutex_unlock(&app->pianoHttpMutex);
+
+	if (deleted) {
 		if (wasCurrentStation) {
-			PianoStation_t *quickMixStation = NULL;
-			PianoStation_t *curStation = BarStateGetStationList(app);
-			
-			while (curStation != NULL) {
-				if (curStation->isQuickMix) {
-					quickMixStation = curStation;
-					break;
-				}
-				curStation = (PianoStation_t *)curStation->head.next;
-			}
-			
-			if (quickMixStation) {
+			/* The delete response already cleared current/next */
+			if (quickMixId != NULL && BarUiSwitchStationById(app, quickMixId)) {
 				log_write(DEBUG_WEBSOCKET, "Socket.IO: Switching to QuickMix after deletion\n");
-				BarUiSwitchStation(app, quickMixStation);
 			}
-			
-			BarStateSetCurrentStation(app, NULL);
 		}
 		
 		BarSocketIoEmitStations(app);
 	}
+	free(quickMixId);
 }
 
 /* Handle 'station.createFrom' event from client */
@@ -1963,17 +2018,15 @@ void BarSocketIoHandleCreateStationFrom(BarApp_t *app, json_object *data) {
 	}
 }
 
-/* Handle 'query' event from client (unicast response to requesting client) */
-void BarSocketIoHandleQuery(BarApp_t *app, void *wsi) {
+/* Handle 'query' event: full state and stations to the requester only */
+void BarSocketIoHandleQuery (BarApp_t *app, BarWsConnId_t requester) {
 	if (!app) {
 		return;
 	}
 	
 	log_write(DEBUG_WEBSOCKET, "Socket.IO: Query received\n");
 	
-	/* Send full state to requesting client only (unicast) */
-	BarSocketIoSetUnicastTarget(wsi);
-	BarSocketIoEmitProcess(app);
-	BarSocketIoEmitStations(app);
-	BarSocketIoSetUnicastTarget(NULL);
+	/* Send full state to the requesting client only */
+	BarSocketIoEmitProcessTo (app, requester);
+	BarSocketIoEmitStationsTo (app, requester);
 }

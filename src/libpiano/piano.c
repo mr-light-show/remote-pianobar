@@ -165,6 +165,17 @@ static void PianoDestroyGenres (PianoGenre_t *genres) {
 	}
 }
 
+/*	destroy a single genre category (name and nested genres); NULL is ignored
+ */
+void PianoDestroyGenreCategory (PianoGenreCategory_t *cat) {
+	if (cat == NULL) {
+		return;
+	}
+	PianoDestroyGenres (cat->genres);
+	free (cat->name);
+	free (cat);
+}
+
 /*	destroy user information
  */
 void PianoDestroyUserInfo (PianoUserInfo_t *user) {
@@ -205,13 +216,11 @@ void PianoDestroy (PianoHandle_t *ph) {
 	PianoDestroyStations (ph->stations);
 	PianoDestroyPartner (&ph->partner);
 	/* destroy genre stations */
-	PianoGenreCategory_t *curGenreCat = ph->genreStations, *lastGenreCat;
+	PianoGenreCategory_t *curGenreCat = ph->genreStations;
 	while (curGenreCat != NULL) {
-		PianoDestroyGenres (curGenreCat->genres);
-		free (curGenreCat->name);
-		lastGenreCat = curGenreCat;
+		PianoGenreCategory_t * const lastGenreCat = curGenreCat;
 		curGenreCat = (PianoGenreCategory_t *) curGenreCat->head.next;
-		free (lastGenreCat);
+		PianoDestroyGenreCategory (lastGenreCat);
 	}
 	memset (ph, 0, sizeof (*ph));
 }
@@ -228,13 +237,12 @@ void PianoDestroyRequest (PianoRequest_t *req) {
 /*	get station from list by id
  *	@param search here
  *	@param search for this
- *	@return the first station structure matching the given id
+ *	@return the first station structure matching the given id, or NULL (also
+ *	for an empty list or a NULL id)
  */
 PianoStation_t *PianoFindStationById (PianoStation_t * const stations,
 		const char * const searchStation) {
-	assert (stations != NULL);
-
-	if (searchStation == NULL) {
+	if (stations == NULL || searchStation == NULL) {
 		return NULL;
 	}
 

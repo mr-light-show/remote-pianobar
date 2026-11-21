@@ -44,3 +44,8 @@ typedef struct {
 bool BarFixtureHttpStart (BarFixtureHttp_t *srv, const char *filepath,
                           uint16_t *port_out);
 void BarFixtureHttpStop (BarFixtureHttp_t *srv);
+
+/* A fixture send failure is expected only after the test has announced an
+ * intentional player stop and only when the peer went away (EPIPE or
+ * ECONNRESET). Every other send failure means the fixture itself broke. */
+bool FixtureSendErrorExpected (int err, bool cancelExpected);

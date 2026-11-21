@@ -12,6 +12,7 @@
 
 #include "../../src/l10n.h"
 #include "../../src/settings.h"
+#include "../test_tmp.h"
 
 /** Create intermediate directories for a path ending in a file (mkdir -p). */
 static int
@@ -459,6 +460,134 @@ START_TEST (test_l10n_init_prefers_lc_messages_over_lang) {
 }
 END_TEST
 
+/* Write "<key> = <value>" as locale "en" in a temp dir and init ctx from it. */
+static void l10n_init_with_override (BarL10nContext_t *ctx, BarSettings_t *settings,
+		char *dir, size_t dirSize, char *fp, size_t fpSize,
+		const char *key, const char *value) {
+	ck_assert_ptr_nonnull (TestTmpMkdtemp (dir, dirSize, "l10n_fmt"));
+	snprintf (fp, fpSize, "%s/en", dir);
+	FILE *out = fopen (fp, "w");
+	ck_assert_ptr_nonnull (out);
+	fprintf (out, "%s = %s\n", key, value);
+	fclose (out);
+	setenv ("PIANOBAR_LOCALE_DIR", dir, 1);
+	BarSettingsInit (settings);
+	settings->locale = strdup ("en");
+	ck_assert (BarL10nInit (ctx, settings));
+}
+
+static void l10n_override_cleanup (BarL10nContext_t *ctx, BarSettings_t *settings,
+		const char *dir, const char *fp) {
+	BarL10nDestroy (ctx);
+	BarSettingsDestroy (settings);
+	unsetenv ("PIANOBAR_LOCALE_DIR");
+	unlink (fp);
+	rmdir (dir);
+}
+
+/* Returns BarL10nGet for key after loading the override; default kept on reject. */
+static void l10n_expect_override (const char *key, const char *value, bool accepted) {
+	BarL10nContext_t ctx;
+	BarSettings_t settings;
+	char dir[512], fp[600];
+	l10n_init_with_override (&ctx, &settings, dir, sizeof (dir), fp, sizeof (fp),
+			key, value);
+	if (accepted) {
+		ck_assert_str_eq (BarL10nGet (&ctx, key), value);
+	} else {
+		ck_assert_str_eq (BarL10nGet (&ctx, key), BarL10nDefaultLookup (key));
+	}
+	l10n_override_cleanup (&ctx, &settings, dir, fp);
+}
+
+START_TEST (test_l10n_override_extra_spec_rejected) {
+	l10n_expect_override ("cli.email_echo", "Mail %s %s\\n", false);
+}
+END_TEST
+
+START_TEST (test_l10n_override_missing_spec_rejected) {
+	l10n_expect_override ("cli.email_echo", "Mail\\n", false);
+}
+END_TEST
+
+START_TEST (test_l10n_override_wrong_type_rejected) {
+	l10n_expect_override ("cli.email_echo", "Mail %d\\n", false);
+	l10n_expect_override ("cli.press_help", "Press %s\\n", false);
+}
+END_TEST
+
+START_TEST (test_l10n_override_percent_n_rejected) {
+	l10n_expect_override ("cli.email_echo", "Mail %s%n\\n", false);
+	l10n_expect_override ("cli.email_echo", "Mail %n\\n", false);
+}
+END_TEST
+
+START_TEST (test_l10n_override_positional_and_star_rejected) {
+	l10n_expect_override ("cli.email_echo", "Mail %1$s\\n", false);
+	l10n_expect_override ("cli.email_echo", "Mail %*s\\n", false);
+	l10n_expect_override ("cli.email_echo", "Mail %", false);
+	l10n_expect_override ("cli.email_echo", "Mail %q\\n", false);
+}
+END_TEST
+
+START_TEST (test_l10n_override_percent_percent_accepted) {
+	l10n_expect_override ("cli.email_echo", "100%% Mail %s", true);
+	l10n_expect_override ("cli.email_echo", "%s %%", true);
+}
+END_TEST
+
+START_TEST (test_l10n_override_matching_accepted) {
+	l10n_expect_override ("cli.email_echo", "Courriel : %s", true);
+	l10n_expect_override ("cli.email_echo", "Courriel : %-20.5s|", true);
+	l10n_expect_override ("cli.password_exit_status", "Code %d", true);
+	l10n_expect_override ("cli.press_help", "Appuyez sur %c", true);
+	l10n_expect_override ("cli.fifo_opened", "fifo %s ouvert", true);
+}
+END_TEST
+
+START_TEST (test_l10n_override_rejected_format_uses_default) {
+	BarL10nContext_t ctx;
+	BarSettings_t settings;
+	char dir[512], fp[600], buf[256];
+	l10n_init_with_override (&ctx, &settings, dir, sizeof (dir), fp, sizeof (fp),
+			"cli.email_echo", "Mail %s %s %n");
+	BarL10nFormat (&ctx, buf, sizeof (buf), "cli.email_echo", "a@b.c");
+	ck_assert_str_eq (buf, "Email: a@b.c\n");
+	l10n_override_cleanup (&ctx, &settings, dir, fp);
+}
+END_TEST
+
+START_TEST (test_l10n_override_unknown_key_is_literal) {
+	BarL10nContext_t ctx;
+	BarSettings_t settings;
+	char dir[512], fp[600], buf[256];
+	l10n_init_with_override (&ctx, &settings, dir, sizeof (dir), fp, sizeof (fp),
+			"zz.custom_key", "A %s B %n 100%%");
+	ck_assert_str_eq (BarL10nGet (&ctx, "zz.custom_key"), "A %s B %n 100%%");
+	BarL10nFormat (&ctx, buf, sizeof (buf), "zz.custom_key", "x");
+	ck_assert_str_eq (buf, "A %s B %n 100%%");
+	l10n_override_cleanup (&ctx, &settings, dir, fp);
+}
+END_TEST
+
+START_TEST (test_l10n_override_unknown_key_plain_text) {
+	BarL10nContext_t ctx;
+	BarSettings_t settings;
+	char dir[512], fp[600], buf[256];
+	l10n_init_with_override (&ctx, &settings, dir, sizeof (dir), fp, sizeof (fp),
+			"zz.custom_key", "plain");
+	BarL10nFormat (&ctx, buf, sizeof (buf), "zz.custom_key");
+	ck_assert_str_eq (buf, "plain");
+	l10n_override_cleanup (&ctx, &settings, dir, fp);
+}
+END_TEST
+
+START_TEST (test_l10n_override_too_many_specs_rejected) {
+	l10n_expect_override ("cli.email_echo",
+			"%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s", false);
+}
+END_TEST
+
 Suite *l10n_suite (void) {
 	Suite *s = suite_create ("l10n");
 	TCase *tc = tcase_create ("core");
@@ -478,6 +607,17 @@ Suite *l10n_suite (void) {
 	tcase_add_test (tc, test_l10n_load_from_home_dot_config);
 	tcase_add_test (tc, test_l10n_load_from_install_prefix);
 	tcase_add_test (tc, test_l10n_init_prefers_lc_messages_over_lang);
+	tcase_add_test (tc, test_l10n_override_extra_spec_rejected);
+	tcase_add_test (tc, test_l10n_override_missing_spec_rejected);
+	tcase_add_test (tc, test_l10n_override_wrong_type_rejected);
+	tcase_add_test (tc, test_l10n_override_percent_n_rejected);
+	tcase_add_test (tc, test_l10n_override_positional_and_star_rejected);
+	tcase_add_test (tc, test_l10n_override_percent_percent_accepted);
+	tcase_add_test (tc, test_l10n_override_matching_accepted);
+	tcase_add_test (tc, test_l10n_override_rejected_format_uses_default);
+	tcase_add_test (tc, test_l10n_override_unknown_key_is_literal);
+	tcase_add_test (tc, test_l10n_override_unknown_key_plain_text);
+	tcase_add_test (tc, test_l10n_override_too_many_specs_rejected);
 	suite_add_tcase (s, tc);
 	return s;
 }

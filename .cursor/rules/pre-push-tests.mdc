@@ -38,7 +38,7 @@ You **MUST NOT** run `git push` until **both** are true:
 
 ## CI parity (clean test build)
 
-CI runs **`PIANOBAR_INTEGRATION=1 make test-coverage`**, which **`make clean`s first**. Incremental **`make test-all` alone** can miss compile errors in new nested test paths (e.g. `test/integration/`).
+CI runs **`PIANOBAR_INTEGRATION=1 make test-coverage`** from a fresh checkout. Incremental **`make test-all` alone** can miss compile errors in new nested test paths (e.g. `test/integration/`).
 
 **When `Makefile`, `test/**`, or `.github/workflows/test.yml` changed in your branch**, also run **before push** (see skill `.cursor/skills/pre-push-ci-parity/SKILL.md`):
 
@@ -56,6 +56,12 @@ PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-coverage
 
 ```bash
 make test-ci-local
+```
+
+—or every gate at once (Docker c-tests and c-asan repro, coverage, `test-all`, ASan, TSan):
+
+```bash
+make gates
 ```
 
 Allow ≥ **180000 ms**. The pre-push hook runs this automatically when commits being pushed touch `Makefile` or `test/**`.

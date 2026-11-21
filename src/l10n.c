@@ -23,6 +23,8 @@ THE SOFTWARE.
 
 #include "l10n.h"
 
+#include "log.h"
+
 #include <assert.h>
 #include <ctype.h>
 #include <limits.h>
@@ -129,7 +131,7 @@ static bool bar_l10n_load_file (const char *path, BarL10nPair_t **pairs,
 		while (ve > val && (ve[-1] == '\n' || ve[-1] == '\r')) {
 			*--ve = '\0';
 		}
-		if (*s == '\0') {
+		if (s == eq) {
 			continue;
 		}
 		if (!bar_l10n_append_pair (pairs, n, cap, s, val)) {
@@ -139,6 +141,78 @@ static bool bar_l10n_load_file (const char *path, BarL10nPair_t **pairs,
 	}
 	fclose (f);
 	return true;
+}
+
+/* Printf-spec safety for locale overrides.
+ *
+ * BarL10nFormat feeds a catalog string to vsnprintf with caller-supplied
+ * varargs, so an override must request exactly the arguments the built-in
+ * English default for the same key does.  A signature is the ordered list of
+ * conversions (length modifier + conversion; %i is %d; %% is ignored).  The
+ * simplest safe rule: %n, positional (%1$s), '*' width/precision and unknown
+ * conversions make a format invalid; invalid or mismatching overrides are
+ * dropped at load time and the English default is used instead. */
+#define BAR_L10N_SIG_MAX 32
+
+static bool bar_l10n_signature (const char *fmt, char *sig, size_t sigsz) {
+	size_t o = 0;
+	sig[0] = '\0';
+	for (const char *p = fmt; *p; p++) {
+		if (*p != '%') {
+			continue;
+		}
+		p++;
+		if (*p == '%') {
+			continue;
+		}
+		while (*p && strchr ("-+ #0'", *p)) {
+			p++;
+		}
+		while (isdigit ((unsigned char) *p)) {
+			p++;
+		}
+		if (*p == '.') {
+			p++;
+			while (isdigit ((unsigned char) *p)) {
+				p++;
+			}
+		}
+		char spec[8];
+		size_t sl = 0;
+		while (*p && strchr ("hlLqjzt", *p)) {
+			if (sl + 2 >= sizeof (spec)) {
+				return false;
+			}
+			spec[sl++] = *p++;
+		}
+		char conv = *p;
+		if (conv == 'i') {
+			conv = 'd';
+		}
+		if (!conv || !strchr ("douxXcspfFeEgGaA", conv)) {
+			/* includes %n, '*', '$', stray '%' at end */
+			return false;
+		}
+		spec[sl++] = conv;
+		if (o + sl + 1 >= sigsz) {
+			return false;
+		}
+		memcpy (sig + o, spec, sl);
+		o += sl;
+		sig[o++] = ';';
+		sig[o] = '\0';
+	}
+	return true;
+}
+
+static bool bar_l10n_override_compatible (const char *key, const char *val) {
+	const char *def = BarL10nDefaultLookup (key);
+	if (!def) {
+		return true; /* unknown keys are never passed to printf */
+	}
+	char a[BAR_L10N_SIG_MAX * 4], b[BAR_L10N_SIG_MAX * 4];
+	return bar_l10n_signature (val, a, sizeof (a)) &&
+			bar_l10n_signature (def, b, sizeof (b)) && strcmp (a, b) == 0;
 }
 
 static void bar_l10n_free_pairs (BarL10nPair_t *pairs, size_t n) {
@@ -249,6 +323,11 @@ void BarL10nFormat (const BarL10nContext_t *ctx, char *buf, size_t len,
 		}
 		return;
 	}
+	if (!BarL10nDefaultLookup (key)) {
+		/* Override-only key: no trusted argument list, so never a format. */
+		snprintf (buf, len, "%s", fmt);
+		return;
+	}
 	va_list ap;
 	va_start (ap, key);
 	vsnprintf (buf, len, fmt, ap);
@@ -309,9 +388,23 @@ bool BarL10nInit (BarL10nContext_t *ctx, const BarSettings_t *settings) {
 		bar_l10n_try_path (path, &pairs, &n, &cap);
 	}
 
-have_locale_file:
+have_locale_file: ;
+
+	size_t kept = 0;
+	for (size_t i = 0; i < n; i++) {
+		if (!bar_l10n_override_compatible (pairs[i].key, pairs[i].val)) {
+			log_write (LOG_ERROR, "Ignoring locale override '%s': format "
+					"specifiers do not match the built-in default\n", pairs[i].key);
+			free (pairs[i].key);
+			free (pairs[i].val);
+			continue;
+		}
+		pairs[kept++] = pairs[i];
+	}
+	n = kept;
 
 	if (n == 0) {
+		free (pairs);
 		return true;
 	}
 

@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+#
+# Test image for `make test-ci-local` (scripts/test-ci-local.sh) and for the
+# c-tests and c-asan CI jobs (published by builder-images.yml as
+# ghcr.io/<owner>/remote-pianobar-build:ci-test-noble-amd64): Ubuntu with every
+# build and test dependency preinstalled, so a run does not repeat apt-get.
+# The package list is ci-test-deps.txt.
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.source="https://github.com/mr-light-show/remote-pianobar"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Comments and blank lines are stripped before the list goes to apt-get.
+COPY ci-test-deps.txt /tmp/ci-test-deps.txt
+RUN apt-get update \
+    && grep -vE '^\s*(#|$)' /tmp/ci-test-deps.txt | xargs apt-get install -y \
+    && rm -rf /var/lib/apt/lists/* /tmp/ci-test-deps.txt
+
+WORKDIR /build

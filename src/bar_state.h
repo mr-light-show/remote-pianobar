@@ -27,14 +27,10 @@ THE SOFTWARE.
 #include <piano.h>
 #include <stdbool.h>
 
-/* True when playlist/station pointers are shared across threads (web and both; not cli). */
+/* True when playlist/station pointers are shared across threads: every ui_mode
+ * (the playback manager thread runs in cli, web and both). */
 static inline bool BarStateUsesRwlock(const BarApp_t *app) {
-#ifdef WEBSOCKET_ENABLED
-	return app != NULL && app->settings.uiMode != BAR_UI_MODE_CLI;
-#else
-	(void)app;
-	return false;
-#endif
+	return app != NULL;
 }
 
 /* Debug assertions for lock state (enabled with -DDEBUG) */
@@ -44,7 +40,6 @@ static inline bool BarStateUsesRwlock(const BarApp_t *app) {
 
 /* Assert that stateRwlock is held by some thread (cannot distinguish calling thread with rwlock).
  * Only when BarStateUsesRwlock. Uses trywrlock: EBUSY => someone holds it; 0 => was free, unlock and fail. */
-#ifdef WEBSOCKET_ENABLED
 #define ASSERT_STATE_LOCK_HELD(app) \
 	do { \
 		if (BarStateUsesRwlock(app)) { \
@@ -69,10 +64,6 @@ static inline bool BarStateUsesRwlock(const BarApp_t *app) {
 			} \
 		} \
 	} while (0)
-#else
-#define ASSERT_STATE_LOCK_HELD(app) ((void)0)
-#define ASSERT_STATE_LOCK_NOT_HELD(app) ((void)0)
-#endif
 
 /* Assert that player.lock is currently held */
 #define ASSERT_PLAYER_LOCK_HELD(player) \
@@ -136,6 +127,7 @@ typedef struct {
 	char *displayName;
 	bool  isQuickMix;
 	bool  isQuickMixed; /* useQuickMix — included in QuickMix */
+	bool  isCreator;    /* false for shared stations */
 } BarStationSnapshot_t;
 
 typedef struct {
@@ -159,6 +151,21 @@ typedef struct {
 	bool         hasStation;
 } BarPlaybackSnapshot_t;
 
+typedef struct {
+	char        *title;
+	char        *artist;
+	char        *album;
+	char        *coverArt;
+	char        *stationName; /* display name of song->stationId; NULL if unknown */
+	unsigned int duration;
+	int          rating;
+} BarSongSnapshot_t;
+
+typedef struct {
+	BarSongSnapshot_t *items;
+	size_t             count;
+} BarSongSnapshotList_t;
+
 /* Copy all station fields under read lock; caller frees with BarStateFreeStationSnapshot. */
 bool BarStateSnapshotStations (const BarApp_t *app, BarStationSnapshotList_t *out);
 void BarStateFreeStationSnapshot (BarStationSnapshotList_t *snap);
@@ -166,6 +173,20 @@ void BarStateFreeStationSnapshot (BarStationSnapshotList_t *snap);
 /* Copy current playback fields (station + song) under lock; caller frees with BarStateFreePlaybackSnapshot. */
 void BarStateSnapshotPlayback (const BarApp_t *app, BarPlaybackSnapshot_t *out);
 void BarStateFreePlaybackSnapshot (BarPlaybackSnapshot_t *snap);
+
+/* Copy up to maxSongs queued songs after the playing one under read lock.
+ * Returns false only on bad arguments or allocation failure; an empty queue
+ * is a valid success. Caller frees with BarStateFreeSongSnapshot. */
+bool BarStateSnapshotUpcoming (const BarApp_t *app, size_t maxSongs,
+                               BarSongSnapshotList_t *out);
+void BarStateFreeSongSnapshot (BarSongSnapshotList_t *snap);
+
+/* Free a list of songs that other threads may have borrowed (playlist, its
+ * tail, song history). Callers hold app->pianoHttpMutex, so a thread that
+ * holds it across a Pandora call keeps its song alive. */
+void BarStateFreeSongs (BarApp_t *app, PianoSong_t *songs);
+typedef void (*BarStateSongFreeTestHook_fn) (BarApp_t *app, const PianoSong_t *songs);
+void BarStateSetSongFreeTestHook (BarStateSongFreeTestHook_fn hook);
 
 /* Initialize/destroy state mutex */
 void BarStateInit(BarApp_t *app);
@@ -180,6 +201,21 @@ void BarStateSetNextStation(BarApp_t *app, PianoStation_t *station);
 PianoStation_t *BarStateGetCurrentStation(const BarApp_t *app);
 void BarStateSetCurrentStation(BarApp_t *app, PianoStation_t *station);
 PianoStation_t *BarStateFindStationById(const BarApp_t *app, const char *id);
+
+/* QuickMix membership edits from the CLI (stateRwlock write) */
+typedef enum {
+	BAR_QUICKMIX_TOGGLE_ALL,
+	BAR_QUICKMIX_SELECT_ALL,
+	BAR_QUICKMIX_SELECT_NONE,
+} BarQuickMixChange_t;
+void BarStateChangeQuickMixAll(BarApp_t *app, BarQuickMixChange_t change);
+/* Toggle one station's QuickMix membership; false if the id is unknown */
+bool BarStateToggleQuickMixById(BarApp_t *app, const char *stationId);
+
+/* Station to resume after reconnect (app->lastStationId), thread-safe.
+ * Set stores a copy (NULL clears); Take returns the owned copy and clears it. */
+void BarStateSetLastStationId(BarApp_t *app, const char *stationId);
+char *BarStateTakeLastStationId(BarApp_t *app);
 PianoStation_t *BarStateGetStationList(const BarApp_t *app);
 
 /* Playlist access (thread-safe) */

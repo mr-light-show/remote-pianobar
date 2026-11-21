@@ -60,6 +60,34 @@ START_TEST (test_ws_err_not_allowed_generic) {
 }
 END_TEST
 
+/* A sender's own localized "response too large" text survives the
+ * per-operation fallback that would otherwise replace it */
+START_TEST (test_ws_err_response_too_large_is_kept) {
+	const char *msg = default_str ("web.socket.response_too_large");
+	const char *r = BarWsGetFriendlyErrorMessage (NULL, "station.getStationInfo", msg);
+	ck_assert_str_eq (r, msg);
+	ck_assert_str_ne (BarWsGetFriendlyErrorMessage (NULL, "station.getStationInfo", "x"), msg);
+}
+END_TEST
+
+/* The localized texts of requests that cannot be served are kept for the
+ * operations that send them, not replaced by the generic failure text */
+START_TEST (test_ws_err_unservable_request_texts_are_kept) {
+	static const struct { const char *op, *key; } cases[] = {
+		{"station.getStationInfo", "web.socket.station_not_found"},
+		{"station.getStationInfo", "web.socket.station_id_missing"},
+		{"station.getStationModes", "web.socket.station_not_found"},
+		{"station.getStationModes", "web.socket.station_id_missing"},
+		{"station.getStationModes", "web.socket.station_modes_quickmix"},
+		{"music.search", "web.socket.invalid_search"},
+	};
+	for (size_t i = 0; i < sizeof (cases) / sizeof (cases[0]); i++) {
+		const char *msg = default_str (cases[i].key);
+		ck_assert_str_eq (BarWsGetFriendlyErrorMessage (NULL, cases[i].op, msg), msg);
+	}
+}
+END_TEST
+
 START_TEST (test_ws_err_network) {
 	const char *r1 = BarWsGetFriendlyErrorMessage (NULL, "music.search",
 			"Network error");
@@ -221,7 +249,9 @@ Suite *error_messages_suite (void) {
 	tcase_add_test (tc, test_ws_err_query_upcoming_empty);
 	tcase_add_test (tc, test_ws_err_station_change_not_found);
 	tcase_add_test (tc, test_ws_err_exact_socket_strings);
+	tcase_add_test (tc, test_ws_err_unservable_request_texts_are_kept);
 	tcase_add_test (tc, test_ws_err_op_fallback_each);
+	tcase_add_test (tc, test_ws_err_response_too_large_is_kept);
 	tcase_add_test (tc, test_ws_err_returns_original_when_no_mapping);
 	tcase_add_test (tc, test_ws_err_failed_to_transform_unmapped_operation);
 	suite_add_tcase (s, tc);

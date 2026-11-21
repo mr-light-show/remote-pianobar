@@ -2,8 +2,30 @@
 # Runs before every git push. Blocks push if tests fail.
 # Enable once: git config core.hooksPath .githooks
 set -e
+# Parallel compile (and lint overlapping the tests). Override with JOBS=1 for
+# readable, non-interleaved output. Portable across macOS and Linux.
+JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)}"
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+# What the pushed commits need (scripts/pre-push-decision.sh reads git's
+# pre-push stdin: docs, web, stamp or full; GATES_SCOPE=full forces full).
+DECISION="$(./scripts/pre-push-decision.sh)"
+case "$DECISION" in
+docs)
+	echo "pre-push: docs-only change, skipping tests"
+	exit 0
+	;;
+web)
+	echo "pre-push: webui-only change, running the web unit tests..."
+	cd webui && npm test -- --run
+	exit $?
+	;;
+stamp)
+	echo "pre-push: make gates already passed for $(git rev-parse --short HEAD), skipping"
+	exit 0
+	;;
+esac
 
 # Commits being pushed (empty when upstream not set yet)
 RANGE="@{u}..HEAD"
@@ -20,9 +42,9 @@ fi
 if [ "$needs_clean" -eq 1 ]; then
 	echo "pre-push: Makefile or test/** changed — clean build (CI parity)..."
 	make distclean
-	echo "pre-push: running PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all..."
-	PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make test-all
+	echo "pre-push: running PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make -j$JOBS test-all..."
+	PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1 make -j"$JOBS" test-all
 else
-	echo "pre-push: running make test-all..."
-	make test-all
+	echo "pre-push: running make -j$JOBS test-all..."
+	make -j"$JOBS" test-all
 fi

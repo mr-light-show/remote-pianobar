@@ -498,6 +498,16 @@ export class PianobarApp extends LitElement {
       if (operation === 'playback.play' || operation === 'app.pandora-reconnect') {
         this.playing = false;
       }
+      // A failed lookup sends no reply: stop the spinner waiting for it
+      if (operation === 'station.getStationInfo') {
+        this.infoLoading = false;
+      } else if (operation === 'station.getGenres') {
+        this.genreLoading = false;
+      } else if (operation === 'station.getStationModes') {
+        this.modesLoading = false;
+      } else if (operation === 'music.search') {
+        this.searchLoading = false;
+      }
       this.showToast(tf('web.ui.toast_error', { message }));
     });
   }

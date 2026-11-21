@@ -56,6 +56,31 @@ START_TEST (test_system_volume_rejects_malformed_pactl_json)
 }
 END_TEST
 
+/* Valid JSON of the wrong shape (non-array root, non-object "volume") must
+ * fail gracefully instead of walking the wrong json-c type. */
+START_TEST (test_system_volume_rejects_wrong_shape_pactl_json)
+{
+#ifdef __APPLE__
+	ck_assert (1);
+#else
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("{}"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("{\"volume\":{}}"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("7"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("\"sink\""), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("null"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("[null]"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("[7]"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("[{\"volume\":5}]"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("[{\"volume\":[1]}]"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("[{\"volume\":\"x\"}]"), -1);
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume ("[{\"volume\":null}]"), -1);
+	/* channel that is not an object is skipped */
+	ck_assert_int_eq (BarSystemVolumeParsePactlJsonVolume (
+		"[{\"volume\":{\"mono\":3,\"left\":{\"value_percent\":\"40%\"}}}]"), 40);
+#endif
+}
+END_TEST
+
 /* Public API exercises the platform backend.  These tests verify default-state
  * behavior so the public surface stays covered even where the underlying
  * backend cannot be exercised in a unit test (no audio device available). */
@@ -117,6 +142,7 @@ Suite *system_volume_suite (void)
 	TCase *tc = tcase_create ("pactl");
 	tcase_add_test (tc, test_system_volume_parses_pactl_json_first_channel);
 	tcase_add_test (tc, test_system_volume_rejects_malformed_pactl_json);
+	tcase_add_test (tc, test_system_volume_rejects_wrong_shape_pactl_json);
 	tcase_add_test (tc, test_system_volume_public_api_default_state);
 	tcase_add_test (tc, test_system_volume_set_clamps_out_of_range_inputs);
 #ifdef __APPLE__

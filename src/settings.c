@@ -198,14 +198,12 @@ static void cfgStationDisplayName (BarSettings_t *s, const char *v, const char *
 	}
 }
 
-#ifdef WEBSOCKET_ENABLED
 static void cfgUiMode (BarSettings_t *s, const char *v, const char *h) {
 	(void)h;
 	if (streq (v, "cli")) { s->uiMode = BAR_UI_MODE_CLI; }
 	else if (streq (v, "web")) { s->uiMode = BAR_UI_MODE_WEB; }
 	else { s->uiMode = BAR_UI_MODE_BOTH; }
 }
-#endif
 
 /* Apply a single key entry to settings */
 static void applyConfigKey (BarSettings_t *settings, const BarConfigKey_t *k,
@@ -304,7 +302,6 @@ static const BarConfigKey_t commonKeys[] = {
 	{NULL, CFG_STR, 0, 0, 0, NULL}  /* sentinel */
 };
 
-#ifdef WEBSOCKET_ENABLED
 static const BarConfigKey_t wsKeys[] = {
 	{"ui_mode",       CFG_CUSTOM, 0, 0, 0, cfgUiMode},
 	{"websocket_port",CFG_INT,    offsetof (BarSettings_t, websocketPort), 1, 65535, NULL},
@@ -314,7 +311,6 @@ static const BarConfigKey_t wsKeys[] = {
 	{"log_file",      CFG_TILDE,  offsetof (BarSettings_t, logFile),       0, 0, NULL},
 	{NULL, CFG_STR, 0, 0, 0, NULL}
 };
-#endif
 
 /* Dispatch a single key=val pair through the descriptor tables.
  * Returns true if the key was recognised and handled. */
@@ -326,14 +322,12 @@ static bool dispatchConfigKey (BarSettings_t *settings, const char *key,
 			return true;
 		}
 	}
-#ifdef WEBSOCKET_ENABLED
 	for (const BarConfigKey_t *k = wsKeys; k->key != NULL; k++) {
 		if (streq (k->key, key)) {
 			applyConfigKey (settings, k, val, userhome);
 			return true;
 		}
 	}
-#endif
 	return false;
 }
 
@@ -390,12 +384,10 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 	}
 	
 	/* WebSocket cleanup */
-	#ifdef WEBSOCKET_ENABLED
 	free (settings->websocketHost);
 	free (settings->webuiPath);
 	free (settings->pidFile);
 	free (settings->logFile);
-	#endif
 	
 	/* ALSA mixer cleanup */
 	free (settings->alsaMixer);
@@ -493,18 +485,16 @@ static bool BarSettingsReadAccountFile (BarAccount_t *acct, const char *filepath
 		++val;
 
 		/* trim key */
-		char *keyend = &key[strlen (key) - 1];
-		while (keyend >= key && isspace ((unsigned char) *keyend)) {
-			*keyend = '\0';
-			--keyend;
+		size_t keylen = strlen (key);
+		while (keylen > 0 && isspace ((unsigned char) key[keylen - 1])) {
+			key[--keylen] = '\0';
 		}
 
 		/* strip leading space, trim trailing cr/lf */
 		if (isspace ((unsigned char) val[0])) ++val;
-		char *valend = &val[strlen (val) - 1];
-		while (valend >= val && (*valend == '\r' || *valend == '\n')) {
-			*valend = '\0';
-			--valend;
+		size_t vallen = strlen (val);
+		while (vallen > 0 && (val[vallen - 1] == '\r' || val[vallen - 1] == '\n')) {
+			val[--vallen] = '\0';
 		}
 
 		if (streq ("user", key)) {
@@ -824,10 +814,9 @@ void BarSettingsRead (BarSettings_t *settings) {
 			++val;
 
 			/* drop spaces at the end */
-			char *keyend = &key[strlen (key)-1];
-			while (keyend >= key && isspace ((unsigned char) *keyend)) {
-				*keyend = '\0';
-				--keyend;
+			size_t keylen = strlen (key);
+			while (keylen > 0 && isspace ((unsigned char) key[keylen-1])) {
+				key[--keylen] = '\0';
 			}
 
 			/* strip at most one space, legacy cruft, required for values with
@@ -836,14 +825,13 @@ void BarSettingsRead (BarSettings_t *settings) {
 				++val;
 			}
 			/* drop trailing cr/lf */
-			char *valend = &val[strlen (val)-1];
-			while (valend >= val && (*valend == '\r' || *valend == '\n')) {
-				*valend = '\0';
-				--valend;
+			size_t vallen = strlen (val);
+			while (vallen > 0 && (val[vallen-1] == '\r' || val[vallen-1] == '\n')) {
+				val[--vallen] = '\0';
 			}
 
 			/* act_* keyboard shortcuts (prefix-based, not exact match) */
-			if (memcmp ("act_", key, 4) == 0) {
+			if (strncmp (key, "act_", 4) == 0) {
 				for (size_t i = 0; i < BAR_KS_COUNT; i++) {
 					if (streq (dispatchActions[i].configKey, key)) {
 						settings->keys[i] = streq (val, "disabled") ?

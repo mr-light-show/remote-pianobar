@@ -35,7 +35,7 @@ This guide covers setting up your development environment for contributing to Re
 - libjson-c
 - libgcrypt
 - libcurl
-- libwebsockets (2.4+)
+- libwebsockets (4.0+)
 
 ---
 
@@ -151,7 +151,7 @@ The Makefile defaults to **ISO C17** (`-std=c17`) by appending it to **`CFLAGS`*
 git clone https://github.com/yourusername/pianobar.git
 cd pianobar
 
-# Build without WebSocket support
+# Build Remote Pianobar
 make clean
 make
 
@@ -168,11 +168,25 @@ make clean
 # Remove all build AND coverage artifacts (*.gcda, *.gcno, *.gcov) in one step
 make distclean
 
-# Build Remote Pianobar with debug symbols (WebSocket enabled by default)
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+# Build Remote Pianobar with debug symbols
+make CFLAGS="-g -O0"
 
-# The binary will be created as ./pianobar
+# The binary is built as build/default/pianobar and copied to ./pianobar
 ```
+
+#### Build directories
+
+Objects, dependency files and binaries are built out of tree, one directory per variant, so the variants never share objects and can be built side by side (or at the same time, see `make gates`):
+
+| Build | Directory |
+|---|---|
+| `make`, `make test`, `make test-all`, `make test-par` | `build/default` (`BUILD_DIR=...` overrides it) |
+| `make minimal` | `build/minimal` |
+| `make test-coverage` | `build/coverage` (report `build/coverage/coverage.info`, copied to `./coverage.info`) |
+| `make test-asan` | `build/asan` |
+| `make test-tsan` | `build/tsan` |
+
+`./pianobar` and `./pianobar_test` are copies of the last default (or minimal) build, so `make install`, packaging, scripts and the `./pianobar_test` one-liners work as before. Each directory records its compiler and flags in `.build-flags`; building with different `CFLAGS`/`LDFLAGS` (for example `make CFLAGS="-g -O0"`) rebuilds that directory instead of mixing objects. `make test-coverage`, `make test-asan` and `make test-tsan` no longer start with `make clean`: they rebuild only what changed, and `make test-coverage` resets the `.gcda` counters before each run. `make clean` removes `build/` (and objects left in `src/` and `test/` by the old in-tree layout); `make distclean` also deletes stray `*.gcda`/`*.gcno`/`*.gcov` files.
 
 ### Build variants
 
@@ -180,7 +194,7 @@ make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 |---------|---------|-------|
 | **Default** (recommended) | `make` | Optimized (`-O2`); `debug=N` in config and `PIANOBAR_DEBUG` work at runtime |
 | **Minimal** | `make minimal` or `./build.sh minimal` | Same optimization; omits `HAVE_DEBUGLOG` for a slightly smaller binary — `debug=` has no effect |
-| **Dev / symbols** | `make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"` | Debugging with gdb/lldb |
+| **Dev / symbols** | `make CFLAGS="-g -O0"` | Debugging with gdb/lldb |
 | **Unified script** | `./build.sh` / `./build.sh --minimal` / `./build.sh debug 15` | Builds backend + web UI |
 
 ### Build with Debug Logging
@@ -188,7 +202,7 @@ make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
 ```bash
 # Build with all debug flags enabled
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED -DPIANOBAR_DEBUG=0xFFFFFFFF"
+make CFLAGS="-g -O0 -DPIANOBAR_DEBUG=0xFFFFFFFF"
 ```
 
 Available debug flags (defined in `src/debug.h`):
@@ -262,6 +276,22 @@ make test
 ./pianobar_test --verbose
 ```
 
+#### Parallel builds
+
+`make` is serial by default. Add `-jN` to compile in parallel, for example `make -j"$(getconf _NPROCESSORS_ONLN)" test-all` (`getconf` works on macOS and Linux). With `-j`, `make test-all` also runs `make lint` while the tests run, so test and lint output is interleaved; the exit status is still non-zero if either fails. The pre-push hook and `make test-ci-local` use `-j` automatically; set `JOBS=1` (hook) or `PIANOBAR_CI_JOBS=1` (Docker script) for serial, readable output.
+
+`make test-coverage`, `make test-asan` and `make test-tsan` run the test binary through `scripts/test-parallel.sh` (one suite per process, `TEST_JOBS` workers, default `min(4, ncpu/2)`); `make test-par` does the same for the default build. `make test` and `make test-all` still run `./pianobar_test` serially. See [README_TESTING.md](README_TESTING.md#parallel-test-runs).
+
+`make test-ci-local` builds a local image (`pianobar-ci:ubuntu-24.04`, from `.github/docker/Dockerfile.ci-test` and `ci-test-deps.txt`) once and reuses it; Docker's layer cache rebuilds it when the package list changes, and `PIANOBAR_CI_REBUILD=1` forces a fresh `apt-get` against the current base image. The host tree is mounted read-only and copied into the container, so the run never writes objects, `.gcda` files or `coverage.info` into the host tree, and no `make distclean` is needed after it. `PIANOBAR_CI_OUT=<dir>` copies the container's `coverage.info` out.
+
+#### All gates at once
+
+`make gates` (`scripts/gates.sh`) runs the pre-push gates concurrently from one tree: `make test-ci-local` (Docker, CI `c-tests`), `make test-coverage`, `make test-all` (`-O2` tests and lint), `PIANOBAR_CI_TARGET=test-asan make test-ci-local` (Docker, CI `c-asan` with LeakSanitizer), `make test-asan` and `make test-tsan`, all with `PIANOBAR_INTEGRATION=1 PIANOBAR_TEST_NO_DEVICE=1`. Each step builds in its own directory, so none needs `make clean`. At most `GATES_JOBS` (default 3) run at once, each with `make -j(ncpu/3)` and `TEST_JOBS=3` (`GATES_MAKE_JOBS`, `GATES_TEST_JOBS`), because the playback suites use real-time waits and flake on an oversubscribed host. A failed step is rerun alone once and reported as "passed on rerun"; a second failure fails the gate. `GATES_STEPS="coverage test-all asan tsan"` picks steps (for example without Docker). Logs are in `build/gates/<step>.log`, and the summary lists each step's exit status, duration and `Checks:` count. For a patch-coverage number, run `make test-coverage` on its own: under gate load a few timing-dependent lines can differ.
+
+#### Static analysis
+
+`make lint` runs cppcheck and is strict: a suppression that matches nothing fails the run, so stale ones are caught on current cppcheck. cppcheck older than 2.18 (for example Ubuntu 24.04's apt package) reports many existing suppressions as unmatched; run `make lint CPPCHECK_LENIENT=1` there.
+
 ### TypeScript/JavaScript Unit Tests
 
 The web UI uses Vitest for unit testing.
@@ -312,9 +342,15 @@ npx playwright test test/e2e/connection.spec.ts
 
 # Run tests with pianobar server running
 PIANOBAR_RUNNING=1 npm run test:e2e
+
+# ... on a URL other than http://localhost:8080
+PIANOBAR_RUNNING=1 PIANOBAR_URL=http://127.0.0.1:9001 npm run test:e2e
+
+# From the repo root: real pianobar + local fake Pandora, no account needed
+make test-e2e-fake
 ```
 
-**Note:** Most E2E tests require a running pianobar instance with Remote API enabled. Tests without this requirement run by default; others are skipped.
+**Note:** Specs that need a running pianobar instance with Remote API enabled are gated on `PIANOBAR_RUNNING`. `make test-e2e-fake` starts the instance for you; see [TESTING.md](TESTING.md#e2e-without-a-pandora-account-fake-pandora).
 
 ### Running All Tests
 
@@ -403,9 +439,9 @@ kill $(cat /tmp/pianobar.pid)
 **Terminal 1:** Run Remote Pianobar
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make CFLAGS="-g -O0"
 
 # Run pianobar
 ./pianobar
@@ -517,8 +553,9 @@ pianobar/
 │   ├── libpiano/            # Pandora API client
 │   └── websocket/           # WebSocket implementation
 │       ├── core/            # WebSocket server core
-│       │   ├── websocket.c  # Main WebSocket logic
-│       │   └── queue.c      # Message queue
+│       │   ├── websocket.c  # Transport, connections, command worker
+│       │   ├── outbox.c     # Outbound event queues (per client)
+│       │   └── commands.c   # Inbound command queue
 │       ├── http/            # HTTP static file server
 │       │   └── http_server.c
 │       ├── protocol/        # Socket.IO protocol
@@ -565,9 +602,9 @@ pianobar/
 ### Debugging C Code with GDB
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make CFLAGS="-g -O0"
 
 # Run with GDB
 gdb ./pianobar
@@ -583,9 +620,9 @@ gdb ./pianobar
 ### Debugging C Code with LLDB (macOS)
 
 ```bash
-# Build with debug symbols (WebSocket enabled by default)
+# Build with debug symbols
 make clean
-make CFLAGS="-g -O0 -DWEBSOCKET_ENABLED"
+make CFLAGS="-g -O0"
 
 # Run with LLDB
 lldb ./pianobar

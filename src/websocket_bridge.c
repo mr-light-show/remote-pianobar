@@ -24,7 +24,6 @@ THE SOFTWARE.
 #include "websocket_bridge.h"
 #include "system_volume.h"
 
-#ifdef WEBSOCKET_ENABLED
 #include "websocket/core/websocket.h"
 #include "websocket/protocol/socketio.h"
 #include "websocket/daemon/daemon.h"
@@ -61,28 +60,19 @@ void BarWsBroadcastVolume(BarApp_t *app) {
 		struct json_object *vol = json_object_new_int (volumePercent);
 		char *msg = BarSocketIoFormatEventMessage ("volume", vol);
 		json_object_put (vol);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_VOLUME, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_VOLUME, msg);
 	}
 }
 
-void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation) {
-	if (app && app->wsContext) {
-		/* Only emit if unicast target is set (WebUI request).
-		 * CLI requests have no unicast target - user sees result in terminal. */
-		if (BarSocketIoGetUnicastTarget() != NULL) {
-			BarSocketIoEmitExplanation(app, explanation);
-		}
-	}
+/* Query replies: to the requesting web client only. CLI requests never call
+ * these; the user sees the result in the terminal. */
+void BarWsEmitExplanationTo(BarApp_t *app, BarWsConnId_t requester,
+                            const char *explanation) {
+	BarSocketIoEmitExplanationTo(app, requester, explanation);
 }
 
-void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count) {
-	if (app && app->wsContext) {
-		/* Only emit if unicast target is set (WebUI request).
-		 * CLI requests have no unicast target - user sees result in terminal. */
-		if (BarSocketIoGetUnicastTarget() != NULL) {
-			BarSocketIoEmitUpcoming(app, songs, count);
-		}
-	}
+bool BarWsEmitUpcomingTo(BarApp_t *app, BarWsConnId_t requester, int count) {
+	return BarSocketIoEmitUpcomingTo(app, requester, count);
 }
 
 void BarWsBroadcastSongStart(BarApp_t *app) {
@@ -90,7 +80,7 @@ void BarWsBroadcastSongStart(BarApp_t *app) {
 		struct json_object *data = BarSocketIoBuildStartPayload (app);
 		char *msg = BarSocketIoFormatEventMessage ("start", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketBroadcastSongStart (app, msg);
 	}
 }
 
@@ -99,20 +89,26 @@ void BarWsBroadcastProcess(BarApp_t *app) {
 		struct json_object *data = BarSocketIoBuildProcessPayload (app);
 		char *msg = BarSocketIoFormatEventMessage ("process", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }
 
 void BarWsBroadcastSongStop(BarApp_t *app) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
-		char *msg = BarSocketIoFormatEventMessage ("stop", NULL);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		/* An empty object, not no payload: clients read the second element */
+		struct json_object *data = json_object_new_object ();
+		char *msg = BarSocketIoFormatEventMessage ("stop", data);
+		json_object_put (data);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }
 
 void BarWsBroadcastProgress(BarApp_t *app) {
 	if (!app || app->settings.uiMode == BAR_UI_MODE_CLI || !app->wsContext) return;
 
+	/* Observe the song generation before sampling, so a sample of a song
+	 * that ends meanwhile is dropped instead of shown for the next one. */
+	uint32_t generation = BarWebsocketSongGeneration (app);
 	player_t *player = &app->player;
 	pthread_mutex_lock (&player->lock);
 	if (player->mode != PLAYER_PLAYING || player->doPause) {
@@ -123,9 +119,13 @@ void BarWsBroadcastProgress(BarApp_t *app) {
 	unsigned int duration = player->songDuration;
 	pthread_mutex_unlock (&player->lock);
 
+	/* De-duplication is producer-side only: just this (playback manager)
+	 * thread reads or writes ctx->progress. */
 	BarWsContext_t *ctx = (BarWsContext_t *)app->wsContext;
-	if (elapsed == ctx->progress.lastBroadcast) return;
+	if (elapsed == ctx->progress.lastBroadcast &&
+			generation == ctx->progress.lastGeneration) return;
 	ctx->progress.lastBroadcast = elapsed;
+	ctx->progress.lastGeneration = generation;
 
 	float pct = (duration > 0) ? (elapsed * 100.0f) / (float)duration : 0.0f;
 	struct json_object *data = json_object_new_object ();
@@ -134,7 +134,7 @@ void BarWsBroadcastProgress(BarApp_t *app) {
 	json_object_object_add (data, "percentage", json_object_new_double ((double)pct));
 	char *msg = BarSocketIoFormatEventMessage ("progress", data);
 	json_object_put (data);
-	BarWebsocketBroadcastSocketIoMessage (app, BUCKET_PROGRESS, msg);
+	BarWebsocketBroadcastProgress (app, generation, msg);
 }
 
 void BarWsBroadcastPlayState(BarApp_t *app) {
@@ -168,13 +168,7 @@ void BarWsBroadcastStations(BarApp_t *app) {
 		struct json_object *data = BarSocketIoBuildStationsPayload (app);
 		char *msg = BarSocketIoFormatEventMessage ("stations", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATIONS, msg);
-	}
-}
-
-void BarWsDisconnectAllClients(BarApp_t *app) {
-	if (app && app->wsContext) {
-		BarWebsocketDisconnectAllClients(app);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_STATIONS, msg);
 	}
 }
 
@@ -217,16 +211,17 @@ bool BarWsSettingsIsWebActive(const BarSettings_t *s) {
 	       (s->uiMode == BAR_UI_MODE_WEB || s->uiMode == BAR_UI_MODE_BOTH);
 }
 
-/* Playback manager lifecycle */
+/* Playback manager lifecycle: runs in every mode (cli included); it is the
+ * only thing that fetches and plays songs. */
 bool BarWsStartPlaybackManager(BarApp_t *app) {
-	if (app && app->settings.uiMode != BAR_UI_MODE_CLI) {
+	if (app) {
 		return BarPlaybackManagerStart(app);
 	}
 	return true;
 }
 
 void BarWsStopPlaybackManager(BarApp_t *app) {
-	if (app && app->settings.uiMode != BAR_UI_MODE_CLI) {
+	if (app) {
 		BarPlaybackManagerStop(app);
 	}
 }
@@ -265,11 +260,6 @@ void BarWsReleaseSingletonLock(BarApp_t *app) {
 	}
 }
 
-/* Unicast request detection */
-bool BarWsIsUnicastRequest(void) {
-	return BarSocketIoGetUnicastTarget() != NULL;
-}
-
 /* Error event broadcasting */
 void BarWsEmitError(BarApp_t *app, const char *event, const char *msg) {
 	BarSocketIoEmitError(app, event, msg);
@@ -280,6 +270,11 @@ void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
 	BarSocketIoEmitErrorEx(app, event, msg, extra);
 }
 
+void BarWsEmitErrorTo(BarApp_t *app, BarWsConnId_t requester,
+                      const char *event, const char *msg) {
+	BarSocketIoEmitErrorTo(app, requester, event, msg);
+}
+
 /* Pandora disconnect notification */
 void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
 	if (app && app->settings.uiMode != BAR_UI_MODE_CLI && app->wsContext) {
@@ -288,7 +283,7 @@ void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
 				json_object_new_string(reason ? reason : "unknown"));
 		char *msg = BarSocketIoFormatEventMessage ("pandora.disconnected", data);
 		json_object_put (data);
-		BarWebsocketBroadcastSocketIoMessage (app, BUCKET_STATE, msg);
+		BarWebsocketSend (app, BAR_WS_DEST_BROADCAST, BAR_WS_KEY_NONE, msg);
 	}
 }
 
@@ -342,57 +337,3 @@ void BarWsConfigureWebOnlyInput(BarApp_t *app) {
 	app->input.fds[1] = -1;
 	app->input.maxfd = 0;
 }
-
-#else
-/* No-op implementations when WebSocket support is disabled */
-bool BarIsWebOnlyMode(const BarApp_t *app) { (void)app; return false; }
-bool BarShouldSkipCliOutput(const BarApp_t *app) { (void)app; return false; }
-bool BarWsIsWebActive(const BarApp_t *app) { (void)app; return false; }
-
-void BarWsBroadcastVolume(BarApp_t *app) { (void)app; }
-void BarWsBroadcastExplanation(BarApp_t *app, const char *explanation) { 
-	(void)app; (void)explanation; 
-}
-void BarWsBroadcastUpcoming(BarApp_t *app, PianoSong_t *songs, int count) { 
-	(void)app; (void)songs; (void)count;
-}
-void BarWsBroadcastSongStart(BarApp_t *app) { (void)app; }
-void BarWsBroadcastProcess(BarApp_t *app) { (void)app; }
-void BarWsBroadcastSongStop(BarApp_t *app) { (void)app; }
-void BarWsBroadcastProgress(BarApp_t *app) { (void)app; }
-void BarWsBroadcastPlayState(BarApp_t *app) { (void)app; }
-void BarWsBroadcastPlayStateSnapshot(BarApp_t *app,
-                                      const BarPlayerPlayStateSnapshot *snapshot) {
-	(void)app; (void)snapshot;
-}
-void BarWsBroadcastStations(BarApp_t *app) { (void)app; }
-void BarWsDisconnectAllClients(BarApp_t *app) { (void)app; }
-
-bool BarWsInit(BarApp_t *app) { (void)app; return true; }
-void BarWsDestroy(BarApp_t *app) { (void)app; }
-bool BarWsDaemonize(BarApp_t *app) { (void)app; return true; }
-void BarWsRemovePidFile(BarApp_t *app) { (void)app; }
-
-bool BarWsStartPlaybackManager(BarApp_t *app) { (void)app; return true; }
-void BarWsStopPlaybackManager(BarApp_t *app) { (void)app; }
-bool BarWsAcquireSingletonLock(BarApp_t *app) { (void)app; return true; }
-void BarWsReleaseSingletonLock(BarApp_t *app) { (void)app; }
-bool BarWsIsUnicastRequest(void) { return false; }
-void BarWsEmitError(BarApp_t *app, const char *event, const char *msg) {
-	(void)app; (void)event; (void)msg;
-}
-void BarWsEmitErrorEx(BarApp_t *app, const char *event, const char *msg,
-                       const char *extra) {
-	(void)app; (void)event; (void)msg; (void)extra;
-}
-void BarWsBroadcastPandoraDisconnected(BarApp_t *app, const char *reason) {
-	(void)app; (void)reason;
-}
-void BarWsPrintWebInfo(const BarApp_t *app, FILE *stream) { (void)app; (void)stream; }
-void BarWsConfigureWebOnlyInput(BarApp_t *app) { (void)app; }
-bool BarWsSettingsIsWebActive(const BarSettings_t *s) { (void)s; return false; }
-void BarWsPrintPidFileInfo(const BarApp_t *app, bool is_daemon, FILE *stream) {
-	(void)app; (void)is_daemon; (void)stream;
-}
-void BarWsPrintStartupInfo(const BarApp_t *app) { (void)app; }
-#endif

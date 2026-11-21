@@ -5,30 +5,80 @@ on:
     branches: [main]
   pull_request:
 
+# c-tests and c-asan run in the prebuilt test image (all build and test
+# dependencies baked in, no apt-get per run). It is built from
+# .github/docker/Dockerfile.ci-test + ci-test-deps.txt, the same files
+# `make test-ci-local` uses, by builder-images.yml. After changing either
+# file, dispatch builder-images.yml on the branch so its jobs see the new
+# packages.
+
+# A new push to a PR branch cancels that PR's run still in progress. Pushes to
+# main get a group per commit, so none is cancelled or replaced while pending
+# (GitHub keeps only one pending run per group) and every main commit gets its
+# full run and Codecov base report.
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  c-tests:
+  # docs, web or full (scripts/changed-scope.sh, the same rules make gates and
+  # the pre-push hook use). Jobs a change cannot affect are skipped: c-tests
+  # and c-asan need full, web-tests and e2e-fake (the web UI end to end) need
+  # web or full. A push to main always runs everything.
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Classify the change
+        id: scope
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          sudo apt update
-          sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
-            libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
-            libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
-            libblas-dev liblapack-dev check lcov
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            scope="$(./scripts/changed-scope.sh "origin/${BASE_REF}")"
+          else
+            scope=full
+          fi
+          echo "scope=${scope}" >> "$GITHUB_OUTPUT"
+          echo "Change scope: ${scope}"
+
+  c-tests:
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mr-light-show/remote-pianobar-build:ci-test-noble-amd64
+      # tini as PID 1 reaps orphans (pianobar's daemon detaches to PID 1)
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
 
       # PR builds use -g -O0; all builds get HAVE_DEBUGLOG from the Makefile.
       - name: Debug-friendly C flags on pull requests
         if: github.event_name == 'pull_request'
         run: echo 'CFLAGS=-g -O0' >> $GITHUB_ENV
 
+      # Real binary, throw-away HOME; must run before test-coverage, which
+      # leaves coverage-instrumented objects behind.
+      - name: Web-only startup smoke test
+        run: make -j"$(nproc)" test-startup-smoke
+
       - name: Build and test with coverage
         env:
           PIANOBAR_INTEGRATION: "1"
           PIANOBAR_TEST_NO_DEVICE: "1"
-        run: make test-coverage
+        run: make -j"$(nproc)" test-coverage
 
       - name: Upload C coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -38,7 +88,47 @@ jobs:
           flags: c-tests
           fail_ci_if_error: false
 
+  # AddressSanitizer + UBSan + LeakSanitizer (LSan is enabled explicitly on
+  # Linux by `make test-asan`), in parallel with c-tests; no coverage output.
+  c-asan:
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/mr-light-show/remote-pianobar-build:ci-test-noble-amd64
+      # tini as PID 1 reaps orphans (pianobar's daemon detaches to PID 1)
+      options: --init
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build and test with ASan/UBSan/LSan
+        env:
+          PIANOBAR_INTEGRATION: "1"
+          PIANOBAR_TEST_NO_DEVICE: "1"
+          ASAN_OPTIONS: "detect_leaks=1"
+        run: make -j"$(nproc)" test-asan
+
+      # Same binary again with every DEBUG_* log kind on, so debug-only log
+      # statements run under the sanitizers. Only failing shards are printed.
+      - name: Test with ASan/UBSan/LSan and all debug logging on
+        env:
+          PIANOBAR_INTEGRATION: "1"
+          PIANOBAR_TEST_NO_DEVICE: "1"
+          PIANOBAR_TEST_DEBUG_ALL: "1"
+          TEST_PAR_LOGS: failed
+          ASAN_OPTIONS: "detect_leaks=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: ./scripts/test-parallel.sh ./build/asan/pianobar_test
+
   web-tests:
+    needs: changes
+    if: needs.changes.outputs.scope != 'docs'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -66,3 +156,52 @@ jobs:
           directory: webui/coverage
           flags: web-tests
           fail_ci_if_error: false
+
+  # Web UI E2E against the real pianobar binary and a local fake Pandora API
+  # (no account needed; see TESTING.md, "E2E without a Pandora account").
+  # Pinned: ubuntu-latest is now a release Playwright cannot install browser
+  # dependencies for (`playwright install --with-deps` fails there).
+  e2e-fake:
+    needs: changes
+    if: needs.changes.outputs.scope != 'docs'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y libao-dev libavcodec-dev libavformat-dev \
+            libavutil-dev libavfilter-dev libjson-c-dev libgcrypt20-dev \
+            libcurl4-openssl-dev libwebsockets-dev libasound2-dev \
+            libblas-dev liblapack-dev openssl python3
+
+      # The Chromium download is cached (keyed on the lock file, which pins
+      # the Playwright version); its system packages are installed every run.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('webui/package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        run: |
+          cd webui && npm ci
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: E2E against fake Pandora
+        env:
+          CI: "1"
+        run: make -j"$(nproc)" test-e2e-fake
