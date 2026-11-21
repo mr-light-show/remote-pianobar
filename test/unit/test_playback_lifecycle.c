@@ -774,9 +774,33 @@ START_TEST (test_playback_start_stops_after_terminal_reset_failure)
 }
 END_TEST
 
+/* test_refused_url hands out a port that refuses connections;
+ * loopback_port_accepts sees a listener and stops seeing it once closed */
+START_TEST (test_refused_url_port_refuses_connections)
+{
+	char url[64];
+	int port = 0;
+	ck_assert_int_eq (sscanf (test_refused_url (url, sizeof (url), "x.mp3"),
+			"http://127.0.0.1:%d/", &port), 1);
+	ck_assert (!loopback_port_accepts (port));
+}
+END_TEST
+
+START_TEST (test_loopback_port_accepts_sees_listener)
+{
+	int port = 0;
+	int srv = bind_loopback_listener (&port);
+	ck_assert (loopback_port_accepts (port));
+	close (srv);
+	ck_assert (!loopback_port_accepts (port));
+}
+END_TEST
+
 Suite *playback_lifecycle_suite (void) {
 	Suite *s = suite_create ("playback_lifecycle");
 	TCase *tc = tcase_create ("core");
+	tcase_add_test (tc, test_refused_url_port_refuses_connections);
+	tcase_add_test (tc, test_loopback_port_accepts_sees_listener);
 	tcase_add_test (tc, test_playback_creation_failure_clears_pending_join);
 	tcase_add_test (tc, test_playback_start_rejects_null_app);
 	tcase_add_test (tc, test_playback_start_rejects_null_thread);
